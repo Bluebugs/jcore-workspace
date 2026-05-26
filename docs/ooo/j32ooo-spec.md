@@ -757,11 +757,17 @@ Under FGMT, both threads on the same core share the same view of memory through 
 | MMU (deferred, separate spec)    |            – |
 | **Total core + caches**          |  **248,450** |
 
-On ULX3S 85F:
+On ULX3S 85F (estimates — **awaiting empirical validation**, see §15.1):
 
 - ~35–45k LUTs for the core + caches (~50% of 84k LUT capacity)
-- ~104 BRAMs (~50% of 208 BRAMs)
+- ~104 BRAMs (~50% of 208 BRAMs) — **stale**; reconcile with [cache/l2-spec.md §20.1](../cache/l2-spec.md) which counts ~141 EBRs (~70%) for dual-core L1+L2 alone
 - 2–3 DSP slices
+
+### 15.1 Caveat — synthesis validation required
+
+The 248,450-gate total above is an a-priori block estimate, converted to LUTs with an assumed ratio of ~5–7 gates/LUT4. Two consumers of this number (this section's "~35–45k LUTs" claim, and the [service plan's §5 LUT4 budget](../jcore-ulx3s-service-plan.md)) currently disagree by ~4× with the service-plan narrative claim of "~10K LUT4 per core" — see the "OoO LUT-count uncertainty" subsection in the service plan §5 for the full discussion of the three options and the Phase 6 decision-gate.
+
+**Action item before Phase 6 RTL commits:** synthesize a representative OoO subset (rename + ROB + 1 ALU + L1$) on ECP5-6 with nextpnr; measure actual LUT4 count; update this section with the empirical number; reconcile with the service plan and the L2 v2 spec BRAM estimate. Until that measurement exists, treat both the ~35–45k LUT figure and the "~10K LUT4 per core" figure as bounds, not predictions.
 
 Plenty of headroom for SoC peripherals (Ethernet, UART, GPIO, SDRAM controller).
 

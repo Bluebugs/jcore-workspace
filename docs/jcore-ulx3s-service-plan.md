@@ -262,11 +262,48 @@ The previously planned standalone "observability host" at home is **eliminated**
 | SH4-compat FPU coprocessor | +11,000–19,000 | small | 4–8 | 7 | [fpu/spec.md](fpu/spec.md) Tier 1 (FIPR/FTRV/FSCA/FSRRA/SR.FD); Tier 2 hypervisor-aware for J32-FM |
 | SIMD prefix unit | +4,000–6,000 | ~3% | 4–8 | 7.5 | [simd/spec.md](simd/spec.md) Tier 0+1 (+Tier 2 GF(2) crypto for VCLMUL/VCRC32C on J32-FM) |
 | J64 datapath widening (optional, deferred) | +2,000–3,000 | small | 0 | 8 | [glossary §3](glossary.md) (J64 row); L2 Tier 2 (`ADDR_WIDTH=40`) per [cache/l2-spec.md](cache/l2-spec.md) |
-| **Full SH4-rich stack (Phase 7.5)** | **~50,000–65,000 LUT4** | **~50%** | **8–16 DSP** | | J32-FM product point — see [glossary §3](glossary.md) |
+| **Full SH4-rich stack (Phase 7.5)** | **~50,000–100,000 LUT4** (range, not point — see caveat) | **~70–75%** | **8–16 DSP** | | J32-FM product point — see [glossary §3](glossary.md) |
 
-The OoO J32 design is BRAM-heavy by deliberate choice (state in BRAM, logic in LUTs), giving ~10K LUT4 per core including the dual-issue logic. At Phase 7.5 (full SH4 stack: dual-core OoO + FPU + SIMD), the 85F sits at ~60–75% LUT4 utilization with ~50% BRAM, leaving real timing-closure margin.
+The OoO J32 design is BRAM-heavy by deliberate choice (state in BRAM, logic in LUTs). The plan's narrative target was ~10K LUT4 per core including dual-issue logic; the [ooo/j32ooo-spec.md §15](ooo/j32ooo-spec.md) gate budget converts to ~35–45k LUT4 per core including L1 caches. These two figures are *not* reconciled — see "OoO LUT-count uncertainty" below.
 
 OoO J64 is **explicitly out of scope** for the 85F — a quad-issue OoO J64 core would consume the entire device (~50–80K LUT4 alone). If pursued, it lives on a separate FPGA platform as a research target.
+
+### OoO LUT-count uncertainty — **decision required before Phase 6 commits**
+
+The single biggest unknown in this budget is the actual LUT cost of one OoO J32 core on ECP5-6. Two figures circulate, both internally inconsistent:
+
+| Source | LUT4 per OoO core |
+|---|---|
+| This plan's prior narrative ("BRAM-heavy by design") | ~10k |
+| This plan's §5 row "OoO upgrade delta" | +5–7k delta from in-order's 3–5k → 8–12k total |
+| [ooo/j32ooo-spec.md §15](ooo/j32ooo-spec.md) gate budget (222k gates ÷ 5–6 gates/LUT4) | **35–45k** (the spec's own ULX3S statement: "~35–45k LUTs for core + caches") |
+| [ooo/j32ooo-spec.md §11](ooo/j32ooo-spec.md) narrative claim | "~10K LUT4 per core including the dual-issue logic" |
+
+The OoO spec is internally inconsistent (its narrative and its §15 gate-budget conversion disagree by ~4×). Until empirical ECP5-6 synthesis numbers exist, the budget below is presented as a range:
+
+| Phase | Optimistic (10k/core narrative) | Pessimistic (35–45k/core gate budget) |
+|---|---|---|
+| Phase 6 (single-core OoO) | ~25k LUT4 (~30%) | ~50k LUT4 (~60%) |
+| Phase 6.5 (dual-core + L2 v2) | ~40k LUT4 (~50%) | ~95k LUT4 (**~113% — does not fit**) |
+| Phase 7.5 (+ FPU + SIMD) | ~55k LUT4 (~65%) | ~110k LUT4 (**~131% — does not fit**) |
+
+**Decision-gate at Phase 6 midpoint:** synthesize a representative OoO subset (rename + ROB + 1 ALU + L1$) on ECP5-6 with nextpnr; measure actual LUT count. If the empirical number trends toward the pessimistic end, Phase 6.5 dual-core on the 85F is at risk and one of the following must be picked:
+
+1. **Asymmetric SMP:** one OoO core + one in-order J32 core (host on OoO, lighter VMs on in-order). Saves ~30k LUT vs symmetric dual OoO.
+2. **Smaller L1 caches:** 16 KB I + 16 KB D per core instead of 32+32. Saves ~36 EBRs and some LUT; costs ~5–15% IPC.
+3. **Single-core OoO only on 85F**, defer dual-core to a larger FPGA (ECP5-100F or similar).
+4. **De-feature OoO:** smaller ROB (20→12 entries), single ALU. Saves ~20% LUT.
+5. **Reconcile the OoO spec §15** with its own narrative, presumably by re-counting gates per LUT4 with empirical data — the spec may simply be over-counted.
+
+### BRAM budget — corrected
+
+The plan's prior "~50% BRAM at Phase 7.5" was an under-estimate. Per [cache/l2-spec.md §20.1](cache/l2-spec.md): two cores × (32 KB I + 32 KB D) = 72 EBRs plus the 128 KB L2 at 71 EBRs = **141 EBRs (~67%) for the cache subsystem alone**. Add FPU FSCA/FSRRA tables (+2), SIMD register file (+1.5–2), AIC2 + PMU shadow + hypervisor scratch (+5–10) → **~150–155 EBRs (~73–75%)** at Phase 7.5.
+
+Still fits the 85F's 208 EBRs, but the BRAM budget is *the* binding constraint at Phase 6.5 onward — much more so than LUT in the optimistic OoO scenario. **BRAM mitigation levers** (decide at Phase 6 design freeze):
+
+- Shrink L2 from 128 KB to 64 KB → −30 EBRs (modest IPC cost on memory-bound workloads).
+- Shrink L1s from 32+32 to 16+16 per core → −36 EBRs (notable IPC cost; combines with L2 sizing decision).
+- Drop next-line prefetcher / stride prefetcher MSHRs to save a few EBRs of metadata.
 
 ### Memory budget (per board, 32 MB)
 
