@@ -32,32 +32,66 @@ Conventions:
 
 ### 2.1 PTEH — Page Table Entry High
 
-Inherited from SH-4, extended. Accessed via `LDC Rm, PTEH` / `STC PTEH, Rn` (existing SH-4 encodings) or as MMIO at P4 address `0xFF000000` (for compatibility).
+Inherited from SH-4 in spirit, but **VPN-only** in this revision. Accessed via `LDC Rm, PTEH` / `STC PTEH, Rn` (existing SH-4 encodings) or as MMIO at P4 address `0xFF000000`. The 16-bit `ASID_TAG` lives in the separate **ASIDR** register (see §2.1a) — a deliberate alignment with UltraSPARC's `PRIMARY_CONTEXT` model (sun4u, 1995). This decoupling lets J-Core support the full SH-4-plus-PageMask page-size set down to **4 KB** without sacrificing ASID width.
 
-**J32 layout (32 bits) — provisional, see open question below:**
+**J32 layout (32 bits):**
 ```
-[31:14]  VPN[31:14]    Hardware-set on TLB miss, software-set for LDTLB
-                       (for the default 16 KB page size; smaller pages
-                       extend VPN downward into [13:0])
-[13:0]   ASID_TAG[13:0]  Low 14 bits of the 16-bit ASID_TAG.
-                       (Upper 2 bits live elsewhere — see open question.)
+[31:N]   VPN           Hardware-set on TLB miss, software-set for LDTLB.
+                       N depends on the page size selected by PTEL.PageMask
+                       at LDTLB time:
+                          4 KB    →  N = 12  (VPN = bits [31:12], 20 bits)
+                          16 KB   →  N = 14  (VPN = bits [31:14], 18 bits)
+                          64 KB   →  N = 16  (VPN = bits [31:16], 16 bits)
+                          256 KB  →  N = 18
+                          1 MB    →  N = 20
+                          4 MB    →  N = 22
+                          16 MB   →  N = 24
+                          64 MB   →  N = 26
+                          256 MB  →  N = 28
+                          1 GB    →  N = 30
+[N-1:0]  zero          Read-as-zero, write-ignored. Hardware does not store
+                       these bits; software writes are dropped.
 ```
 
-**ASID_TAG width is 16 bits** (canonical, project-wide). The kernel packs the 12-bit ASID proper and a 4-bit generation discriminator into a single 16-bit opaque tag that hardware uses for TLB and TSB comparison:
+The PTEH layout no longer carries ASID bits. SH-4 binary compatibility is preserved for any code that *reads* PTEH (the VPN portion is at the same position) but software that *wrote* the SH-4 ASID bits must be updated to use ASIDR instead. The standard Linux SH-4 port writes PTEH at context-switch time to set the ASID; that write becomes a write to ASIDR (one LDC, same cost).
+
+### 2.1a ASIDR — Address Space Identifier Register
+
+New in this revision. Holds the 16-bit `ASID_TAG` that hardware compares on every TLB lookup. Accessed via `LDC Rm, ASIDR` / `STC ASIDR, Rn` (new LDC/STC encoding — see §3) or as MMIO at P4 address `0xFF000024`.
+
+**J32 layout (32 bits):**
+```
+[31:16]  reserved (read-as-zero, write-ignored)
+[15:0]   ASID_TAG      The kernel-encoded 16-bit ASID_TAG. Hardware
+                       compares this against the entry.ASID_TAG of every
+                       TLB entry on every translation (when entry.GLOBAL=0).
+```
+
+**ASID_TAG width is 16 bits** (canonical, project-wide). The kernel packs the 12-bit ASID proper and a 4-bit generation discriminator:
 
 ```
 ASID_TAG[15:0] = (ASID[11:0] | (gen_low[3:0] << 12))
 ```
 
-The TLB-entry tag carries the full 16 bits (see §2.6). The Linux ASID allocator in `docs/mmu/linux-spec.md` §5 produces this 16-bit value directly; hardware does not interpret the split, only the kernel does.
+Hardware does not interpret the split; only the kernel does. The Linux ASID allocator in [linux-spec.md §5](linux-spec.md) produces this 16-bit value directly.
 
-**Open question (PTEH layout): the full 16-bit ASID_TAG does not cleanly fit in PTEH alongside the VPN for sub-64-KB page sizes.** With a 16 KB minimum page, VPN occupies PTEH `[31:14]` (18 bits) leaving 14 bits for ASID_TAG — 2 bits short. Three resolutions are on the table; pick one before RTL:
+**Context-switch sequence (Linux):**
+```asm
+        mov.l   new_asid_tag, r0    ! r0 = packed ASID_TAG (16 bits)
+        ldc     r0, asidr           ! one instruction, same cost as
+                                    ! SH-4's LDC Rn,PTEH for ASID update
+```
 
-1. **Min page size becomes 64 KB on the J32 MMU.** VPN occupies `[31:16]` (16 bits); ASID_TAG occupies `[15:0]` (16 bits). Clean. Cost: loses the 16 KB page size as a finest grain on J32; J64 can restore it with a wider PTEH. Aligns with SH-3 conventions (4 KB / 64 KB / 1 MB).
-2. **Add a separate ASIDR register holding ASID_TAG[15:14].** PTEH keeps the original layout (ASID_TAG[13:0] at PTEH[13:0]). Adds one new control register and one MMIO offset; LDTLB latches both. Cost: extra register-file plumbing, slightly more complex context-switch sequence.
-3. **PTEH widens to 40 or 64 bits, accessed as a register pair on J32.** Cleanest semantically, biggest software impact (PTEH no longer fits in a J32 register; LDC/STC require two operations or a new instruction). Most invasive.
+**LDTLB / LDTLB.R semantics:** the installed TLB entry's tag is built as
+`{ASIDR[15:0], PTEH.VPN[31:N], PTEL.PageMask[3:0]}`. LDTLB atomicity is
+unchanged — both PTEH and ASIDR are read at the start of LDTLB; software
+must arrange them before issuing the instruction.
 
-This document currently shows resolution 1 (16 KB page dropped) tentatively in the bit layout above. The Linux spec, hypervisor spec, and IOMMU spec are all consistent with whichever resolution is picked, since they only see the 16-bit `ASID_TAG` value, not the PTEH storage location.
+**Prior art (pre-2006):**
+- **UltraSPARC `PRIMARY_CONTEXT` / `SECONDARY_CONTEXT`** (sun4u ASI 0x21, 1995): a per-CPU context register independent of TLB-tag programming; hardware reads it on every translation. The model this design follows.
+- **MIPS R4000 `EntryHi.ASID`** (1991): ASID is a field of EntryHi separately re-assignable from VPN-write semantics.
+- **Alpha 21264 `ASN`** (1998): per-CPU address-space-number register, accessed via PALcode, independent of page-table-walk registers.
+- **ARMv6 `CONTEXTIDR`** (cp15 c13, 2002): explicit separate context-ID register; the model commercial CPUs converged on.
 
 ### 2.2 PTEL — Page Table Entry Low
 
@@ -201,8 +235,12 @@ where `xxxx` selects the register. SH-4 uses values 0000–0100 (SR, GBR, VBR, S
 | `LDC Rm, TSBCFG` | `0100 mmmm 0110 1110` | `0x406E \| m<<8` |
 | `STC TSBCFG, Rn` | `0000 nnnn 0110 0010` | `0x0062 \| n<<8` |
 | `STC TSBPTR, Rn` | `0000 nnnn 0111 0010` | `0x0072 \| n<<8` |
+| `LDC Rm, ASIDR` | `0100 mmmm 0101 1010` | `0x405A \| m<<8` |
+| `STC ASIDR, Rn` | `0000 nnnn 0101 0011` | `0x0053 \| n<<8` |
 
 `LDC Rm, TSBPTR` (encoding `0x407E`) is **reserved** — TSBPTR is read-only from software. Decoding this should raise illegal-instruction exception.
+
+**ASIDR encoding rationale.** The TSB-related registers occupy free slots in the SH-4 `xxxx 1110` / `xxxx 0010` LDC/STC family. That family had only three free `xxxx` values (`0101`, `0110`, `0111`); all are now used. ASIDR is placed in the SH-4 PT-register family (`xxxx 1010` / `xxxx 0011`), reusing the slot that SH-DSP allocated to `MOD` (xxxx=`0101`). J-Core does not implement the SH-DSP extension; the encoding is unambiguously free here. This co-locates ASIDR with the other page-table-related registers (PTEH at `0100 mmmm 0000 1010`, PTEL at `0100 mmmm 0001 1010`, etc.) in the same encoding family.
 
 ### 3.2 LDTLB.R — Load TLB and Return
 
@@ -276,7 +314,7 @@ When a memory access misses the TLB and translation is enabled (MMUCR.AT=1):
 
 1. Compute hash and TSBPTR (see §2.8). Store result in TSBPTR register.
 2. Latch the faulting effective address into TEA.
-3. Latch the faulting VPN (extracted from VA based on the default page size, 16 KB) into PTEH[31:14] (J32) or PTEH[high:14] (J64). **The ASID_TAG bits of PTEH are preserved** — the kernel has set them at context switch.
+3. Latch the faulting VPN (extracted from VA based on the default page size, 16 KB) into PTEH[31:N] where N is determined by the default-page PageMask. The low bits `[N-1:0]` of PTEH are zeroed. **ASIDR is not touched** — the kernel has set ASIDR at context switch and it remains valid for the miss handler to read.
 4. Save PC → SPC and SR → SSR. Save register-bank state if applicable.
 5. Update SR: set MD=1, RB=1, BL=1, IMASK=0xF.
 6. Jump to `VBR + 0x400` (instruction-fetch miss) or `VBR + 0x420` (data-load miss) or `VBR + 0x440` (data-store miss) — same vector layout as SH-4.
@@ -291,27 +329,41 @@ Inherited from SH-3/SH-4 unchanged. On any exception (including TLB miss):
 - If already in MD=1 with RB=1, no bank change.
 - R8–R15 are not banked; software must save/restore them if used.
 
-The TLB-miss handler's hot path (described in §7) uses only R0–R3 of bank 1, requiring no register saves.
+The TLB-miss handler's hot path (described in §7) uses only R0–R3 of bank 1, requiring no register saves. The hot path is ~10 instructions (two CMP/EQ pairs for VPN and ASID_TAG plus the LDTLB.R) — slightly longer than the SH-4-style single-comparison handler because of the ASID split, but still well under the ~30–50 of a pure software walker.
 
 ## 7. Recommended TLB Miss Handler
 
 For reference. Implementation in software, but documenting the expected sequence:
 
+**TSB tag format.** The 64-bit tag word is laid out as two 32-bit halves to avoid VPN/ASID-bit overlap (which would otherwise occur for small pages where VPN extends down into bit positions also covered by ASID_TAG):
+
+```
+TSB tag word (8 bytes, two 32-bit halves):
+  tag_hi (offset 0, 4 bytes)  = expected VPN  (matches PTEH after miss)
+  tag_lo (offset 4, 4 bytes)  = expected ASID_TAG  (matches ASIDR)
+```
+
+The kernel writes both halves at TSB-fill time. The miss handler compares both halves against PTEH (VPN) and ASIDR (ASID_TAG) — two `CMP/EQ` operations.
+
 ```asm
         ! At VBR+0x400, SR.RB=1, bank 1 selected.
 tlb_miss:
         stc     tsbptr, r0      ! Read pre-computed TSB slot address
-        mov.l   @r0+, r1        ! Load TTE tag (and advance r0 to data)
-        stc     pteh, r2        ! Load current faulting tag
-        cmp/eq  r1, r2          ! Match?
-        bf/s    tsb_miss_slow   ! Mismatch -> slow path
-         mov.l  @(4, r0), r3    ! delay slot: load TTE data
+        mov.l   @r0+, r1        ! Load expected VPN (tag_hi); r0 += 4
+        stc     pteh, r2        ! Load faulting VPN
+        cmp/eq  r1, r2          ! VPN match?
+        bf      tsb_miss_slow   ! No: slow path
+        mov.l   @r0+, r1        ! Load expected ASID_TAG (tag_lo); r0 += 4
+        stc     asidr, r2       ! Load current ASID_TAG
+        cmp/eq  r1, r2          ! ASID match?
+        bf      tsb_miss_slow   ! No: slow path
+        mov.l   @r0, r3         ! Load TTE data
         ldc     r3, ptel        ! Stage data into PTEL
         ldtlb.r                 ! Install entry, return from exception
          nop                    ! Delay slot of LDTLB.R
 ```
 
-Hot path: 7 instructions. With the slow path inlined, the full handler fits in ~30 instructions.
+Hot path: ~10 instructions (VPN compare + ASID compare + LDTLB.R). With the slow path inlined, the full handler fits in ~30 instructions.
 
 ## 8. SMP Considerations
 
@@ -382,7 +434,7 @@ Critical points to verify in RTL:
 3. **LDTLB.R atomicity:** No observable interrupt window between TLB write and PC/SR restore.
 4. **MMUCR.TI:** Single-cycle invalidation of all entries; self-clearing.
 5. **Register banking on TLB miss:** Bank 1 R0–R7 visible to handler, bank 0 preserved.
-6. **PTEH preservation across miss:** ASID_TAG bits preserved when hardware writes VPN.
+6. **ASIDR preservation across miss:** ASIDR is not touched by miss-vector entry; hardware writes only PTEH.VPN. Handler can read ASIDR directly and trust it reflects the current context.
 7. **STALE bit preservation:** LDTLB carries the STALE bit from PTEL into the TLB entry intact.
 8. **Per-CPU CPUINFO routing:** Each CPU reads a distinct HART_ID at `0xFF000020`.
 9. **Exception priority:** TLB miss vs. instruction-fetch fault vs. higher-priority interrupts handled correctly.
@@ -397,10 +449,12 @@ Beyond inheriting the SH-4 MMU structure:
 | TSBBR, TSBCFG registers | ~96 bits flop (J32), 160 bits (J64) |
 | TSBPTR register | ~32 bits (J32), 64 bits (J64) |
 | TSBPTR computation (hash, XOR, mask, OR) | ~50 LUTs |
+| ASIDR register | 16 bits flop per CPU |
 | Extended ASID_TAG (8 → 16 bits) | 8 bits per TLB entry |
 | PageMask (4 bits per TLB entry) | 4 bits per TLB entry |
 | STALE bit per TLB entry | 1 bit per entry |
 | LDTLB.R decode | ~10 LUTs |
+| ASIDR LDC/STC decode | ~5 LUTs |
 | CPUINFO MMIO | ~32 bits flop per core + decoder |
 
 For 32 TLB entries: ~600 bits of additional TLB state per CPU. Plus ~200 LUTs of new logic per CPU. Modest by FPGA standards.

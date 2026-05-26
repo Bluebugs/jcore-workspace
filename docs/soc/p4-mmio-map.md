@@ -78,7 +78,7 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 
 | Offset      | Register   | Description                          |
 |-------------|------------|--------------------------------------|
-| `0x000`     | PTEH       | Page-table entry, high                |
+| `0x000`     | PTEH       | Page-table entry, high (VPN only — ASID lives in ASIDR) |
 | `0x004`     | PTEL       | Page-table entry, low (with PageMask) |
 | `0x008`     | TTB        | Translation table base (software)     |
 | `0x00C`     | TEA        | TLB exception address                 |
@@ -87,7 +87,8 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 | `0x018`     | TSBCFG     | TSB configuration                     |
 | `0x01C`     | TSBPTR     | TSB pointer (read-only)               |
 | `0x020`     | CPUINFO    | Per-CPU hart ID + capability flags    |
-| `0x024`–`0xFFC` | reserved | future MMU registers                 |
+| `0x024`     | ASIDR      | 16-bit ASID_TAG (kernel-encoded ASID + generation) |
+| `0x028`–`0xFFC` | reserved | future MMU registers                 |
 
 ### 3.3 SoC-wide control (`0xFF00F000`–`0xFF00FFFF`)
 

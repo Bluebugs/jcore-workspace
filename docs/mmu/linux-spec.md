@@ -161,23 +161,35 @@ jcore_tlb_miss:
         ! or VBR + 0x440 (data store miss).
         !
         ! On entry: SR.RB=1 (bank 1 selected), SR.MD=1, SR.BL=1.
-        !           PTEH contains faulting VPN | current ASID_TAG.
+        !           PTEH contains the faulting VPN (low bits zero).
+        !           ASIDR contains the current ASID_TAG (unchanged from
+        !             the last context switch).
         !           TSBPTR contains pre-computed slot address.
         !           Bank-1 R0-R7 are scratch.
+        !
+        ! The TSB tag word is split into two 32-bit halves (see
+        ! hardware-spec.md §7): tag_hi = expected VPN, tag_lo = expected
+        ! ASID_TAG. The handler does two CMP/EQ — VPN against PTEH,
+        ! then ASID_TAG against ASIDR. This avoids any small-page VPN-
+        ! vs-ASID-bit-overlap problem.
 
         stc     tsbptr, r0
-        mov.l   @r0+, r1            ! r1 = TTE tag (and r0 += 4)
-        stc     pteh, r2
-        cmp/eq  r1, r2              ! Tag match?
-        bf/s    jcore_tlb_miss_slow
-         mov.l  @(4, r0), r3        ! Delay slot: load TTE data (at +8)
+        mov.l   @r0+, r1            ! r1 = tag_hi (expected VPN); r0 += 4
+        stc     pteh, r2            ! faulting VPN
+        cmp/eq  r1, r2              ! VPN match?
+        bf      jcore_tlb_miss_slow
+        mov.l   @r0+, r1            ! r1 = tag_lo (expected ASID_TAG); r0 += 4
+        stc     asidr, r2           ! current ASID_TAG
+        cmp/eq  r1, r2              ! ASID match?
+        bf      jcore_tlb_miss_slow
+        mov.l   @r0, r3             ! r3 = TTE data
         ldc     r3, ptel
         ldtlb.r                     ! Install + return atomically
          nop                        ! Delay slot of LDTLB.R
 
 jcore_tlb_miss_slow:
-        ! r2 = faulting PTEH (VPN | ASID_TAG)
-        ! r0 = TSBPTR + 4 (pointing at TTE data slot; tag was at -4)
+        ! r0 points into the TSB slot; faulting VPN and ASID_TAG are
+        ! re-read from PTEH and ASIDR by the slow-path code as needed.
         !
         ! Save additional registers since we may call into C.
         mov.l   r4, @-r15
@@ -186,7 +198,8 @@ jcore_tlb_miss_slow:
         mov.l   r7, @-r15
         mov.l   pr_save, r4
         sts.l   pr, @-r15
-        mov.l   r2, @-r15           ! pass PTEH on stack/arg
+        stc     pteh, r2            ! faulting VPN
+        mov.l   r2, @-r15           ! pass faulting VPN on stack/arg
 
         ! Walk the page table in C
         mov.l   1f, r4              ! &current_pgd
@@ -293,7 +306,7 @@ File: `arch/sh/mm/context-jcore.c`
 #define ASID_MASK        (NUM_ASIDS - 1)
 #define ASID_FIRST       1   /* 0 reserved for kernel */
 
-#define GEN_LOW_BITS     4   /* low 4 bits packed into PTEH[15:12] */
+#define GEN_LOW_BITS     4   /* low 4 bits packed into ASIDR[15:12] */
 #define GEN_LOW_MASK     ((1U << GEN_LOW_BITS) - 1)
 
 struct asid_state {
@@ -332,7 +345,7 @@ static u16 alloc_asid(struct mm_struct *mm, int cpu)
     return asid;
 }
 
-static inline u32 encode_pteh_tag(u16 asid, u64 generation)
+static inline u32 encode_asid_tag(u16 asid, u64 generation)
 {
     /* Pack ASID into low ASID_BITS and gen_low into next GEN_LOW_BITS.
      * Hardware compares the full 16-bit ASID_TAG field. */
@@ -364,9 +377,11 @@ void switch_mm(struct mm_struct *prev, struct mm_struct *next,
     /* Publish current pgd for the slow-path walker */
     per_cpu(current_pgd, cpu) = next->pgd;
 
-    /* Load PTEH with the encoded tag */
-    __asm__ __volatile__ ("ldc %0, pteh"
-        :: "r"(encode_pteh_tag(asid, s->generation)));
+    /* Load ASIDR with the encoded 16-bit ASID_TAG.
+     * (Hardware-spec.md §2.1a — ASIDR is the dedicated ASID register,
+     * separate from PTEH. Replaces SH-4's "write ASID into PTEH" pattern.) */
+    __asm__ __volatile__ ("ldc %0, asidr"
+        :: "r"(encode_asid_tag(asid, s->generation)));
 }
 ```
 
@@ -476,7 +491,8 @@ jcore_secondary_entry:
         ldc     r2, tsbcfg
 
         mov     #0, r2
-        ldc     r2, pteh
+        ldc     r2, asidr           ! initial ASID_TAG = 0 (kernel ASID)
+        ldc     r2, pteh            ! clear PTEH (no faulting VPN yet)
 
         mov.l   ti_at_bits, r2
         mov.l   mmucr_p4, r3
@@ -737,7 +753,7 @@ Total: ~1100 lines of new code (C + asm). Modifications to existing files: ~200 
    - Sets SR, VBR, stack
    - Zeros BSS
    - Allocates boot TSB (in BSS, aligned)
-   - Sets TSBBR, TSBCFG, PTEH (ASID=0)
+   - Sets TSBBR, TSBCFG, ASIDR (ASID_TAG=0 = kernel ASID), PTEH (zero)
    - Builds early kernel page tables
    - Sets MMUCR.AT=1 with TI=1
    - Jumps to `start_kernel()`

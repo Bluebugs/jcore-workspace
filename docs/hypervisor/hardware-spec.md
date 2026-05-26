@@ -198,7 +198,7 @@ The trap saves:
 - SR → HSSR
 - EXPEVT = 0x190 (new: guest TLB write trap)
 
-The hypervisor's handler reads PTEH (the guest's intended VPN/ASID) and PTEL (the guest's intended RFN + flags), performs RA-to-HPA translation, executes its own LDTLB (which doesn't trap because HPRIV=1), and HRTE's back to the guest.
+The hypervisor's handler reads PTEH (the guest's intended VPN), ASIDR (the guest's current ASID_TAG, set at guest context switch), and PTEL (the guest's intended RFN + flags), performs RA-to-HPA translation, executes its own LDTLB (which doesn't trap because HPRIV=1), and HRTE's back to the guest.
 
 **For non-virtualized kernels:** SR.HPRIV is never set, and the trap delegation is irrelevant. LDTLB executes normally. Phase 1 binary compatibility is preserved.
 

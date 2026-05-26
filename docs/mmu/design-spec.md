@@ -50,7 +50,7 @@ Each TLB entry is tagged with a 12-bit Address Space Identifier (ASID), giving 4
 
 ### 3.5 ASID-generation tagging
 
-The TSB tag includes both the ASID and the low 16 bits of a per-CPU 64-bit generation counter. The kernel packs `(asid | gen_low << 12)` into PTEH on every context switch. Hardware compares this composite tag against the TSB entry's tag word.
+The TSB tag includes both the ASID and a 4-bit generation discriminator drawn from a per-CPU 64-bit generation counter. The kernel encodes the 16-bit `ASID_TAG = (asid | gen_low << 12)` and writes it on every context switch — into the dedicated **ASIDR** register (not PTEH; see [hardware-spec.md §2.1a](hardware-spec.md)). Hardware compares this composite tag against the TSB entry's tag word on every TLB lookup. The PTEH/ASIDR split (modeled on UltraSPARC `PRIMARY_CONTEXT`) keeps the full 4 KB–1 GB page-size range available even with the wider 16-bit ASID_TAG.
 
 **Rationale:** This single design choice resolves several otherwise-difficult problems: ASID rollover invalidation becomes a counter bump (no TLB flush needed), stale TSB entries after suspend/resume are naturally rejected, IPI-free TLB shootdown via lazy invalidation becomes possible, and the per-CPU ASID scheme (each CPU has its own allocator) becomes safe even when an `mm` migrates between CPUs.
 
@@ -103,7 +103,8 @@ Each TSB entry is 16 bytes:
 ```
 Offset  Field        Width   Description
 ------  -----------  ------  -----------------------------------------
-+0      Tag          64b     VPN | ASID_TAG[15:0] | Valid
++0      tag_hi       32b     Expected VPN  (matches PTEH after miss)
++4      tag_lo       32b     Expected ASID_TAG  (matches ASIDR), low 16 bits
 +8      Data         64b     PPN | PageMask | Flags (R/W/X/D/C/U/G)
 ```
 
