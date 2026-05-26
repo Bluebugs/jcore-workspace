@@ -44,7 +44,7 @@ DATA             64 bits  Data (writes)
 ID               4 bits   Bus transaction ID (for response routing)
 ```
 
-BMID is set by the bus fabric based on the initiator's physical position. Devices cannot spoof BMID; it's a hardwired property of the fabric layout.
+BMID is set by the bus fabric based on the initiator's physical position. Devices cannot spoof BMID; it's a hardwired property of the fabric layout. The canonical specification of the BMID space, master-port assignment policy, and the immutability guarantee that this IOMMU relies on lives in [bus/fabric-spec.md §4](../bus/fabric-spec.md). The transaction-ID semantics summarised in the signal table above (`ID`, 4 bits, AXI same-ID-ordered) are specified normatively in [bus/fabric-spec.md §5](../bus/fabric-spec.md).
 
 ### 2.2 Bus response
 
@@ -122,10 +122,13 @@ Status bits are write-1-to-clear except where noted. ENABLED is read-only.
 ### 3.3 IOMMU_VERSION (offset 0x0008)
 
 ```
-[31:24]  reserved (0)
-[23:16]  IOTLB_ENTRIES  Number of IOTLB entries (read-only)
-[15:8]   VMID_BITS      Implemented VMID field width (0 in Phase 2)
+[31:16]  reserved (0)
+[15:8]   IOTLB_ENTRIES  Number of IOTLB entries (read-only)
 [7:0]    VERSION        IOMMU version. 0x01 = Phase 2 baseline.
+                        (Earlier drafts allocated [15:8] to VMID_BITS;
+                        VMID is removed project-wide, so the field is
+                        repurposed for IOTLB_ENTRIES, freeing [23:16]
+                        as reserved-for-future-use.)
 ```
 
 Read at probe time by Linux to determine capabilities.
@@ -250,7 +253,6 @@ Each entry stores:
 VALID         1 bit
 GLOBAL        1 bit       If set, BMID match suppressed
 BMID          8 bits
-VMID          8 bits      Hardwired to 0 in Phase 2 (reserved)
 IOVA_TAG      26 bits     IOVA[39:14], extends to 40-bit IOVA on J64
 PAGE_MASK     4 bits      Determines bit range for tag comparison
 PFN           26 bits     Physical frame number
@@ -260,7 +262,7 @@ CACHEABLE     1 bit
 WBA           1 bit
 ```
 
-Total per entry: ~78 bits. For 64 entries: ~5 Kbit of storage.
+Total per entry: ~70 bits. For 64 entries: ~4.5 Kbit of storage. (The VMID field present in earlier drafts has been **removed** — see [glossary §5](../glossary.md) for the project-wide decision and [hypervisor/design-spec.md §3.7](../hypervisor/design-spec.md) for the ASID-partitioning approach that replaces it.)
 
 For J64 implementations with wider IOVA/PFN, fields extend correspondingly (~96 bits per entry, ~6 Kbit total).
 
@@ -272,7 +274,6 @@ For each transaction `(BMID, IOVA, RW)`:
 foreach entry in IOTLB:
     if not entry.VALID:           continue
     if not entry.GLOBAL and entry.BMID != BMID:  continue
-    if entry.VMID != 0:           continue   # VMID reserved
     
     mask_bits = pagemask_to_bits(entry.PAGE_MASK)
     if (entry.IOVA_TAG >> mask_bits) != (IOVA[39:14] >> mask_bits):
@@ -393,15 +394,9 @@ Linux must explicitly initialize the IOMMU before clearing `BMID_BYPASS` bits. U
 
 ## 9. Future-Compatibility Notes
 
-### 9.1 VMID activation (Phase 3)
+### 9.1 Hypervisor extension (Phase 3)
 
-When hypervisor support is added:
-
-- The VMID field in IOTLB entries activates (currently hardwired 0).
-- A new register `IOMMU_VMID_CTRL` controls per-BMID VMID mapping.
-- New IOTLB_CMD encoding for VMID-specific invalidation.
-
-8-bit VMID is reserved now in IOTLB entries. No new MMIO offset allocation needed today.
+The hypervisor extension ([hypervisor/design-spec.md](../hypervisor/design-spec.md)) **does not add new IOMMU hardware fields**. Guest isolation for DMA is achieved by partitioning the 8-bit BMID space in software: the hypervisor allocates BMID ranges to guests and programs IOMMU page tables per-BMID. No VMID field, no `IOMMU_VMID_CTRL` register. See [glossary §5](../glossary.md) for the project-wide decision.
 
 ### 9.2 ATS / PRI (PCIe-like extensions)
 

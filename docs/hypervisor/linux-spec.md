@@ -68,6 +68,10 @@ arch/sh/kvm/
     shadow_mmu.c                 shadow page tables, ~700 lines
     tsb.c                        per-guest TSB management, ~300 lines
     interrupt.c                  virtual interrupt controller, ~400 lines
+                                 (implements the jcore_vintc model defined in
+                                 ../aic/aic2-spec.md §5; emulates the AIC2 MMIO
+                                 ABI per-guest and routes VINJ_SEND on the
+                                 physical AIC2 when delivering to a running vCPU)
     asm/                         hyperprivileged-mode entry/exit assembly
         hyp_entry.S              ~200 lines
         hyp_exit.S               ~150 lines
@@ -85,8 +89,11 @@ Total: ~4500 lines of new code. Comparable in size to KVM/PowerPC (kvm-pr).
 /* arch/sh/include/asm/kvm_host.h */
 
 #define KVM_JCORE_MAX_VCPUS      4    /* per-VM limit; small for embedded */
-#define KVM_JCORE_ASID_BASE      256  /* hypervisor uses 0-255, guests 256+ */
-#define KVM_JCORE_ASID_PER_VM    256  /* each guest gets 256 ASIDs */
+#define KVM_JCORE_MAX_VMS       16    /* SoC-wide guest limit */
+#define KVM_JCORE_ASID_BASE   2048    /* host uses 0..2047; guests 2048+ */
+#define KVM_JCORE_ASID_PER_VM  128    /* each guest gets 128 ASIDs */
+                                      /* 16 guests * 128 = 2048;
+                                       * total 4096 = full 12-bit space */
 
 /* Per-VM state */
 struct kvm_arch {
@@ -108,7 +115,11 @@ struct kvm_arch {
     /* Shadow page table (for non-paravirt guests) */
     struct shadow_mmu          *shadow_mmu;
     
-    /* Virtual interrupt controller state */
+    /* Virtual interrupt controller state.
+     * The MMIO ABI exposed to the guest is the AIC2 register file specified
+     * at ../aic/aic2-spec.md Tier 2 (§5.6 jcore_vintc). The hypervisor traps
+     * writes to host/hyperprivileged-only AIC2 offsets and emulates the
+     * guest-visible offsets out of this struct. */
     struct jcore_vintc         vintc;
 };
 
@@ -382,7 +393,7 @@ For larger guests, replace with a radix tree.
 /* arch/sh/kvm/vm.c */
 
 static DEFINE_MUTEX(asid_alloc_lock);
-static DECLARE_BITMAP(asid_blocks, 16);   /* 16 guests, 256 ASIDs each */
+static DECLARE_BITMAP(asid_blocks, KVM_JCORE_MAX_VMS);
 
 int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
 {
@@ -395,8 +406,8 @@ int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
     
     /* Allocate an ASID block */
     mutex_lock(&asid_alloc_lock);
-    block = find_first_zero_bit(asid_blocks, 16);
-    if (block >= 16) {
+    block = find_first_zero_bit(asid_blocks, KVM_JCORE_MAX_VMS);
+    if (block >= KVM_JCORE_MAX_VMS) {
         mutex_unlock(&asid_alloc_lock);
         kfree(kvm_arch);
         return -ENOSPC;
@@ -404,15 +415,15 @@ int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
     set_bit(block, asid_blocks);
     mutex_unlock(&asid_alloc_lock);
     
-    kvm_arch->asid_base  = 256 + block * 256;   /* host uses 0-255 */
-    kvm_arch->asid_count = 256;
+    kvm_arch->asid_base  = KVM_JCORE_ASID_BASE + block * KVM_JCORE_ASID_PER_VM;
+    kvm_arch->asid_count = KVM_JCORE_ASID_PER_VM;
     kvm->arch = kvm_arch;
     
     return 0;
 }
 ```
 
-The 12-bit ASID space (4096 total) gives the host 256 plus 15 guests × 256 = 4096. Tight but workable. For more guests, expand ASID width or reduce per-guest count.
+**Partition arithmetic.** The 12-bit ASID space (4096 total) splits as host = 2048 (ASIDs 0..2047) + 16 guests × 128 (ASIDs 2048..4095). Exact fit; **the host retains 2048 ASIDs** (sufficient for kernel + qemu-style VMM processes) and each guest gets 128 (sufficient for a containerized workload of 10–100 processes per guest). For SoCs targeting fewer concurrent guests, raise `KVM_JCORE_ASID_PER_VM` accordingly (e.g. 8 guests × 256 = 2048, host keeps 2048). The previous design's 16 × 256 saturated the entire 4096-ASID space with zero room for the host; this revision fixes that. See [hypervisor/design-spec.md §3.7](design-spec.md) for the canonical partition-arithmetic table.
 
 ### 3.9 VM entry / exit
 

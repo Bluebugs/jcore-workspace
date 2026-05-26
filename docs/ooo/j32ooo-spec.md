@@ -2,14 +2,15 @@
 
 **Status:** Draft v0.2.1
 **Compatible ISA:** SH-Compact (SH-2 + J-core extensions: SHAD, SHLD, CAS.L)
-**Scope:** CPU core, cache hierarchy, and performance monitoring. FPU, MMU, IOMMU/DMA, SIMD, and crypto coprocessor blocks are specified separately.
+**Scope:** CPU core, cache hierarchy, and performance monitoring. FPU (see [../fpu/spec.md](../fpu/spec.md), Tier 1 required for the J32-OOO product point), MMU, IOMMU/DMA, SIMD, and crypto coprocessor blocks are specified separately.
 
-**J32OOO** is a 2-wide fetch, 2-wide commit OOO core with 2-way SMT, 32-bit datapath. Targets the "J32FM" roadmap slot (~250k ASIC gates including caches and PMU).
+**J32OOO** is a 2-wide fetch, 2-wide commit OOO core with 2-way FGMT, 32-bit datapath. Targets the "J32-FM" roadmap slot (~250k ASIC gates including caches and PMU). See [glossary §3–§4](../glossary.md) for product-point and threading naming.
 
 ## Changelog
 
 - **v0.2.1** (2026-05): Scoped document to J32OOO only. Forward references to J64 (4-wide variant) removed; a separate specification will cover that design point when J32OOO implementation reaches verification.
-- **v0.2** (2026-05): Added 2-way SMT with ICOUNT fetch policy. Added automatic priority adjustment via CAS.L spin detection and SLEEP execution (no software-exposed priority hints). Added L1/L2 cache hierarchy specification with prefetchers. Added performance monitoring unit with Linux `perf` driver support.
+- **v0.3** (2026-05): Replaced SMT/ICOUNT with FGMT (fine-grained multi-threading) per project-wide threading decision (see [glossary §4](../glossary.md)). One thread selected per cycle at IF1; that thread fills both issue slots. Backend resources stay shared with thread tags. Auto-priority adjustment (CAS.L spin, SLEEP) preserved with simpler ready-thread arbitration.
+- **v0.2** (2026-05): Added 2-way hardware multi-threading. Added automatic priority adjustment via CAS.L spin detection and SLEEP execution (no software-exposed priority hints). Added L1/L2 cache hierarchy specification with prefetchers. Added performance monitoring unit with Linux `perf` driver support.
 - **v0.1**: Initial OOO design point. 2-wide single-thread, ROB-based rename, atomic-group handling for CAS.L.
 
 ---
@@ -18,7 +19,7 @@
 
 ### 1.1 Goals
 
-1. Improve aggregate throughput over the existing in-order J32 on the target workload mix (Dreamcast binaries, SSH/encrypted traffic termination, JSON/OpenTelemetry metric serialization) by a factor of roughly 2.5×–3.5× with 2-way SMT.
+1. Improve aggregate throughput over the existing in-order J32 on the target workload mix (Dreamcast binaries, SSH/encrypted traffic termination, JSON/OpenTelemetry metric serialization) by a factor of roughly 2.0×–3.0× with 2-way FGMT. (Lower than the SMT projection in v0.2; FGMT fills one issue slot per cycle from the selected thread, so per-thread IPC is preserved but the second issue slot only fills when the chosen thread's two decoded uops are both independent and ready — typical for SH-2 code with short delay-slot patterns.)
 2. Stay within ~250k gates including L1+L2 caches and PMU.
 3. Preserve SH-Compact's strict precise-interrupt guarantees.
 4. Maintain SMP correctness for the J-core CAS.L primitive with no architectural changes.
@@ -28,11 +29,11 @@
 
 - No new architecturally-visible instructions exposed to user code. The auto-priority mechanism (§13.4) operates transparently — no `HMT_*`-style software priority hints exposed in this revision.
 - No software-exposed thread priority register; priority is hardware-managed.
-- No FPU integration (separate specification — required for Dreamcast workloads but out of scope for this document).
+- No FPU integration (specified separately in [../fpu/spec.md](../fpu/spec.md); Tier 1 SH-4-complete FPU is required for Dreamcast workloads but the integration into the OoO pipeline is out of scope for this document).
 - No MMU integration (separate specification).
 - No IOMMU/DMA integration (separate specification).
 - No SIMD or crypto extensions (handled by separate coprocessor blocks).
-- No SMT-aware cache partitioning beyond standard set-associative sharing.
+- No FGMT-aware cache partitioning beyond standard set-associative sharing.
 - No new memory-ordering model. SH-Compact's weak ordering is preserved.
 - No cycle-accurate emulation of historical SH-4 timing for Dreamcast workloads.
 - No wider-than-2-wide variant in this document (future work).
@@ -51,17 +52,17 @@ Every microarchitectural technique used in this specification has prior art publ
 | Store-set memory dependence prediction           | Chrysos & Emer 1998                                   |
 | Macro-op fusion (atomic-group)                   | AMD K7 1999                                           |
 | Rename-checkpoint fast misprediction recovery    | Hwu & Patt 1987; MIPS R10000                          |
-| Simultaneous multithreading (SMT)                | Tullsen, Eggers, Levy 1995                            |
-| ICOUNT fetch policy and fetch-heuristic family   | Tullsen, Lo, Eggers, Levy 1996                        |
-| 2-way SMT on commercial OOO core                 | Intel HT (P4) 2002; IBM POWER5 2004                   |
-| Auto-priority on idle/spin states                | POWER5 `HMT_very_low` in kernel idle 2004             |
+| Fine-grained multi-threading (FGMT, barrel)      | CDC 6600 PPU (Thornton 1964); Denelcor HEP (Smith 1978); Tera MTA (Smith 1990) |
+| FGMT on a single-issue in-order RISC pipeline    | MIPS MT ASE / 34K (Kissell, MIPS Tech 2005); Sun UltraSPARC T1 "Niagara" (Kongetira et al., IEEE Micro 2005) |
+| Switch-on-stall / ready-thread arbitration       | MIT Alewife Sparcle (Agarwal et al. 1993); UltraSPARC T1 thread scheduler 2005 |
+| Auto-priority on idle/spin states                | MIT Alewife block-multithreaded scheduling 1993; HEP spin-wait coalescing 1978 |
 | On-die L2 cache                                  | Alpha 21164 1995 (96 KB); AMD Thunderbird 2000 (256 KB) |
 | Stride prefetcher                                | Chen & Baer 1995                                      |
 | Next-line prefetcher / stream buffers            | Jouppi 1990                                           |
 | Performance Monitoring Unit (event counters)     | DEC Alpha 21064 1992                                  |
 | PerfEvtSel / PerfCtr model                       | Intel P6 1995                                         |
 | PowerPC PMC1–PMC4 with MMCR0/1                   | PowerPC 750 1997                                      |
-| Per-thread PMUs for SMT                          | POWER5 2004                                           |
+| Per-thread PMU counters                          | UltraSPARC T1 per-strand counters 2005                |
 
 ---
 
@@ -79,7 +80,7 @@ Every microarchitectural technique used in this specification has prior art publ
   +------+------+----+------+-----+-----+----+----+-----+-------+-----+-----+
 ```
 
-Twelve named stages. ICOUNT thread arbitration occurs at IF2 (see §13.2). Most instructions traverse 10 stages (no second EX). The OOO portion is REN through CMT.
+Twelve named stages. FGMT thread selection occurs at IF1 (see §13.2). Most instructions traverse 10 stages (no second EX). The OOO portion is REN through CMT.
 
 Key boundaries:
 
@@ -149,7 +150,7 @@ Most SH instructions decode to a single uop. Multi-cycle instructions decode to 
 
 ### 4.2 Decode-time uop annotations
 
-Every uop carries SMT-specific bits:
+Every uop carries FGMT-specific bits:
 
 - `thread_id` (1 bit): which thread this uop belongs to.
 - `is_cas_fail_candidate` (1 bit): set on the CAS.L compare-and-store uop. Used by §13.4.
@@ -212,9 +213,9 @@ A `stc SR, Rn` reads all groups and constructs a 32-bit value. An `ldc Rn, SR` w
 
 ## 5. Rename
 
-### 5.1 SMT-aware approach: per-thread RAT + shared ROB
+### 5.1 FGMT-aware approach: per-thread RAT + shared ROB
 
-For 2-way SMT with future-file rename:
+For 2-way FGMT with future-file rename:
 
 - **Architectural Register File (ARF)**: 2 × 23 entries = 46 logical registers (one full copy per thread).
 - **Rename Alias Table (RAT)**: 2 × 23 entries. Each entry holds either an ARF index for the owning thread or a ROB slot index.
@@ -380,6 +381,8 @@ This is precise because the exception is detected at commit, after all older ins
 
 ## 10. CAS.L Atomic Handling (Detailed)
 
+**Atomicity mechanism (J32-OOO / J32-FM):** the cache-side actor is the **L2 per-line lock** specified in [cache/l2-spec.md §6](../cache/l2-spec.md), not the legacy bus lock. uop2 (locked load) drives the L1-D to issue `GetM-Locked` to L2; uop3 (conditional store) drives `Unlock` (with new data on T=1, without on T=0). The atomic-group state machine, LSQ enforcement, per-thread auto-priority, and SLEEP interactions below are unchanged from earlier drafts; only the underlying memory-side actor has been replaced. The state-name reuse (`RLOCK1/RLOCK2/WUNCA1/WUNCA2/NEGLCK`) is intentional — the same dcache state machine now drives line-lock messages rather than `db_lock`. The J2 (no-L2) path continues to use bus-lock for backward compatibility.
+
 ### 10.1 Existing in-order semantics
 
 The current J32 implementation (`decode/decode_table_simple.vhd` lines 1919–1978) cracks CAS.L into 4 micro-cycles:
@@ -465,7 +468,7 @@ Contended CAS.L: bounded by bus arbitration latency for losing a lock contention
 
 ## 11. Cache Hierarchy
 
-The previous in-order J32 ships with 8 KB I-cache and 8 KB D-cache. For 2-way SMT on the target workload, both threads share the L1 caches and effective per-thread capacity halves. The cache hierarchy is upgraded to accommodate this.
+The previous in-order J32 ships with 8 KB I-cache and 8 KB D-cache. For 2-way FGMT on the target workload, both threads share the L1 caches and effective per-thread capacity halves (FGMT interleaves threads cycle-by-cycle, so working-set pressure is similar to SMT here). The cache hierarchy is upgraded to accommodate this.
 
 ### 11.1 L1 Instruction Cache
 
@@ -556,7 +559,7 @@ Memory-mapped registers in a control region (typical embedded Linux convention).
 | PMOVF            |  32   | Overflow status, one bit per counter                       |
 | PMTID            |   8   | Thread ID select for context-sensitive register reads      |
 
-Per-thread shadowing: each thread has its own copy of all counter registers. The PMTID field selects which thread's view is exposed on register reads. Counter overflow triggers a maskable interrupt to the OS, used by `perf record` for sampling profilers.
+Per-thread shadowing: each thread has its own copy of all counter registers. The PMTID field selects which thread's view is exposed on register reads. Counter overflow triggers a maskable interrupt to the OS, used by `perf record` for sampling profilers. The overflow wire is a **direct, per-core source line into AIC2** (not routed through the bus fabric) — see [aic/aic2-spec.md §6.4](../aic/aic2-spec.md) for the integration contract and §10 open question #2 for per-counter vs aggregate-overflow source allocation.
 
 ### 12.2 Event inventory
 
@@ -612,9 +615,13 @@ On FPGA, ~1,500 LUTs and 0 additional BRAMs (counter state fits in distributed R
 
 ---
 
-## 13. Simultaneous Multithreading
+## 13. Fine-Grained Multi-Threading (FGMT)
 
-J32OOO is 2-way SMT with ICOUNT fetch policy and automatic priority adjustment. No software-exposed priority hints are provided in this revision.
+J32OOO is 2-way **FGMT** (fine-grained multi-threading): each cycle the front-end selects one of the two hardware thread contexts; that thread's fetch goes to the I-cache and its two decoded uops fill the two issue slots. The backend (rename / ROB / IQ / LSU) is shared with thread tags. Auto-priority adjustment biases the per-cycle selection without software-exposed hints.
+
+This design deliberately rejects SMT (multiple threads issuing uops in the *same* cycle, à la Tullsen 1995 / Intel HT 2002 / POWER5 2004). FGMT is simpler, smaller, and has cleaner pre-2006 prior art (CDC 6600 PPU 1964, Denelcor HEP 1978, Tera MTA 1990, MIT Alewife Sparcle 1993, MIPS 34K ASE 2005, Sun UltraSPARC T1 2005). It matches the threading model in [glossary §4](../glossary.md) and in the companion J2 [dual-fgmt-proposal](../fgmt/dual-fgmt-proposal.md).
+
+The throughput trade-off vs SMT: SMT can fill the second issue slot from the *other* thread when the chosen thread has only one ready uop; FGMT cannot. In return, FGMT eliminates per-cycle cross-thread dependency-tracking and lets most pipeline stages process at most one thread per cycle (cheap thread-tag forwarding, no cross-thread issue-queue arbitration). On SH-2 code, which has frequent delay-slot pairs of independent uops, the lost throughput is modest.
 
 ### 13.1 Thread context
 
@@ -627,41 +634,52 @@ Each thread has its own:
 - Branch predictor state contribution: per-thread GHR (10 bits) and per-thread RAS (8 entries).
 - Priority register (3 bits): current priority level.
 - Auto-priority state: `last_cas_pc`, `cas_fail_count`, `prio_dropped`, `parked` (~40 bits total).
+- ASID (16-bit `ASID_TAG`, per [glossary §5](../glossary.md)).
 
-Total per-thread state: ~280 bytes. Two threads: ~560 bytes. Fits trivially in distributed RAM and flip-flops.
+Total per-thread state: ~282 bytes. Two threads: ~564 bytes. Fits trivially in distributed RAM and flip-flops.
 
-### 13.2 ICOUNT fetch policy
+### 13.2 Thread selection (ready-thread arbitration)
 
-At the IF1 stage, the fetch arbiter selects which thread fetches this cycle. The selection criterion is a weighted version of ICOUNT:
+At the IF1 stage, a one-cycle arbiter selects which thread fetches this cycle. A thread is **ready** unless any of:
+
+- It is `parked` (SLEEP, awaiting interrupt — see §13.4 #2).
+- It is halted by the MMIO halt-register (analogous to `cpu1en_sbu` in jcore-cpu).
+- Its current PC has an outstanding I-cache miss (the other thread can run while this one's miss completes).
+- Its ROB partition is full (back-pressure; rare in practice with 20-entry ROB).
+
+Selection among ready threads:
 
 ```
-effective_count[t] = in_flight_uops[t] - 8 * priority_level[t]
+if exactly_one_ready:    pick that one
+else if both_ready:      pick the one with higher priority_level[t];
+                         on tie, alternate (last-served-was-other-thread wins)
+else (none ready):       no fetch this cycle (rare; both stalled)
 ```
 
-The thread with the lower `effective_count` is selected. If both are equal, ties break in favor of the thread that did not fetch the previous cycle (round-robin between equally-prioritized threads).
+`priority_level[t]` is 3 bits (0–7, default 4). Auto-priority adjustments (§13.4) move this without software involvement. This is **ready-thread arbitration**, not ICOUNT: we do not count in-flight uops per thread, because under FGMT a single thread cannot saturate the backend on its own and per-thread ROB occupancy is bounded by per-thread rename pressure, not by issue-bandwidth contention.
 
-`in_flight_uops[t]` is the count of uops in flight from thread t between rename and retirement (i.e. ROB occupancy for that thread). `priority_level[t]` is the current priority (0–7, default 3). Higher priority → larger negative bias → more likely to be selected for fetch.
+Parked threads are excluded from arbitration entirely; the other thread gets 100% of fetch bandwidth.
 
-Parked threads (executing SLEEP) are excluded entirely from the arbitration; the other thread gets 100% of fetch bandwidth.
-
-Prior art: Tullsen, Lo, Eggers, Levy 1996. POWER5 2004 used a near-identical mechanism with explicit priority weighting.
+**Prior art:** UltraSPARC T1 thread scheduler (Kongetira et al. 2005) uses essentially this policy — round-robin among ready threads with per-strand priority tie-breaks. MIT Alewife Sparcle (Agarwal et al. 1993) is the canonical pre-2006 reference for ready-thread arbitration with auto-priority on long-latency events.
 
 ### 13.3 Resource sharing
 
-| Resource                | Sharing model                                       |
-| ----------------------- | --------------------------------------------------- |
-| Fetch unit              | One thread per cycle, ICOUNT-selected               |
-| Decoder                 | Thread-tagged uops, both threads can co-exist in decode pipeline |
-| Rename                  | Per-thread RAT                                      |
-| ROB                     | Shared, thread-tagged; both threads commit independently |
-| Issue queue             | Shared with per-thread reservation (≥4 entries reserved) |
-| Functional units        | Shared opportunistically; oldest-ready wins         |
-| LSQ                     | Shared with thread-tagged entries; no cross-thread forwarding |
-| L1 caches               | Shared; no partitioning                             |
-| L2 cache                | Shared; no partitioning                             |
-| Branch predictor tables | Shared with thread-tagged hashing                   |
-| Return address stack    | Per-thread (mandatory)                              |
-| PMU counters            | Per-thread shadowing                                |
+| Resource                | Sharing model                                                       |
+| ----------------------- | ------------------------------------------------------------------- |
+| Fetch unit              | One thread per cycle, ready-thread arbiter (§13.2)                  |
+| Decoder                 | Single-thread per cycle; uops carry thread tag downstream           |
+| Rename                  | Per-thread RAT (two RATs)                                           |
+| ROB                     | Shared with thread tags; per-thread commit head; both threads commit independently |
+| Issue queue             | Shared with thread tags; oldest-ready wins (no per-thread reservation needed under FGMT) |
+| Functional units        | Shared; only one issuing thread per cycle, so no cross-thread arbitration |
+| LSQ                     | Shared with thread tags; no cross-thread forwarding                 |
+| L1 caches               | Shared; no partitioning                                             |
+| L2 cache                | Shared; no partitioning                                             |
+| Branch predictor tables | Shared with thread-tagged index hashing                             |
+| Return address stack    | Per-thread (mandatory)                                              |
+| PMU counters            | Per-thread shadowing                                                |
+
+Note vs the v0.2 SMT design: the issue queue no longer needs per-thread reserved entries (each cycle only one thread issues, so a single thread cannot deadlock the other by starving the IQ). This saves ~1k gates and simplifies wake-up logic.
 
 ### 13.4 Automatic priority adjustment
 
@@ -669,33 +687,48 @@ Two events nudge per-thread priority without software intervention:
 
 **1. Repeated CAS.L failure (per §10.5).** When a thread fails the same-PC CAS.L ≥2 consecutive times, its priority drops one level (down to a floor of 1). A successful CAS or a far branch restores priority to baseline. Cost: ~200 gates.
 
-Behavior under contention: a spinning thread automatically yields fetch slots to the holder thread, accelerating the holder's progress and resolving the contention faster. Expected gain on lock-contention microbenchmarks: 20–30% throughput improvement for the productive thread.
+Behavior under contention: a spinning thread automatically yields fetch cycles to the holder thread, accelerating the holder's progress and resolving the contention faster. Expected gain on lock-contention microbenchmarks: 15–25% throughput improvement for the productive thread (slightly lower than the SMT projection because FGMT already gives the holder full cycles when the spinner is parked).
 
-**2. SLEEP execution (per §10.6).** When SLEEP is decoded, the thread's priority drops to 0 immediately and the thread is marked `parked`. The other thread receives 100% of fetch bandwidth. On any interrupt routed to the parked thread, priority is restored to baseline and `parked` clears. Cost: ~150 gates.
+**2. SLEEP execution (per §10.6).** When SLEEP is decoded, the thread's priority drops to 0 immediately and the thread is marked `parked`. The other thread receives 100% of fetch bandwidth. On any interrupt routed to the parked thread, priority is restored to baseline and `parked` clears. Cost: ~150 gates. The unpark signal is the `per_tc_pending[t]` bundle exposed by AIC2 directly to the ready-thread arbiter — see [aic/aic2-spec.md §4.3](../aic/aic2-spec.md) for the contract.
 
-No software-exposed priority hint interface is provided in this revision. All priority adjustment is hardware-managed. This is intentional: the two automatic cases (CAS spin, SLEEP) cover the dominant scenarios, and exposing manual hints would require ISA-level changes (e.g. POWER5's `HMT_*` macro mapping) that we want to defer.
+No software-exposed priority hint interface is provided in this revision. All priority adjustment is hardware-managed. This is intentional: the two automatic cases (CAS spin, SLEEP) cover the dominant scenarios, and exposing manual hints would require ISA-level changes that we want to defer. (Prior art for software-visible priority hints exists post-2006 in POWER ISA — not citeable under the prior-art policy in [glossary §2](../glossary.md).)
 
 ### 13.5 Per-thread cost summary
 
-| Block                                  | Extra gates    |
-| -------------------------------------- | -------------: |
-| Per-thread state (registers, RATs, etc.) |        4,500 |
-| ICOUNT fetch arbiter                   |          1,500 |
-| Thread-tagged ROB / IQ / LSQ           |          5,000 |
-| Per-thread BTB tagging and RAS         |          2,000 |
-| Auto-priority logic (CAS.L + SLEEP)    |            350 |
-| Cross-thread isolation checks (LSQ, forwarding) |    1,500 |
-| **Total SMT incremental cost**         |     **~14,850** |
+| Block                                                | Extra gates    |
+| ---------------------------------------------------- | -------------: |
+| Per-thread state (registers, RATs, ASID, etc.)       |        4,600 |
+| Ready-thread arbiter (§13.2)                         |          800 |
+| Thread-tagged ROB / IQ / LSQ                         |        4,200 |
+| Per-thread BTB tagging and RAS                       |        2,000 |
+| Auto-priority logic (CAS.L + SLEEP)                  |          350 |
+| Cross-thread isolation checks (LSQ, forwarding)      |        1,500 |
+| **Total FGMT incremental cost**                      |   **~13,450** |
 
-Plus the PMU's per-thread shadowing (already counted in §12.4).
+Plus the PMU's per-thread shadowing (already counted in §12.4). Net saving vs v0.2 SMT cost (~14,850): ~1,400 gates from the simpler arbiter and no IQ reservation.
+
+### 13.6 Prior art summary
+
+| Mechanism                                | Pre-2006 source                                                             |
+| ---------------------------------------- | --------------------------------------------------------------------------- |
+| Barrel-style FGMT                        | CDC 6600 PPUs (Thornton, *Design of a Computer*, 1970, describing 1964 design) |
+| Cycle-by-cycle context switch on RISC    | Denelcor HEP (Smith 1978–1985)                                              |
+| Massive thread interleaving              | Tera MTA (Smith 1990, ISCA papers 1994–1998)                                |
+| Switch-on-event / ready-thread variant   | MIT Alewife Sparcle (Agarwal, Kubiatowicz et al. 1993)                      |
+| FGMT on commercial in-order RISC         | MIPS MT ASE / 34K (Kissell, MIPS Tech 2005)                                 |
+| FGMT on multi-core commercial CPU        | Sun UltraSPARC T1 "Niagara" (Kongetira, Aingaran, Olukotun, IEEE Micro 2005) |
+| Per-thread CP0/privileged state model    | MIPS MT VPE concept (2005)                                                  |
+| Auto-priority on synchronization stalls  | Alewife block-multithreaded scheduling (1993); HEP spin-wait coalescing (1978) |
 
 ---
 
 ## 14. SMP
 
-J32OOO is single-core or dual-core SMP with bus-lock atomicity (CAS.L). No MESI snooping on the dcache; coherence is handled at the bus through the existing lock-state mechanism in `cache/dcache_ccl.vhm`.
+J32OOO is single-core or dual-core SMP with **MSI cache coherence** between per-core L1-D caches and **L2-line-lock atomicity** for CAS.L. The directory and snoop fabric live at the L2; the per-core L1-D state machine in `cache/dcache_ccl.vhm` is repurposed to drive `GetM-Locked` / `Unlock` coherence messages to the L2 in place of asserting the legacy `db_lock` bus signal. See [cache/l2-spec.md §6, §7](../cache/l2-spec.md) for the full protocol.
 
-For the SMT design, both threads on the same core share the same view of memory through the shared L1/L2 caches. Cross-thread synchronization uses the same CAS.L primitive as inter-core synchronization.
+The bus-lock CAS.L path is retired for J32-OOO and J32-FM (it remains the J2 mechanism on cores without an L2; see [cache/l2-spec.md §6.4](../cache/l2-spec.md)). The atomic-group handling in §10 of this spec is unchanged at the OoO-core level — only the cache-side mechanism that uop2 and uop3 talk to has moved from bus-lock to line-lock.
+
+Under FGMT, both threads on the same core share the same view of memory through the shared L1/L2 caches. Cross-thread synchronization uses the same CAS.L primitive as inter-core synchronization. The L2 line lock is qualified with `{core_id, thread_id}` so an FGMT context switch on the same core does not silently release a sibling thread's lock ([cache/l2-spec.md §6.6](../cache/l2-spec.md)).
 
 ---
 
@@ -714,15 +747,15 @@ For the SMT design, both threads on the same core share the same view of memory 
 | Shift + Mul + Div                |       18,000 |
 | LSU + LQ + SQ + store-sets (per-thread tagged) |  26,000 |
 | Commit + retire RAT              |       10,000 |
-| SMT machinery (§13)              |       14,850 |
+| FGMT machinery (§13)             |       13,450 |
 | PMU (§12)                        |        9,500 |
 | Misc (bypass, control, debug)    |       17,000 |
-| **Subtotal (CPU core)**          |  **223,350** |
+| **Subtotal (CPU core)**          |  **221,950** |
 | Cache subsystem (§11)            |       18,500 |
 | Existing SoC glue                |        8,000 |
-| FPU (deferred, separate spec)    |            – |
+| FPU (deferred — see [../fpu/spec.md](../fpu/spec.md), Tier 1) |            – |
 | MMU (deferred, separate spec)    |            – |
-| **Total core + caches**          |  **249,850** |
+| **Total core + caches**          |  **248,450** |
 
 On ULX3S 85F:
 
@@ -747,7 +780,7 @@ Plenty of headroom for SoC peripherals (Ethernet, UART, GPIO, SDRAM controller).
 | `core/mult.vhm`, `core/mult_pkg.vhd`          | Reused as the Mul FU                              |
 | `core/datapath.vhm`                           | Largely rewritten; bus-output `db_lock` path reused verbatim |
 | `decode/decode_body.vhd`                      | Reused as predecode for instruction classification |
-| `decode/decode_table_simple.vhd`              | Used as reference for uop cracking; new emitter generates SMT-tagged uops |
+| `decode/decode_table_simple.vhd`              | Used as reference for uop cracking; new emitter generates FGMT-tagged uops |
 | `decode/decode_core.vhm`                      | Replaced                                          |
 | `sim/sh2instr.c`                              | Reused as reference model for verification        |
 | `testrom/tests/*.s`                           | Reused for compliance testing (including CAS.L atomicity tests at `testmov.s:580-635`) |
@@ -761,12 +794,12 @@ Plenty of headroom for SoC peripherals (Ethernet, UART, GPIO, SDRAM controller).
 ### 17.1 Tiered approach
 
 1. **FU-level**: existing test taps (`tests/arith_tap.vhd` etc.) verify ALU, shift, mul, div correctness. Unchanged.
-2. **uop-level**: new testbench for rename, ROB, IQ, LSQ, atomic groups, SMT thread tagging.
-3. **Architectural**: run `testrom/tests/*.s` against the OOO core. CAS.L atomicity test in `testmov.s` (lines 580–635) is the regression test for atomic-group enforcement. Run with 2-way SMT both enabled and disabled.
+2. **uop-level**: new testbench for rename, ROB, IQ, LSQ, atomic groups, FGMT thread tagging.
+3. **Architectural**: run `testrom/tests/*.s` against the OOO core. CAS.L atomicity test in `testmov.s` (lines 580–635) is the regression test for atomic-group enforcement. Run with 2-way FGMT both enabled and disabled.
 4. **Compliance**: SH-2 reference model in `sim/sh2instr.c` runs in lockstep with the OOO core. Mismatches at retirement halt simulation.
 5. **Stress**: Linux boot, Dhrystone, CoreMark, atomic-heavy SMP tests (kernel locking primitives, libatomic), SSH-bulk-data, JSON parsing benchmarks.
 
-### 17.2 SMT-specific test corpus
+### 17.2 FGMT-specific test corpus
 
 - **Thread isolation tests**: each thread runs an independent test program; verify no cross-thread state corruption.
 - **CAS.L contention tests**: two threads CAS.L the same address in a tight loop; verify atomicity and forward progress.
@@ -796,7 +829,7 @@ Plenty of headroom for SoC peripherals (Ethernet, UART, GPIO, SDRAM controller).
 | P1    | Single-thread OOO prototype: rename + ROB + IQ + 1 ALU + 1 LSU         |    4 months |
 | P2    | Add second ALU pipe, T-rename, branch predictor, RAS                   |    3 months |
 | P3    | Atomic groups (CAS.L), LSQ with store-sets, MAC                        |    2 months |
-| P4    | SMT integration: thread tagging, ICOUNT, per-thread state              |    2 months |
+| P4    | FGMT integration: thread tagging, ready-thread arbiter, per-thread state |    2 months |
 | P5    | Cache hierarchy: 32 KB L1 caches, 128 KB L2, prefetchers               |    2 months |
 | P6    | PMU: counter file, event-select, overflow interrupt, Linux driver      |   1.5 months |
 | P7    | Auto-priority: CAS.L spin detection, SLEEP handling                    |   0.5 months |
@@ -824,11 +857,10 @@ Total: ~24 months for J32OOO with this scope.
 
 ## Appendix B: Glossary
 
-- **ARF** — Architectural Register File. Committed state. Per-thread under SMT.
+- **ARF** — Architectural Register File. Committed state. Per-thread under FGMT.
 - **BTB** — Branch Target Buffer.
-- **GHR** — Global History Register. Per-thread under SMT.
-- **HMT** — Hardware Multithreading (PowerPC priority macros). Referenced in this spec as prior art; not implemented.
-- **ICOUNT** — Fetch policy selecting the thread with fewer in-flight uops.
+- **FGMT** — Fine-Grained Multi-Threading. See [glossary §4](../glossary.md). Project-wide canonical term.
+- **GHR** — Global History Register. Per-thread under FGMT.
 - **IQ** — Issue Queue.
 - **LFST** — Last-Fetched Store Table.
 - **LQ** — Load Queue.
@@ -836,10 +868,9 @@ Total: ~24 months for J32OOO with this scope.
 - **MAC** — Multiply-Accumulate.
 - **NEGLCK** — Negate Lock (dcache state for releasing bus lock without a write).
 - **PMU** — Performance Monitoring Unit.
-- **RAS** — Return Address Stack. Per-thread under SMT.
-- **RAT** — Register Alias Table. Per-thread under SMT.
+- **RAS** — Return Address Stack. Per-thread under FGMT.
+- **RAT** — Register Alias Table. Per-thread under FGMT.
 - **ROB** — Reorder Buffer.
-- **SMT** — Simultaneous Multithreading.
 - **SQ** — Store Queue.
 - **SSIT** — Store-Set ID Table.
 - **T-bit** — SH-Compact condition flag (SR bit 0).

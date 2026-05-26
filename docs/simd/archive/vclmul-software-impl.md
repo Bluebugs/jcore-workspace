@@ -1,3 +1,5 @@
+> **Superseded.** This document was consolidated into `../spec.md` / `../hardware-impl.md` / `../software-impl.md` on 2026-05-25. Kept for historical reference.
+
 # VCLMUL and VCRC32C: Software Implementation Guide
 
 **Document status:** Draft v0.1

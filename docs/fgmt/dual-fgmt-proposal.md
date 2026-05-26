@@ -13,14 +13,11 @@ This proposal extends the design along two orthogonal axes:
 
 The result is a 4-thread SMP system that should fit comfortably alongside the existing J2 single-core in the same FPGA targets, with the second thread on each core acting as a cheap latency-hiding resource for load-use stalls, instruction-fetch stalls, and (eventually) cache misses, rather than as a second full pipeline.
 
-## 2. Terminology note: SMT vs. FGMT in a single-issue pipeline
+## 2. Terminology
 
-Strictly speaking, *simultaneous* multithreading (SMT) means co-issuing instructions from multiple threads in the **same** cycle, which requires a superscalar machine. J2 is a five-stage, in-order, single-issue pipeline; the natural form of hardware multithreading here is either:
+This document uses **FGMT** (fine-grained multi-threading) throughout: each cycle the front-end picks one of the hardware thread contexts and that thread occupies the pipeline. The project-wide threading vocabulary is defined in [glossary §4](../glossary.md); SMT is not used in this project.
 
-- **Fine-grained multithreading (FGMT / "barrel"):** pick a different thread every cycle at the IF or ID boundary.
-- **Coarse-grained / switch-on-event:** stay on one thread until a long-latency event (cache miss, MAC stall), then switch.
-
-For consistency with the user-facing request ("dual SMT") this document uses **SMT** loosely. The concrete recommendation is **2-way FGMT with a fallback to switch-on-event when one thread is stalled** — closest in spirit to the MIPS 34K and UltraSPARC T1 cores.
+The concrete recommendation for J2 is **2-way FGMT with switch-on-event when one thread is stalled** (cache miss, MAC busy, etc.) — closest in spirit to the MIPS 34K (Kissell, MIPS Tech 2005) and Sun UltraSPARC T1 "Niagara" (Kongetira et al., IEEE Micro 2005) cores. Pre-2006 prior art for the underlying barrel-FGMT pattern goes back to the CDC 6600 PPUs (Thornton 1964), Denelcor HEP (Smith 1978), and Tera MTA (Smith 1990).
 
 ## 3. What already exists in the repository
 
@@ -43,7 +40,7 @@ The most relevant designs to study, in roughly increasing distance from J2's mic
 
 - **MIPS MT ASE (34K, 1004K, interAptiv)** — fine-grained MT on a single-issue in-order RISC almost identical in spirit to J2. Defines **VPEs** (virtual processing elements: per-thread CP0/privileged state) and **TCs** (thread contexts: per-thread GPRs + PC + minimal status). A 34K configured with 2 VPEs looks to software like two MIPS32 CPUs sharing a pipeline and caches, with cache coherence "for free" because the L1 is shared. This is the closest published architectural template for what we want on J2.
 - **Sun UltraSPARC T1 ("Niagara") and T2** — multi-core (4/6/8) × 4-way FGMT, single-issue in-order per core. Each core has a per-thread register file (one window-set per thread for T1), a thread scheduler that picks among ready threads based on previous long-latency op, instruction type, and LRU. Demonstrates the throughput model at scale.
-- **IBM A2 (Blue Gene/Q, PowerEN)** — in-order, 4-way SMT, with a `wrlos` ("wait, reservation lost") instruction interacting with reservation-based atomics. Useful reference for how to wake threads on synchronization events.
+- **IBM A2 (Blue Gene/Q, PowerEN)** — in-order, 4-way hardware multi-threaded, with a `wrlos` ("wait, reservation lost") instruction interacting with reservation-based atomics. Post-2006 (announced 2010); cited here for completeness only. The waking-on-synchronization-event pattern itself has pre-2006 prior art in the Tera MTA's full/empty bits (Smith 1990).
 - **XMOS xCORE** — up to 8 hardware threads per tile, deterministic interleave, no caches. Less directly applicable (no coherence) but a good reference for very lean thread context implementation.
 - **C-slow retiming** (Leiserson et al., '83; Weaver et al. on Xilinx Virtex; Strauch's SHP / RTL CSR work) — automatic transformation that "multiplies" a single-thread pipeline into N interleaved threads by adding C-1 registers in every feedback path. Worth evaluating as a tooling shortcut for early prototypes, although for an ASIC target the explicit, hand-designed approach below is preferred. The Berkeley "Simple Symmetric Multithreading in Xilinx FPGAs" project (cs252) is a directly relevant cautionary tale on the limits of pure C-slow for a real CPU.
 - **FlexPRET** — a small in-order RISC-V with fine-grained MT explicitly designed for mixed-criticality real-time. Good model for *flexible* thread scheduling (hard-real-time thread + best-effort threads sharing the pipe).
@@ -88,6 +85,8 @@ The 2-cycle load-use stall that hurts single-thread J2 today disappears almost e
 
 ### 5.3 Interrupts and per-thread events
 
+See [aic/aic2-spec.md §4](../aic/aic2-spec.md) for the formal Tier 1 specification of the FGMT extension to AIC2; this section is the design sketch that motivated it.
+
 The AIC2 already has a `cpuid` generic. The cleanest extension is to:
 
 1. Promote `cpuid` to `(cpuid : integer; n_tc : natural := 2)` and add per-TC interrupt mask / pending / level registers, addressable by an additional MMIO offset.
@@ -130,8 +129,8 @@ Estimating absolute calendar effort would be irresponsible without knowing your 
 
 The J2 Linux port already assumes SMP-capable hardware; the additional work for FGMT is mostly making Linux's scheduler topology-aware:
 
-- Expose per-thread `hard_smp_processor_id()` and a flat-DT property identifying SMT siblings (similar to PowerPC's `ibm,thread-list`).
-- Provide a J2-specific `cpu_topology` so `sched_smt_active()` returns true and same-core threads are picked only after both cores are busy.
+- Expose per-thread `hard_smp_processor_id()` and a flat-DT property identifying FGMT siblings (similar to PowerPC's `ibm,thread-list`).
+- Provide a J2-specific `cpu_topology` so the scheduler treats same-core threads as siblings and picks them only after both cores are busy. (Linux uses `sched_smt_active()` for this regardless of whether the hardware is SMT or FGMT — the kernel API name is historical and does not constrain our hardware choice.)
 - The existing J2 cache-flush path (`cache-j2.c`) keys off `hard_smp_processor_id() * j2_ccr_cpu_offset` — under the new model this should switch to a per-*core* offset, not per-thread, since both threads on a core share the cache.
 - Userspace: musl already supports `sh2eb-linux-muslfdpic`; no changes expected. GCC's `-mj2` is already upstream. CAS.L lowering for futexes already exists.
 

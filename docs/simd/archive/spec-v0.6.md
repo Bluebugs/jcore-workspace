@@ -1,3 +1,5 @@
+> **Superseded.** This document was consolidated into `../spec.md` / `../hardware-impl.md` / `../software-impl.md` on 2026-05-25. Kept for historical reference.
+
 # J-Core SIMD Extension — Design Specification v0.6 (Integer SIMD Primitives)
 
 **Status:** Draft, sixth design round (integer SIMD primitives: media, signal processing, bioinformatics, analytics, and inference)

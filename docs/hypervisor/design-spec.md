@@ -79,15 +79,23 @@ This is slower than the G-TLB design I had originally sketched, but it's strictl
 
 **Rationale:** Sun4v used `ta` (trap-always) with a specific trap number for hypercalls. PowerPC used `sc` with LEV=1. We add a distinct mnemonic for clarity and to leave TRAPA's behavior unchanged (TRAPA continues to deliver to the guest supervisor, as it always has).
 
-### 3.7 Reserved bits become hypervisor-allocated context
+### 3.7 Hypervisor-allocated ASID and BMID partitioning
 
-**Decision:** The 8-bit "VMID" field reserved in Phase 1 TLB tag layouts (and Phase 2 IOTLB tag layouts) is **not activated as a separate hardware field**. Instead, the hypervisor uses the existing 12-bit ASID_TAG space (and 8-bit BMID space for IOMMU) and allocates ranges to guests. From hardware's perspective, there is no VMID — only ASIDs and BMIDs. From software's perspective, the hypervisor partitions these spaces.
+**Decision:** No VMID hardware field exists. The hypervisor uses the existing 12-bit ASID space (and 8-bit BMID space for IOMMU) and allocates ranges to guests. From hardware's perspective, there is no VMID — only ASIDs and BMIDs. From software's perspective, the hypervisor partitions these spaces.
 
-**Rationale:** This is sun4v's actual approach. The hardware has no VMID field; the hypervisor allocates "contexts" globally and gives ranges to guests, ensuring isolation by allocation policy. The advantage: zero hardware additions for guest tagging, and Phase 1/2 specs remain bit-compatible with Phase 3.
+Earlier drafts of this spec, of the Phase 1 MMU spec, and of the Phase 2 IOMMU spec reserved an 8-bit VMID field in TLB and IOTLB tag layouts. **That reservation is removed**: the field never existed in shipping hardware. See [glossary §5](../glossary.md), [mmu/design-spec.md §3.6](../mmu/design-spec.md), [iommu/design-spec.md §3.7](../iommu/design-spec.md).
 
-Concretely, if a J-Core SoC supports up to 16 guests (a reasonable target for embedded virtualization), the hypervisor reserves 4 bits of the 12-bit ASID as "guest identity" and gives each guest 256 ASIDs. The TLB just sees ASIDs; it doesn't know about the partitioning.
+**Rationale:** This is sun4v's actual approach (pre-2006 SPARC v9 hypervisor ASI / context partitioning, designed 2003–2005). The hypervisor allocates "contexts" globally and gives ranges to guests, ensuring isolation by allocation policy. The advantage: zero hardware additions for guest tagging.
 
-This means the reserved VMID bits in Phase 1/2 specs become available for future extensions (e.g., expanded ASID space, or true VMID activation in a Phase 4 variant if patent landscape changes).
+**Partition arithmetic.** With a 12-bit ASID space (4096 ASIDs), the hypervisor splits as follows on a SoC supporting up to 16 guests:
+
+| Owner | ASIDs |
+|-------|-------|
+| Host kernel | 2048 (0–2047) |
+| Guest 1..16 (128 each) | 16 × 128 = 2048 (2048–4095) |
+| **Total** | **4096** |
+
+128 ASIDs per guest is sufficient for a containerized guest workload (10–100 processes); the host's 2048 ASIDs cover the host kernel and any guest VMM-process ASIDs needed on the host side. For SoCs targeting fewer guests, the per-guest allocation grows correspondingly (e.g. 8 guests × 256 = 2048, host keeps 2048). The Linux spec ([hypervisor/linux-spec.md §3.8](linux-spec.md)) carries the canonical allocator.
 
 ### 3.8 Per-guest TSB managed by hypervisor
 

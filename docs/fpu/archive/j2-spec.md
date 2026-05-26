@@ -1,3 +1,5 @@
+> **Superseded.** Consolidated into ../spec.md on 2026-05-25. Kept for historical reference.
+
 # J2 FPU Coprocessor — Specification (draft)
 
 **Status:** working draft, v0.4

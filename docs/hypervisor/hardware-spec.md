@@ -31,21 +31,30 @@ The IOMMU is also unchanged from Phase 2; hypervisor support is purely a softwar
 
 ### 2.1 SR.HPRIV bit
 
-Add one bit to SR at position `[9]` (currently reserved/unused in Phase 1):
+Add one bit to SR at position `[14]` (a genuinely-reserved SH-4 bit; no collision with existing SH-4 SR fields). The full canonical SR layout after Phase 3, matching the SH-4 hardware manual for every bit J-Core inherits:
 
 ```
-SR bit layout after Phase 3:
-[31:30]  MQ
-...
-[15]     MD              mode (existing)
-[14]     RB              register bank (existing)
-[13]     BL              block exceptions (existing)
-...
-[9]      HPRIV           hyperprivileged mode (NEW)
-[8]      V               reserved (was V in earlier draft; not used)
-[7:4]    IMASK
-[3:0]    T, S, M, Q
+SR bit layout (J-Core, after Phase 3):
+[31]     reserved (read-as-zero, write-ignored)
+[30]     MD              mode (existing SH-4: 1 = supervisor, 0 = user)
+[29]     RB              register bank (existing SH-4)
+[28]     BL              block exceptions (existing SH-4)
+[27:16]  reserved (read-as-zero, write-ignored)
+[15]     FD              FPU disable (existing SH-4; Tier 1 FPU
+                         and above; see ../fpu/spec.md §6.3)
+[14]     HPRIV           hyperprivileged mode (NEW, J-Core hypervisor
+                         extension; placed in a reserved SH-4 bit
+                         to preserve binary compatibility)
+[13:10]  reserved (read-as-zero, write-ignored)
+[9]      M               existing SH-4 (DIV0 / DIV1 mantissa carry)
+[8]      Q               existing SH-4 (DIV0 / DIV1 quotient)
+[7:4]    IMASK[3:0]      interrupt mask (existing SH-4)
+[3:2]    reserved (read-as-zero, write-ignored)
+[1]      S               existing SH-4 (MAC saturation enable)
+[0]      T               existing SH-4 (condition flag)
 ```
+
+**Reconciliation note.** Earlier drafts of this spec placed MD at bit 15 (collides with SH-4 FD) and HPRIV at bit 9 (collides with SH-4 M). Both were errors. Bit positions for MD, RB, BL, FD, M, Q, IMASK, S, T match the SH-4 hardware manual verbatim; HPRIV occupies SH-4-reserved bit 14. The FPU spec ([../fpu/spec.md §6.3](../fpu/spec.md)) places SR.FD at bit 15 per SH-4 and is consistent with this layout.
 
 **Semantics:**
 - `SR.HPRIV = 1`: CPU is in hyperprivileged mode. All operations permitted including hypervisor-only control register access.
@@ -87,13 +96,54 @@ The choice of low nibble `0xF` avoids collision with SH-4's existing `0xE` (LDC/
 ### 2.3 HEDR — Hypervisor Exception Delegation Register
 
 ```
-[31:0]  Bitmap: bit N = 1 -> delegate exception N to supervisor.
-                bit N = 0 -> deliver exception N to hyperprivileged.
+[31:0]  Bitmap: bit N = 1 -> delegate exception cause N to supervisor (guest).
+                bit N = 0 -> deliver exception cause N to hyperprivileged (host).
 ```
 
-The 32 exception types correspond to the existing SH-4 EXPEVT values, with 32 the practical maximum (J-Core uses well under that today).
+HEDR has 32 bits, each corresponding to an exception cause. The cause-to-bit mapping is fixed by hardware and given in §2.3.1; software cannot remap.
 
 **Default after reset:** all bits 0 (all exceptions go to hyperprivileged). The hypervisor explicitly sets bits to delegate to the guest. A non-virtualized kernel never sets HPRIV, so HEDR is never consulted — backward compatibility is preserved.
+
+**Always-to-hypervisor causes** (§4.2): bits 0 (HCALL) and 1 (guest LDTLB trap) are hard-wired to read-as-zero; software writes to these bits have no effect. These traps cannot be delegated to a guest because they exist solely to communicate with the hypervisor.
+
+#### 2.3.1 EXPEVT-to-HEDR-bit mapping (normative)
+
+The mapping is dense from the low bits up so a typical hypervisor configuration looks like a small bitmask. SH-4-inherited EXPEVT values are grouped by class; J-Core hyperprivileged-extension causes (`0x180`+) follow.
+
+| HEDR bit | EXPEVT     | Cause                                                    | Delegatable? |
+|---------:|------------|----------------------------------------------------------|:------------:|
+|    0     | `0x180`    | HCALL instruction                                        | **no**       |
+|    1     | `0x190`    | Guest LDTLB / LDTLB.R trap                               | **no**       |
+|    2     | `0x1A0`    | Hyperprivileged-register access from non-HS mode         | **no**       |
+|    3     | `0x1B0`    | `EXC_FPU_DISABLED` — SR.FD trap (Tier 2 FPU)             | yes          |
+|    4     | `0x040`    | TLB miss (read)                                          | yes          |
+|    5     | `0x060`    | TLB miss (write)                                         | yes          |
+|    6     | `0x0A0`    | TLB protection violation (read)                          | yes          |
+|    7     | `0x0C0`    | TLB protection violation (write)                         | yes          |
+|    8     | `0x0E0`    | Address error (read)                                     | yes          |
+|    9     | `0x100`    | Address error (write)                                    | yes          |
+|   10     | `0x800`    | FPU exception (non-disable; arithmetic IEEE-754 trap)    | yes          |
+|   11     | `0x820`    | FPU slot exception (in branch-delay slot)                | yes          |
+|   12     | `0x180` (Sup. case) | General illegal instruction (non-hyp cause)      | yes          |
+|   13     | `0x1A0` (Sup. case) | Slot illegal instruction                         | yes          |
+|   14     | `0x160`    | Unconditional TRAPA                                      | yes          |
+|   15     | `0x600`    | External IRL interrupt                                   | yes          |
+|   16     | `0x620`    | NMI                                                      | yes          |
+|   17     | `0x640`    | User break                                               | yes          |
+|   18     | `0x500`    | Reserved-instruction (no Tier 2 FPU present)             | yes          |
+|   19     | `0x5C0`    | Initial-page-write (dirty trap)                          | yes          |
+|   20     | `0x6E0`    | Inter-processor interrupt (host-targeted)                | yes          |
+|   21     | `0x700`    | PMU counter-overflow interrupt                           | yes          |
+|   22     | `0x720`    | L2 ECC / parity error (where instrumented)               | yes          |
+|   23     | `0x740`    | IOMMU fault forwarded as exception                       | yes          |
+|   24–31  | —          | reserved (future causes)                                 | yes          |
+
+Notes:
+- "Delegatable?" = whether the bit accepts software writes. Hardware ignores writes to non-delegatable bits, which always read 0.
+- Two EXPEVT values appear twice in the table (`0x180` and `0x1A0`) because they overload between the hyperprivileged extension cause (HCALL / hyp-register-from-non-HS) and the pre-existing SH-4 supervisor cause (illegal-instruction). Hardware distinguishes by context: when raised by HCALL or by a hyperprivileged-register access, the cause is non-delegatable (bits 0 and 2); when raised by an ordinary illegal-instruction, the cause is delegatable (bits 12 and 13).
+- The mapping is **stable**: future hardware revisions may add causes in bits 24–31 but MUST NOT reassign bits 0–23.
+
+This table resolves the open question raised in [../fpu/spec.md §10 #3](../fpu/spec.md): `EXC_FPU_DISABLED` occupies HEDR bit 3 and is delegatable.
 
 ### 2.4 No changes to existing registers
 
@@ -219,14 +269,18 @@ Offset    Handler
 
 ### 4.3 EXPEVT values
 
-| Code | Cause |
-|------|-------|
-| 0x040 - 0x130 | Existing SH-4 EXPEVT values (TLB miss, interrupt, etc.) |
-| 0x180 | HCALL instruction (new) |
-| 0x190 | Guest LDTLB/LDTLB.R trap (new) |
-| 0x1A0 | Hyperprivileged register access from non-HS mode (new) |
+The hyperprivileged-mode extension adds four new EXPEVT codes on top of the existing SH-4 set. The full per-cause delegation routing — including which bit of HEDR controls each cause — is specified normatively in [§2.3.1](#231-expevt-to-hedr-bit-mapping-normative). Summary of the new codes:
 
-Existing exception codes retain their meanings. Bit 7+ of EXPEVT now indicates "this is a hyperprivileged-mode-specific cause."
+| Code  | Cause                                                          | HEDR bit | Delegatable? |
+|-------|----------------------------------------------------------------|---------:|:------------:|
+| 0x180 | HCALL instruction (new)                                        | 0        | no           |
+| 0x190 | Guest LDTLB/LDTLB.R trap (new)                                 | 1        | no           |
+| 0x1A0 | Hyperprivileged register access from non-HS mode (new)         | 2        | no           |
+| 0x1B0 | `EXC_FPU_DISABLED` — SR.FD trap (Tier 2 FPU, new)              | 3        | yes          |
+
+Existing SH-4 EXPEVT codes (`0x040`–`0x130`, `0x500`–`0x740`) retain their meanings; their HEDR-bit assignments are in §2.3.1.
+
+**`EXC_FPU_DISABLED` (0x1B0).** Raised when an FPU instruction is decoded with `SR.FD = 1` on a CPU that ships a Tier 2 (hypervisor-aware) FPU. The cause is subject to HEDR delegation: when `HEDR[bit-for-0x1B0] = 0` (the default) the trap is taken by the hypervisor, which uses it to implement the lazy FPU context-switch ABI (per-vCPU FPU-ownership flag, save/restore of the 132-byte FPU image, re-enable of `SR.FD = 0` in the guest's `HSSR` shadow before `HRTE`). When the bit is set, the trap is delegated to the guest's own supervisor handler (a guest OS that wants to manage its own lazy-FPU model for user threads sets the bit). The full trap-handler ABI, save/restore sequence, and migration corner cases are specified in [../fpu/spec.md §7](../fpu/spec.md).
 
 ## 5. Hyperprivileged-Only Instructions and Operations
 
@@ -331,7 +385,7 @@ The rest is software. This is the central virtue of the design: it sits atop Pha
 
 If patent landscape changes and post-2006 primitives become viable, the design can grow:
 
-- **VMID-tagged TLB:** Activate the reserved VMID field in Phase 1 spec. Hardware would need to compare VMID alongside ASID. Eliminates the need for hypervisor-allocated ASID partitioning. Patent risk: high until ~2030 (Intel VPID patents).
+- **VMID-tagged TLB:** No longer on the roadmap. The 8-bit field that earlier drafts reserved in Phase 1/2 tag layouts is **removed** project-wide ([glossary §5](../glossary.md)). Hardware-VMID would have eliminated software ASID partitioning, but its patent risk is high until ~2030 (Intel VPID patents post-2008), and the ASID-partitioning approach (pre-2006 sun4v prior art) is sufficient at the guest counts this platform targets.
 - **Two-stage hardware translation (G-TLB):** Add a stage-2 cache that automatically substitutes HPN for RFN at LDTLB time. Eliminates the LDTLB trap. Patent risk: high until ~2030 (Intel EPT, AMD NPT patents).
 - **Nested virtualization:** Software-only; no new hardware. Just adds a layer of HEDR delegation. Implementable in Phase 3 without ISA changes if desired.
 

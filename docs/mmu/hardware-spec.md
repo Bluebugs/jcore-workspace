@@ -34,27 +34,30 @@ Conventions:
 
 Inherited from SH-4, extended. Accessed via `LDC Rm, PTEH` / `STC PTEH, Rn` (existing SH-4 encodings) or as MMIO at P4 address `0xFF000000` (for compatibility).
 
-**J32 layout (32 bits):**
-```
-[31:14]  VPN[31:14]    Auto-loaded by hardware on TLB miss
-[13:12]  reserved
-[11:0]   ASID|gen_low  Software-managed; bits 11:0 are kernel-defined as
-                       (ASID[11:0] | (gen_low[3:0] << 8))
-                       ... but see note below.
-```
-
-**Note on ASID/generation packing:** the kernel packs `ASID` (12 bits wide, values 0–4095) into bits 11:0, then conceptually XORs in `gen_low << ASID_BITS` as a high-overflow into PTEH bits 13:12 and beyond. To support this cleanly, **the PTEH ASID field is widened from SH-4's 8 bits to a 16-bit `ASID_TAG` field at bits 15:0** for hardware-comparison purposes. The kernel uses the low 12 bits as a true ASID and the upper 4 bits as a generation discriminator. Hardware does not interpret the split; it treats `ASID_TAG[15:0]` as an opaque tag for TLB and TSB comparison.
-
-**Revised J32 PTEH:**
+**J32 layout (32 bits) — provisional, see open question below:**
 ```
 [31:14]  VPN[31:14]    Hardware-set on TLB miss, software-set for LDTLB
-[13]     reserved (0)
-[12]     reserved (0)  -- room to widen ASID_TAG later if needed
-[11:0]   ASID_TAG      Software-managed opaque tag (12 bits, encodes
-                       ASID + generation low bits per kernel policy)
+                       (for the default 16 KB page size; smaller pages
+                       extend VPN downward into [13:0])
+[13:0]   ASID_TAG[13:0]  Low 14 bits of the 16-bit ASID_TAG.
+                       (Upper 2 bits live elsewhere — see open question.)
 ```
 
-Wait — 12 bits ASID + extra generation requires more than 12 bits total. Resolved below in §2.6.
+**ASID_TAG width is 16 bits** (canonical, project-wide). The kernel packs the 12-bit ASID proper and a 4-bit generation discriminator into a single 16-bit opaque tag that hardware uses for TLB and TSB comparison:
+
+```
+ASID_TAG[15:0] = (ASID[11:0] | (gen_low[3:0] << 12))
+```
+
+The TLB-entry tag carries the full 16 bits (see §2.6). The Linux ASID allocator in `docs/mmu/linux-spec.md` §5 produces this 16-bit value directly; hardware does not interpret the split, only the kernel does.
+
+**Open question (PTEH layout): the full 16-bit ASID_TAG does not cleanly fit in PTEH alongside the VPN for sub-64-KB page sizes.** With a 16 KB minimum page, VPN occupies PTEH `[31:14]` (18 bits) leaving 14 bits for ASID_TAG — 2 bits short. Three resolutions are on the table; pick one before RTL:
+
+1. **Min page size becomes 64 KB on the J32 MMU.** VPN occupies `[31:16]` (16 bits); ASID_TAG occupies `[15:0]` (16 bits). Clean. Cost: loses the 16 KB page size as a finest grain on J32; J64 can restore it with a wider PTEH. Aligns with SH-3 conventions (4 KB / 64 KB / 1 MB).
+2. **Add a separate ASIDR register holding ASID_TAG[15:14].** PTEH keeps the original layout (ASID_TAG[13:0] at PTEH[13:0]). Adds one new control register and one MMIO offset; LDTLB latches both. Cost: extra register-file plumbing, slightly more complex context-switch sequence.
+3. **PTEH widens to 40 or 64 bits, accessed as a register pair on J32.** Cleanest semantically, biggest software impact (PTEH no longer fits in a J32 register; LDC/STC require two operations or a new instruction). Most invasive.
+
+This document currently shows resolution 1 (16 KB page dropped) tentatively in the bit layout above. The Linux spec, hypervisor spec, and IOMMU spec are all consistent with whichever resolution is picked, since they only see the 16-bit `ASID_TAG` value, not the PTEH storage location.
 
 ### 2.2 PTEL — Page Table Entry Low
 
@@ -240,8 +243,7 @@ Tag fields:
   VALID         1 bit
   GLOBAL        1 bit          (Global; if set, ignore ASID_TAG match)
   VPN           up to 36 bits  (max VA bits minus min PageShift)
-  ASID_TAG      12 bits        (kernel-encoded ASID + gen_low)
-  VMID          8 bits         (hardwired to 0 on J3/J64 baseline)
+  ASID_TAG      16 bits        (kernel-encoded ASID[11:0] + gen_low[3:0])
   PageMask      4 bits         (encodes page size)
 
 Data fields:
@@ -251,7 +253,7 @@ Data fields:
   STALE         1 bit (software-only, preserved)
 ```
 
-Total ~95 bits per entry on J32, ~135 bits on J64. For 32 entries: ~3 Kib of state.
+Total ~91 bits per entry on J32, ~131 bits on J64. For 32 entries: ~3 Kib of state. The VMID field present in earlier drafts has been **removed** (see project-wide decision in [glossary §5](../glossary.md)); hypervisor isolation is achieved via ASID partitioning, not VMID tagging.
 
 ### 4.3 TLB match function
 
@@ -260,7 +262,6 @@ For each entry on a translation request:
 match = entry.VALID &&
         (entry.VPN[high : pagebits_for_PageMask] == VA[high : pagebits])
 match = match && (entry.GLOBAL || entry.ASID_TAG == PTEH.ASID_TAG)
-match = match && (entry.VMID == 0)   // until hypervisor mode added
 ```
 
 The bit range compared depends on the entry's PageMask: a 16 KB page compares VPN[35:14] (J64) or VPN[31:14] (J32); a 64 KB page compares VPN[35:16]; etc.
@@ -362,21 +363,13 @@ The CPU starts executing at the reset vector (typically `0xA0000000` = P2 entry,
 
 ## 10. Future-Compatibility Notes
 
-### 10.1 VMID activation
+### 10.1 Hypervisor extension
 
-When a future hypervisor extension is added:
-- The VMID field in TLB tags activates (currently hardwired 0).
-- A new register HVMID holds the current VMID.
-- A new control register HGATP holds the hypervisor's stage-2 TSB base.
-- The TLB miss sequence acquires a second stage of translation.
+The hypervisor extension (Phase 3, see [hypervisor/hardware-spec.md](../hypervisor/hardware-spec.md)) **does not add new MMU hardware fields**. Guest isolation is achieved via ASID partitioning in software; the hypervisor allocates ranges of the 12-bit ASID space to guests and tracks ownership outside the TLB. No VMID field, no HVMID register, no HGATP register, no second-stage hardware walker. See [glossary §5](../glossary.md) ("VMID — removed") and [hypervisor/design-spec.md §3.7](../hypervisor/design-spec.md) for the rationale.
 
-The 8-bit VMID field is reserved now in TLB-entry layouts. No instruction encoding for HVMID or HGATP needs to be allocated today.
+Earlier drafts of this spec reserved an 8-bit VMID field in TLB tags. That reservation is **removed** as of this revision (see §4.2). The 8 bits are not used by anything now and are not earmarked for any future use.
 
-### 10.2 Larger ASID_TAG
-
-The 12-bit ASID_TAG field can grow to 16 bits by consuming reserved bits 13:12 of PTEH. This is a minor extension that does not break compatibility.
-
-### 10.3 Wider physical address
+### 10.2 Wider physical address
 
 PA width is implementation-defined. J32 typically uses 32-bit PA (up to 4 GB); J64 may use 40-bit, 44-bit, or 48-bit PA. The PPN field in PTEL and TLB entries scales accordingly.
 
@@ -404,10 +397,9 @@ Beyond inheriting the SH-4 MMU structure:
 | TSBBR, TSBCFG registers | ~96 bits flop (J32), 160 bits (J64) |
 | TSBPTR register | ~32 bits (J32), 64 bits (J64) |
 | TSBPTR computation (hash, XOR, mask, OR) | ~50 LUTs |
-| Extended ASID_TAG (8 → 12 bits) | 4 bits per TLB entry |
+| Extended ASID_TAG (8 → 16 bits) | 8 bits per TLB entry |
 | PageMask (4 bits per TLB entry) | 4 bits per TLB entry |
 | STALE bit per TLB entry | 1 bit per entry |
-| VMID reserve (8 bits per TLB entry) | 8 bits per entry (hardwired 0) |
 | LDTLB.R decode | ~10 LUTs |
 | CPUINFO MMIO | ~32 bits flop per core + decoder |
 

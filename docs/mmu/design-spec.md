@@ -54,11 +54,11 @@ The TSB tag includes both the ASID and the low 16 bits of a per-CPU 64-bit gener
 
 **Rationale:** This single design choice resolves several otherwise-difficult problems: ASID rollover invalidation becomes a counter bump (no TLB flush needed), stale TSB entries after suspend/resume are naturally rejected, IPI-free TLB shootdown via lazy invalidation becomes possible, and the per-CPU ASID scheme (each CPU has its own allocator) becomes safe even when an `mm` migrates between CPUs.
 
-### 3.6 Reserved VMID field
+### 3.6 No VMID field
 
-The TLB tag layout reserves space for a future 8-bit VMID (Virtual Machine ID), hardwired to zero in J3 and J64 baseline. When a future J-core variant adds a hypervisor mode, the VMID field activates and the TLB naturally tags entries by guest as well as by process.
+Earlier drafts reserved an 8-bit VMID (Virtual Machine ID) in the TLB tag layout. **That reservation is removed.** The hypervisor extension ([hypervisor/design-spec.md §3.7](../hypervisor/design-spec.md)) implements guest isolation by partitioning the 12-bit ASID space in software (each guest gets a sub-range of ASIDs), not by tagging TLB entries with a separate guest identifier. This follows sun4v's actual approach (pre-2006 SPARC v9 hypervisor architecture). The eight saved bits per TLB entry are gone, not earmarked for future use.
 
-**Rationale:** Software-loaded TLBs make hypervisor support remarkably cheap: stage-2 translation is just additional work in the miss handler. Reserving the encoding space now costs zero gates today and avoids an ISA break later.
+See [glossary §5](../glossary.md) for the project-wide decision.
 
 ### 3.7 Inherited SH-4 segment layout
 
@@ -83,7 +83,7 @@ For J64, the layout extends naturally: P1 becomes the high half of the address s
 A user-mode (or P0/P3 kernel) memory access proceeds:
 
 1. Virtual address presented to MMU.
-2. MMU consults TLB. Match on `{VMID, ASID|gen_low, VPN}` returns the PFN, page size, and permissions.
+2. MMU consults TLB. Match on `{ASID_TAG, VPN}` returns the PFN, page size, and permissions. (`ASID_TAG` is 16 bits = 12-bit ASID + 4-bit gen_low, per the kernel's encoding.)
 3. On hit: physical address forms, access proceeds.
 4. On miss: hardware computes `TSBPTR = TSBBR | (hash(VPN) & mask) << 4`, stores it in the TSBPTR register, latches the faulting VPN into PTEH, stores the faulting effective address in TEA, and traps to the TLB-miss vector at `VBR + 0x400`.
 
@@ -103,7 +103,7 @@ Each TSB entry is 16 bytes:
 ```
 Offset  Field        Width   Description
 ------  -----------  ------  -----------------------------------------
-+0      Tag          64b     VPN | (ASID|gen_low) | VMID | Valid
++0      Tag          64b     VPN | ASID_TAG[15:0] | Valid
 +8      Data         64b     PPN | PageMask | Flags (R/W/X/D/C/U/G)
 ```
 
@@ -127,6 +127,8 @@ Each CPU in an SMP J-core configuration has:
 The kernel page tables are global; user page tables are per-process and accessed via per-CPU `current_pgd`. ASIDs are per-CPU (an ASID number on CPU 0 is unrelated to the same number on CPU 1), eliminating the need for cross-CPU ASID coordination.
 
 ### 4.6 TLB shootdown protocol
+
+Lazy TLB shootdown requires L1-D coherence; depends on L2 v2 (see [cache/l2-spec.md](../cache/l2-spec.md), specifically §7 for the MSI directory protocol and §22.4 for the cross-CPU lazy-shootdown sanity test). On single-core J32 (no coherence required), only the local-flush paths below apply.
 
 Standard Linux IPI-based shootdown is supported but minimized:
 
@@ -186,7 +188,7 @@ For typical workloads with 16 KB pages, TLB hit rates >99% are realistic, making
 
 The following are noted but not specified in detail in this document:
 
-- **Hypervisor extension:** VMID field is reserved but not activated. A future spec will define hypervisor mode, two-stage translation handling, and HVC trap semantics.
+- **Hypervisor extension:** specified in [hypervisor/design-spec.md](../hypervisor/design-spec.md). No new MMU hardware fields; guest isolation is via ASID partitioning in software (see §3.6 and [glossary §5](../glossary.md)).
 - **I/O MMU:** Not addressed. If needed for DMA isolation, a separate IOMMU design is required.
 - **Cache coherency:** Inherited from existing J-Core SMP design. Multi-CPU cache coherence is orthogonal to MMU design.
 - **Fast parallel SMP resume:** The serial primary-then-secondary resume model is specified. A future fast-parallel variant requiring always-on persistent registers is deferred.

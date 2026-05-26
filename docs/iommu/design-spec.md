@@ -67,6 +67,8 @@ The IOTLB hit rate of 100% in steady state is achieved by choosing the right pag
 
 8 bits gives 256 BMIDs, which is more than any realistic J-Core SoC will have. Each major peripheral consumes one BMID; if a peripheral has multiple DMA engines (e.g., separate RX and TX MAC channels), they may share a BMID or use distinct ones depending on isolation needs.
 
+The BMID assignment policy (which ranges go to CPU cores vs DMA engines vs guest pass-through), the unforgability guarantee (master cannot influence its own BMID), and the reserved values (`0x00` and `0xFF`) are specified normatively in [bus/fabric-spec.md §4](../bus/fabric-spec.md). This IOMMU design assumes those properties.
+
 ### 3.4 Software-managed IOTLB, no software-visible page tables
 
 **Decision:** There is no IOMMU-visible page table format. The kernel maintains its own data structures tracking what's mapped where, but the IOMMU only sees IOTLB entries.
@@ -91,11 +93,11 @@ This matches Linux's `iommu_report_device_fault()` framework conventions and pro
 
 The bypass bitmap is itself an MMIO register, so accidentally enabling bypass requires kernel-mode access, the same trust level as direct PA access.
 
-### 3.7 Reserved VMID for future virtualization
+### 3.7 No VMID field
 
-**Decision:** IOTLB entries carry an 8-bit VMID field, hardwired to zero in Phase 2.
+Earlier drafts reserved an 8-bit VMID in IOTLB entries (mirroring the CPU MMU's earlier VMID reservation). **Both reservations are removed.** The hypervisor extension achieves guest isolation for DMA by partitioning the 8-bit BMID space in software — each guest gets a range of BMIDs, and the IOMMU's per-BMID page-table programming naturally enforces isolation. No VMID field exists in IOTLB entries.
 
-**Rationale:** Mirrors the CPU MMU's reserved VMID. When a future J-Core variant adds hypervisor support, the IOMMU will need to distinguish guest IOVA mappings from host. Reserving the encoding space now costs zero gates and avoids a phase-3 ISA break.
+See [glossary §5](../glossary.md), [mmu/design-spec.md §3.6](../mmu/design-spec.md), and [hypervisor/design-spec.md §3.7](../hypervisor/design-spec.md).
 
 ## 4. Architecture Overview
 
@@ -229,7 +231,7 @@ The IOMMU and CPU MMU are independent but architecturally related:
 | Context tagging | 12-bit ASID per process | 8-bit BMID per device |
 | Miss handling | Trap to software TSB walker | Block + fault IRQ |
 | Page table walker | None (software-loaded) | None (software-loaded) |
-| Future virt support | Reserved 8-bit VMID | Reserved 8-bit VMID |
+| Future virt support | ASID partitioning (12-bit space) | BMID partitioning (8-bit space) |
 | Register interface | SH-4 style P4 MMIO | Independent P4 MMIO block |
 
 Sharing the page-size encoding means the kernel's superpage logic is reused between CPU and IOMMU. Sharing the philosophical "no hardware walker, software writes the translation cache" approach means both translation units have similar fault-handling code paths and similar performance characteristics.
@@ -251,7 +253,7 @@ These guarantees are equivalent to user-process isolation in the CPU MMU. A devi
 
 Not addressed in this phase:
 
-- **Two-stage I/O translation (guest IOVA → host IOVA → PA):** VMID is reserved but inactive. Phase 3 work.
+- **Two-stage I/O translation (guest IOVA → host IOVA → PA):** Phase 3 achieves equivalent isolation via per-BMID single-stage translation, where the hypervisor owns the IOMMU page tables and pre-resolves guest IOVA → host PA. No hardware second stage.
 - **I/O page faults / demand paging from devices:** Linux drivers pre-map; no support for devices that page-fault.
 - **PCIe ATS / PRI:** No PCIe in current j-core SoC targets.
 - **Hardware-walked page tables:** Explicitly rejected (see §3.1).

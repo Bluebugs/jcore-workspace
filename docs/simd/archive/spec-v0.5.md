@@ -1,3 +1,5 @@
+> **Superseded.** This document was consolidated into `../spec.md` / `../hardware-impl.md` / `../software-impl.md` on 2026-05-25. Kept for historical reference.
+
 # J-Core SIMD Extension — Design Specification v0.5
 
 **Status:** Draft, fifth design round (extended SIMD ISA: VCSR control register, multiple reduction modes, integer extract/insert, vector-indexed memory, immediate broadcast, SWIZZLE.I)

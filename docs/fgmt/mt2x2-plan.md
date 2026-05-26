@@ -1,6 +1,6 @@
 # Plan: J2-MT2x2 + Pipeline Deepening
 
-**Companion document to:** `jcore-dual-smt-proposal.md`
+**Companion document to:** `dual-fgmt-proposal.md`
 **Status:** draft for review
 
 This is the execution plan that turns the proposal into a sequence of decidable work items. The proposal answered *should we and why*; this document answers *how, in what order, and how do we know each step worked*.
