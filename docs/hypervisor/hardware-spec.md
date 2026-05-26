@@ -45,7 +45,11 @@ SR bit layout (J-Core, after Phase 3):
 [14]     HPRIV           hyperprivileged mode (NEW, J-Core hypervisor
                          extension; placed in a reserved SH-4 bit
                          to preserve binary compatibility)
-[13:10]  reserved (read-as-zero, write-ignored)
+[13]     VD              SIMD disable (NEW, J-Core SIMD extension;
+                         placed in a reserved SH-4 bit; analogue
+                         of FD for the SIMD facility; see
+                         ../simd/spec.md §2.5)
+[12:10]  reserved (read-as-zero, write-ignored)
 [9]      M               existing SH-4 (DIV0 / DIV1 mantissa carry)
 [8]      Q               existing SH-4 (DIV0 / DIV1 quotient)
 [7:4]    IMASK[3:0]      interrupt mask (existing SH-4)
@@ -54,7 +58,7 @@ SR bit layout (J-Core, after Phase 3):
 [0]      T               existing SH-4 (condition flag)
 ```
 
-**Reconciliation note.** Earlier drafts of this spec placed MD at bit 15 (collides with SH-4 FD) and HPRIV at bit 9 (collides with SH-4 M). Both were errors. Bit positions for MD, RB, BL, FD, M, Q, IMASK, S, T match the SH-4 hardware manual verbatim; HPRIV occupies SH-4-reserved bit 14. The FPU spec ([../fpu/spec.md §6.3](../fpu/spec.md)) places SR.FD at bit 15 per SH-4 and is consistent with this layout.
+**Reconciliation note.** Earlier drafts of this spec placed MD at bit 15 (collides with SH-4 FD) and HPRIV at bit 9 (collides with SH-4 M). Both were errors. Bit positions for MD, RB, BL, FD, M, Q, IMASK, S, T match the SH-4 hardware manual verbatim; HPRIV occupies SH-4-reserved bit 14 and VD occupies SH-4-reserved bit 13. The FPU spec ([../fpu/spec.md §6.3](../fpu/spec.md)) places SR.FD at bit 15 per SH-4 and is consistent with this layout; the SIMD spec ([../simd/spec.md §2.5](../simd/spec.md)) places SR.VD at bit 13. Pre-2006 prior art for an explicit SIMD-disable SR bit: PowerPC G4 AltiVec `MSR.VEC` (1999).
 
 **Semantics:**
 - `SR.HPRIV = 1`: CPU is in hyperprivileged mode. All operations permitted including hypervisor-only control register access.
@@ -136,14 +140,15 @@ The mapping is dense from the low bits up so a typical hypervisor configuration 
 |   21     | `0x700`    | PMU counter-overflow interrupt                           | yes          |
 |   22     | `0x720`    | L2 ECC / parity error (where instrumented)               | yes          |
 |   23     | `0x740`    | IOMMU fault forwarded as exception                       | yes          |
-|   24–31  | —          | reserved (future causes)                                 | yes          |
+|   24     | `0x1C0`    | `EXC_SIMD_DISABLED` — SR.VD trap (Tier 2 SIMD, new)      | yes          |
+|   25–31  | —          | reserved (future causes)                                 | yes          |
 
 Notes:
 - "Delegatable?" = whether the bit accepts software writes. Hardware ignores writes to non-delegatable bits, which always read 0.
 - Two EXPEVT values appear twice in the table (`0x180` and `0x1A0`) because they overload between the hyperprivileged extension cause (HCALL / hyp-register-from-non-HS) and the pre-existing SH-4 supervisor cause (illegal-instruction). Hardware distinguishes by context: when raised by HCALL or by a hyperprivileged-register access, the cause is non-delegatable (bits 0 and 2); when raised by an ordinary illegal-instruction, the cause is delegatable (bits 12 and 13).
 - The mapping is **stable**: future hardware revisions may add causes in bits 24–31 but MUST NOT reassign bits 0–23.
 
-This table resolves the open question raised in [../fpu/spec.md §10 #3](../fpu/spec.md): `EXC_FPU_DISABLED` occupies HEDR bit 3 and is delegatable.
+This table resolves the open question raised in [../fpu/spec.md §10 #3](../fpu/spec.md): `EXC_FPU_DISABLED` occupies HEDR bit 3 and is delegatable. The parallel SIMD trap `EXC_SIMD_DISABLED` ([../simd/spec.md §2.5](../simd/spec.md)) occupies HEDR bit 24 — placed in the formerly-reserved range so that the dense low-numbered bits remain stable as J-Core's exception model evolves.
 
 ### 2.4 No changes to existing registers
 
@@ -277,10 +282,13 @@ The hyperprivileged-mode extension adds four new EXPEVT codes on top of the exis
 | 0x190 | Guest LDTLB/LDTLB.R trap (new)                                 | 1        | no           |
 | 0x1A0 | Hyperprivileged register access from non-HS mode (new)         | 2        | no           |
 | 0x1B0 | `EXC_FPU_DISABLED` — SR.FD trap (Tier 2 FPU, new)              | 3        | yes          |
+| 0x1C0 | `EXC_SIMD_DISABLED` — SR.VD trap (Tier 2 SIMD, new)            | 24       | yes          |
 
 Existing SH-4 EXPEVT codes (`0x040`–`0x130`, `0x500`–`0x740`) retain their meanings; their HEDR-bit assignments are in §2.3.1.
 
 **`EXC_FPU_DISABLED` (0x1B0).** Raised when an FPU instruction is decoded with `SR.FD = 1` on a CPU that ships a Tier 2 (hypervisor-aware) FPU. The cause is subject to HEDR delegation: when `HEDR[bit-for-0x1B0] = 0` (the default) the trap is taken by the hypervisor, which uses it to implement the lazy FPU context-switch ABI (per-vCPU FPU-ownership flag, save/restore of the 132-byte FPU image, re-enable of `SR.FD = 0` in the guest's `HSSR` shadow before `HRTE`). When the bit is set, the trap is delegated to the guest's own supervisor handler (a guest OS that wants to manage its own lazy-FPU model for user threads sets the bit). The full trap-handler ABI, save/restore sequence, and migration corner cases are specified in [../fpu/spec.md §7](../fpu/spec.md).
+
+**`EXC_SIMD_DISABLED` (0x1C0).** The exact analogue of `EXC_FPU_DISABLED` for the SIMD facility. Raised when any SIMD-touching instruction or register access (governed SIMD instruction, SIMDV/SIMDH prefix, VLD.Q/VST.Q, VEXT/VINS, VMKCHG, LDS/STS to P0 or VCSR) is decoded with `SR.VD = 1` on a CPU that ships a Tier 2 (hypervisor-aware) SIMD implementation. HEDR-delegation rules are identical: bit 24 = 0 → trap to hypervisor (which implements lazy SIMD context-switch ABI: per-vCPU SIMD-ownership flag, save/restore of the 264-byte SIMD image — V0..V15 + P0 + VCSR — and re-enable of `SR.VD = 0` in `HSSR` before `HRTE`); bit 24 = 1 → trap delegated to guest's supervisor handler for guest-managed lazy SIMD across guest user threads. Full trap-handler ABI in [../simd/spec.md §2.5](../simd/spec.md) and §Tier 2.
 
 ## 5. Hyperprivileged-Only Instructions and Operations
 

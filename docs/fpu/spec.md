@@ -1318,6 +1318,14 @@ adder; the architecture does not penalise this choice.
 
 ## 7. Tier 2 — Hypervisor-aware FPU
 
+The Tier 2 lazy-FPU-context-switch mechanism documented in this section
+has a direct **SIMD parallel**: `SR.VD` (SR bit 13) and `EXC_SIMD_DISABLED`
+(EXPEVT `0x1C0`, HEDR bit 24) implement the same trap-on-first-use idiom
+for SIMD state. See [../simd/spec.md §2.6](../simd/spec.md) for the SIMD
+mechanism, which mirrors §7.1–§7.3 of this section structurally.
+The two facilities are independent: SR.FD and SR.VD trap separately, so
+a task can have one disabled and the other enabled.
+
 ### 7.1 EXC_FPU_DISABLED cause and HEDR interaction. [T2]
 
 Tier 2 introduces a dedicated exception cause code, **`EXC_FPU_DISABLED`**,

@@ -68,7 +68,7 @@ V12 (128 bits)    V13 (128 bits)    V14 (128 bits)    V15 (128 bits)
 
 V0..V15 are named in SIMD context by reinterpreting the SH instruction's 4-bit register field (`nnnn` or `mmmm`) as a direct vector index 0..15. There is no multiple-of-4 constraint, and `FPSCR.FR` has no effect on SIMD register naming.
 
-V0..V15 are saved and restored on context switch by the operating system, using the dedicated vector load/store instructions VLD.Q and VST.Q (§5.6). The OS-visible context grows by 256 bytes per thread (16 × 16 bytes).
+V0..V15 are saved and restored on context switch by the operating system, using the dedicated vector load/store instructions VLD.Q and VST.Q (§5.6). The OS-visible context grows by 256 bytes per thread (16 × 16 bytes). **Save and restore are lazy when SR.VD is supported (§2.6)** — the OS sets SR.VD=1 on context-out and lets the SIMD-disabled trap drive the actual save/restore on first use, eliminating the 264-byte cost (V0..V15 + P0 + VCSR) for tasks that never touch SIMD.
 
 **Relationship to scalar FPU.** FR0..FR15 (front bank) and XF0..XF15 (back bank) remain scalar FPU registers, unchanged from SH-4. They are used by ordinary SH-4 FPU instructions when those instructions appear *outside* a SIMD block. SH-4 FIPR and FTRV continue to operate on quartets of FR registers as 4-element FP32 vectors — they are a separate, legacy 4-element vector facility orthogonal to the Tier 0 SIMD ISA. See [../fpu/spec.md](../fpu/spec.md) for the FPU's own tier structure; Tier 0 SIMD reductions write into FR0/DR0/FPUL on implementations that also provide a Tier 1 (SH-4-complete) FPU. The reduction-destination semantics for FP16→FP32, FP32→FP64, and FP64 reductions are specified per type in §2.3 below and cross-referenced from [../fpu/spec.md §6.1](../fpu/spec.md). Implementations that omit the FPU entirely (e.g. J2) also omit Tier 0 SIMD, since Tier 0's horizontal-reduction destinations require the SH-4 FPU register file. See §2.3.
 
@@ -113,7 +113,7 @@ Min/max/bitwise reductions (added in Tier 0) do not widen; the destination match
 
 Tier 0 introduces a dedicated SIMD control register, separating SIMD mode bits from scalar FPU state:
 
-- **VCSR** (Vector Control and Status Register, 32 bits): dedicated SIMD control register. Bit 0 = MKE (Mask Enable); bit 1 = IEE (IEEE-strict mode). Bits 2..31 reserved for future SIMD mode bits. VCSR is preserved across exception entry/RTE and saved/restored by the OS as part of per-task context. Software accesses VCSR via `LDS Rm, VCSR` / `STS VCSR, Rn` or via the dedicated `VMKCHG` toggle (§5.6).
+- **VCSR** (Vector Control and Status Register, 32 bits): dedicated SIMD control register. Bit 0 = MKE (Mask Enable); bit 1 = IEE (IEEE-strict mode). Bits 2..31 reserved for future SIMD mode bits. VCSR is preserved across exception entry/RTE and saved/restored by the OS as part of per-task context — lazily, gated by SR.VD per §2.6. Software accesses VCSR via `LDS Rm, VCSR` / `STS VCSR, Rn` or via the dedicated `VMKCHG` toggle (§5.6) — both trap under SR.VD = 1.
 
 - **VCSR.MKE** (bit 0): when set, governed SIMD operations apply P0 as a per-lane enable mask (§4.3, §4.4). When clear (default), all lanes are active. MKE has architectural effect only inside SIMD blocks — its value is read at governed-instruction decode.
 
@@ -149,6 +149,97 @@ The prefix-modal mechanism additionally requires the following **microarchitectu
 - `V_LANE_VALID` (1 bit), `V_LANE_REG[3:0]`, `V_LANE_IDX[3:0]` for the VLNS+VEXT/VINS lane-select latch.
 
 Total decode-stage shadow state: 18 bits Tier 0 + 2 bits Tier 1 saturation modifier = 20 bits, all microarchitectural.
+
+### 2.6 SR.VD — SIMD-disable trap (Tier 0; enables lazy context switch)
+
+A new bit in the CPU status register, **SR.VD** at **SR bit 13**, gates access to the entire SIMD facility. It is the SIMD analogue of SR.FD ([../fpu/spec.md §6.3](../fpu/spec.md)) and exists for the same reason: to let the OS skip the 264-byte SIMD save/restore (V0..V15 + P0 + VCSR) on context switches between tasks that do not touch SIMD.
+
+The SR layout authoritative source is [../hypervisor/hardware-spec.md §2.1](../hypervisor/hardware-spec.md); SR.VD occupies an SH-4-reserved bit slot (no compatibility break).
+
+**Semantics.**
+
+- `SR.VD = 0` (reset value): SIMD is enabled. All SIMD-touching instructions execute normally.
+- `SR.VD = 1`: SIMD is disabled. Any SIMD-touching instruction raises a **SIMD-disabled exception** before any architectural state changes.
+
+**Instructions that trap under SR.VD = 1** (the full set, so the OS can rely on trap-on-first-use):
+
+| Instruction class | Examples |
+|---|---|
+| Prefix instructions | `SIMDV.{B,W,L,Q}`, `SIMDH<op>.{B,W,L,Q}`, the Tier 1 `rrr` saturation variants |
+| Governed instructions in a SIMD block | the ordinary SH-2 / SH-4 ops that take on SIMD meaning after a prefix (§5.1, §5.2, §5.4); also the Tier 2 reinterpreted ops VCLMUL.D / VCRC32C.B (§5.5) |
+| Vector memory ops | `VLD.{B,W,L,Q}`, `VST.{B,W,L,Q}`, `VGATHER.Q`, `VSCATTER.Q`, `VLDI.Q` |
+| Lane bridges | `VLNS`, `VEXT.{B,W,L,Q}`, `VINS.{B,W,L,Q}`, `VEXTF.L`, `VINSF.L` |
+| Mode toggles | `VMKCHG`, `SWIZZLE.I` |
+| Control-register access | `LDS Rn, P0`, `STS P0, Rn`, `LDS Rn, VCSR`, `STS VCSR, Rn` |
+
+The rule is simple: **any decode that would access V0..V15, P0, or VCSR, or that would set SIMD_VAL in the decode shadow, traps under SR.VD = 1.** There is no SIMD-control escape; SR.VD truly disables the facility end-to-end. This mirrors the FPU's no-escape rule for SR.FD and is what makes the lazy-context-switch idiom reliable.
+
+**Trap classification.**
+
+- On a Tier 0 / Tier 1 / Tier 2 implementation **without** the hypervisor extension (SR.HPRIV always 0, HEDR not consulted), the trap surfaces with a new EXPEVT value. Recommended: a fresh code in the J-Core extension range. The bare-metal value is implementation-defined, with the canonical assignment `EXPEVT = 0x1C0 EXC_SIMD_DISABLED` (matches the hypervisor-aware path below so a single trap-handler entry point serves both).
+- On an implementation **with** the hypervisor extension, the trap is reported with cause `EXC_SIMD_DISABLED` (EXPEVT `0x1C0`) and is subject to HEDR delegation per [../hypervisor/hardware-spec.md §2.3.1](../hypervisor/hardware-spec.md), bit 24.
+
+**Save / restore on context switch (OS pattern).** Identical shape to the SH-4 lazy-FPU pattern, applied to SIMD state:
+
+```
+schedule_out(prev_task):
+    # Do NOT save SIMD state here.
+    # Just set SR.VD=1 in prev_task's saved SR; SIMD state stays
+    # in the register file until someone else needs it.
+    prev_task.saved_sr |= SR_VD
+
+schedule_in(next_task):
+    # next_task already has SR.VD=1 in its saved SR (either set
+    # above, or set at task creation). The CPU resumes with VD=1.
+    restore_SR(next_task.saved_sr)   # SR.VD=1
+
+# Inside the SIMD-disabled trap handler:
+on_simd_disabled_trap():
+    if current_simd_owner == current_task:
+        # Spurious — owner did not change since last touch.
+        # Just clear VD and resume.
+        SR.VD = 0
+        return_from_exception()
+
+    if current_simd_owner != NULL:
+        save_simd_state(current_simd_owner)   # 264 bytes via VST.Q + STS P0 + STS VCSR
+
+    if current_task.has_saved_simd_state:
+        restore_simd_state(current_task)      # 264 bytes via VLD.Q + LDS P0 + LDS VCSR
+
+    current_simd_owner = current_task
+    SR.VD = 0
+    return_from_exception()
+```
+
+Cost per context switch when neither outgoing nor incoming task touches SIMD: **zero** save/restore. Cost when both touch SIMD: one trap + one 264-byte save + one 264-byte restore — same total as eager save, just shifted in time. On typical Linux workloads where <5 % of processes use SIMD, this eliminates ~95 % of the save/restore overhead.
+
+**Interaction with FGMT.** SR is per-thread on a J32-OOO/J32-FM core under FGMT ([../ooo/j32ooo-spec.md §13.1](../ooo/j32ooo-spec.md)). SR.VD is therefore naturally per-thread; one thread using SIMD does not impose save/restore overhead on the sibling thread that does not.
+
+**Interaction with FPU reductions.** Tier 0 SIMD horizontal reductions write to FR0 / DR0 / FPUL ([§2.3](#23-reduction-destination)). A reduction is a SIMD-touching operation, so SR.VD=1 traps it (the FPU side is not consulted yet). If both SR.VD=1 and SR.FD=1 are set when an FPU-reducing SIMD reduction is decoded, **SR.VD wins** (the trap is `EXC_SIMD_DISABLED`, not `EXC_FPU_DISABLED`); the handler restores SIMD state first, and the subsequent retry will then hit the FPU trap if SR.FD is still set. This ordering matches Linux's expectation that lazy save reports the higher-level extension first.
+
+**Hardware cost.** One SR flip-flop (the bit itself; the SR register already exists) plus the trap condition wired into SIMD decode. Across the full SIMD facility decode, the trap is a single OR of all the SIMD-touching decode signals AND'ed with `SR.VD`. Estimated 30–50 LUT4 total. Negligible.
+
+**Hypervisor-aware lazy SIMD ABI (when the hypervisor extension is present).** Identical shape to the FPU Tier 2 lazy ABI ([../fpu/spec.md §7](../fpu/spec.md)), applied to SIMD state:
+
+- The hypervisor maintains a per-vCPU `simd_owner` flag and a per-pCPU `current_simd_owner_vcpu` register.
+- At vCPU dispatch, the hypervisor sets `SR.VD = 1` in the guest's `HSSR` shadow before `HRTE`. The guest resumes with SIMD disabled.
+- First guest SIMD instruction → `EXC_SIMD_DISABLED` trap. HEDR bit 24 routing:
+  - `HEDR[24] = 0` (default): trap to hypervisor. Hypervisor checks `current_simd_owner_vcpu`; if different, saves previous owner's 264-byte SIMD image, restores this vCPU's image (if any), updates `current_simd_owner_vcpu`, clears `SR.VD = 0` in `HSSR`, `HRTE` back to the guest at the trapping instruction (which re-executes successfully).
+  - `HEDR[24] = 1`: trap delegated to guest's S-mode handler. Guest OS implements its own lazy-SIMD policy for its user threads (mirror of the bare-metal pattern above).
+- vCPU migration to a different pCPU: hypervisor cross-calls the source pCPU to save the 264-byte SIMD image, ships it to the destination pCPU, sets `SR.VD = 1` in the destination `HSSR`; first SIMD touch on the destination re-installs the image.
+
+The 264-byte SIMD image layout: `V0..V15` (256 bytes) + `P0` (4 bytes, low 16 bits used) + `VCSR` (4 bytes). Saved via `VST.Q` × 16 + `STS P0` + `STS VCSR`; restored via `VLD.Q` × 16 + `LDS P0` + `LDS VCSR`. The 16 vector stores can be issued back-to-back (no inter-dependencies); a typical save/restore round-trip is ~40–50 cycles on a 2-wide OoO with the L1-D in M state.
+
+**Pre-2006 prior art.**
+
+- **PowerPC G4 AltiVec `MSR.VEC`** (1999) — the canonical reference for an explicit SIMD-disable SR bit on a 128-bit dedicated-register-file SIMD ISA layered on an SH-4-like scalar host. Apple's Mac OS X kernel relies on it for lazy AltiVec save.
+- **SH-4 `SR.FD`** (1998) — the FPU mechanism this directly mirrors.
+- **Intel `CR0.TS`** (i486, 1990) — generalised to FP/MMX/SSE accesses; same trap-on-first-use idiom.
+- **MIPS R4000 `Status.CU1/CU3`** (1991) — coprocessor-usable bits; same pattern for optional coprocessors.
+- **PA-RISC `PSW.D`** (1986) — earliest reference for an SR-bit-gated FP facility.
+- **4.4BSD lazy-FP context switch** (McKusick et al., 1996) — the OS-side pattern, identical for SIMD.
+- **UltraSPARC II lazy-FP via FPRS.FEF** (1997) — the hypervisor-side cross-call pattern for vCPU migration.
 
 ---
 
