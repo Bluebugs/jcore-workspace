@@ -2,7 +2,7 @@
 
 **Status:** Draft  
 **Target board:** ULX3S with LFE5U-85F-6BG381C  
-**Audience:** Reference for build-out; assumes familiarity with the Phase 1 MMU, Phase 2 IOMMU, and Phase 3 hypervisor design documents (specs 01–09)
+**Audience:** Reference for build-out. Assumes familiarity with the project-wide vocabulary and conventions in [`glossary.md`](glossary.md) (product points, FGMT, prior-art-pre-2006 policy) and with the per-subsystem design specs collected under `docs/{mmu,iommu,hypervisor,fpu,simd,ooo,fgmt,cache,bus,aic,soc}/`. See §12 for the per-phase spec map.
 
 ---
 
@@ -15,8 +15,8 @@ The **primary goal is providing an excellent SH4 development environment**. SH4 
 The service ships in three tiers that share the same auth, tooling, and observability:
 
 - **Tier 0 — QEMU SH4 user-mode** on the OVH VPS. High-concurrency, fast, free or near-free. Ships within weeks of the infrastructure spine. Reuses the same Debian SH4 rootfs as the hardware tier.
-- **Tier 1 — Real hardware VM** on j-core. Paravirtualized Debian SH4 guest with cross-compilers, dev tools, and standard packages preinstalled, on a read-only shared rootfs. Real MMU, real timings, real hardware-bug surface. Ships at Phase 5.
-- **Tier 1.5 — Dual-issue OoO J32** (Phase 6), then dual-core + FGMT (6.5), then SH4 FPU coprocessor (7) and SIMD prefix unit (7.5). Tenants opt into richer profiles at reservation time.
+- **Tier 1 — Real hardware VM** on j-core. Paravirtualized Debian SH4 guest with cross-compilers, dev tools, and standard packages preinstalled, on a read-only shared rootfs. Real MMU ([mmu/design-spec.md](mmu/design-spec.md)), real timings, real hardware-bug surface. Ships at Phase 5.
+- **Tier 1.5 — Dual-issue OoO J32** ([ooo/j32ooo-spec.md](ooo/j32ooo-spec.md), Phase 6), then dual-core + FGMT ([fgmt/dual-fgmt-proposal.md](fgmt/dual-fgmt-proposal.md) + [cache/l2-spec.md](cache/l2-spec.md), 6.5), then SH4-complete FPU coprocessor ([fpu/spec.md](fpu/spec.md), 7) and SIMD prefix unit ([simd/spec.md](simd/spec.md), 7.5). Tenants opt into richer profiles at reservation time. Product-point definitions for each profile (J32, J32-OOO, J32-FM) in [glossary §3](glossary.md).
 
 A **differential testing harness** (Phase 5.5) runs the same binary on Tier 0 and Tier 1 and diffs the architectural output — turning tenant workloads into an automated continuous hardware-conformance test. This is also the safety net for deploying the OoO core in Phase 6.
 
@@ -52,7 +52,7 @@ The plan is staged so that each phase delivers a working, demonstrable system. T
 - **Two-MikroTik hardware split for plane isolation:** tenant data plane and management plane terminate on physically separate devices that share only the WAN uplink
 - **Tailscale for management, raw WireGuard for tenant data:** the tenant data path has no dependency on Tailscale's coordination plane
 - **Minimal public attack surface on the VPS:** only port 22 (sshpiperd) is publicly listening; HTTPS reaches the reservation UI via Cloudflare Tunnel with no inbound port 443
-- All major design decisions trace to documented pre-2006 prior art (sun4v, PowerPC HV, SH-4, AltiVec)
+- All major design decisions trace to documented pre-2006 prior art (sun4v, PowerPC HV, SH-4, AltiVec). The policy is formalised in [glossary §2](glossary.md) and enforced per spec.
 
 ### Deferred / research goals (post-SH4-excellence)
 
@@ -246,23 +246,23 @@ The previously planned standalone "observability host" at home is **eliminated**
 
 ### LUT4 budget (cumulative through phases)
 
-| Component | LUT4 | BRAM | DSP | Phase added |
-|---|---:|---:|---:|---|
-| J32 in-order baseline core | 3,000–5,000 | small | 0 | 2 |
-| Phase-1 MMU additions | +1,500–2,000 | small | 0 | 2 |
-| SDRAM controller | ~3,000 | small | 0 | 2 |
-| LiteEth MAC + LAN8720 | ~3,000 | small | 0 | 2 |
-| SD card, UART, AIC2, misc | ~2,000 | small | 0 | 2 |
-| **Phase 2 subtotal** | **~12,500–15,000** | ~10% | 0 | |
-| Phase-2 IOMMU | +2,500–3,500 | small | 0 | 3 |
-| Phase-3 hypervisor (HPRIV, trap delegation) | +100–300 | small | 0 | 4 |
-| **Phase 4 subtotal (MVP ships here)** | **~15,000–18,500** | ~15% | 0 | |
-| **Dual-issue OoO J32 upgrade (replaces in-order)** | **+~5,000–7,000 (delta)** | **+15%/core** | 0 | **6** |
-| 2nd core + FGMT (per core +1,500–2,500) | +12,000–17,000 | +15% | 0 | 6.5 |
-| SH4-compat FPU coprocessor | +11,000–19,000 | small | 4–8 | 7 |
-| SIMD prefix unit | +4,000–6,000 | ~3% | 4–8 | 7.5 |
-| J64 datapath widening (optional, deferred) | +2,000–3,000 | small | 0 | 8 |
-| **Full SH4-rich stack (Phase 7.5)** | **~50,000–65,000 LUT4** | **~50%** | **8–16 DSP** | |
+| Component | LUT4 | BRAM | DSP | Phase | Spec |
+|---|---:|---:|---:|---|---|
+| J32 in-order baseline core | 3,000–5,000 | small | 0 | 2 | `jcore-cpu/` repo (existing RTL) |
+| Phase-1 MMU additions | +1,500–2,000 | small | 0 | 2 | [mmu/design-spec.md](mmu/design-spec.md), [mmu/hardware-spec.md](mmu/hardware-spec.md) |
+| SDRAM controller | ~3,000 | small | 0 | 2 | jcore-soc (existing); fabric slave per [bus/fabric-spec.md §3](bus/fabric-spec.md) |
+| LiteEth MAC + LAN8720 | ~3,000 | small | 0 | 2 | jcore-soc (existing); fabric peripheral slot per [soc/p4-mmio-map.md §4](soc/p4-mmio-map.md) |
+| SD card, UART, AIC2, misc | ~2,000 | small | 0 | 2 | [aic/aic2-spec.md](aic/aic2-spec.md) (Tier 0); peripherals per [soc/p4-mmio-map.md §4](soc/p4-mmio-map.md) |
+| **Phase 2 subtotal** | **~12,500–15,000** | ~10% | 0 | | |
+| Phase-2 IOMMU | +2,500–3,500 | small | 0 | 3 | [iommu/design-spec.md](iommu/design-spec.md), [iommu/hardware-spec.md](iommu/hardware-spec.md); fabric BMID per [bus/fabric-spec.md §4](bus/fabric-spec.md) |
+| Phase-3 hypervisor (HPRIV, trap delegation) | +100–300 | small | 0 | 4 | [hypervisor/design-spec.md](hypervisor/design-spec.md), [hypervisor/hardware-spec.md](hypervisor/hardware-spec.md); AIC2 Tier 2 [aic/aic2-spec.md §5](aic/aic2-spec.md) |
+| **Phase 4 subtotal (MVP ships here)** | **~15,000–18,500** | ~15% | 0 | | |
+| **Dual-issue OoO J32 upgrade (replaces in-order)** | **+~5,000–7,000 (delta)** | **+15%/core** | 0 | **6** | [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md) |
+| 2nd core + FGMT (per core +1,500–2,500) | +12,000–17,000 | +15% | 0 | 6.5 | [fgmt/dual-fgmt-proposal.md](fgmt/dual-fgmt-proposal.md), [fgmt/mt2x2-plan.md](fgmt/mt2x2-plan.md); coherent L2 [cache/l2-spec.md](cache/l2-spec.md) Tier 1; AIC2 Tier 1 [aic/aic2-spec.md §4](aic/aic2-spec.md) |
+| SH4-compat FPU coprocessor | +11,000–19,000 | small | 4–8 | 7 | [fpu/spec.md](fpu/spec.md) Tier 1 (FIPR/FTRV/FSCA/FSRRA/SR.FD); Tier 2 hypervisor-aware for J32-FM |
+| SIMD prefix unit | +4,000–6,000 | ~3% | 4–8 | 7.5 | [simd/spec.md](simd/spec.md) Tier 0+1 (+Tier 2 GF(2) crypto for VCLMUL/VCRC32C on J32-FM) |
+| J64 datapath widening (optional, deferred) | +2,000–3,000 | small | 0 | 8 | [glossary §3](glossary.md) (J64 row); L2 Tier 2 (`ADDR_WIDTH=40`) per [cache/l2-spec.md](cache/l2-spec.md) |
+| **Full SH4-rich stack (Phase 7.5)** | **~50,000–65,000 LUT4** | **~50%** | **8–16 DSP** | | J32-FM product point — see [glossary §3](glossary.md) |
 
 The OoO J32 design is BRAM-heavy by deliberate choice (state in BRAM, logic in LUTs), giving ~10K LUT4 per core including the dual-issue logic. At Phase 7.5 (full SH4 stack: dual-core OoO + FPU + SIMD), the 85F sits at ~60–75% LUT4 utilization with ~50% BRAM, leaving real timing-closure margin.
 
@@ -583,7 +583,7 @@ Deliverable: super-user on the tailnet can spawn a Tier 0 lease, SSH into it via
 
 ### Phase 2 — J32 + Phase-1 MMU + Ethernet + Debian SH4 rootfs + OTel collector (1–2 months)
 
-Scope: integrate the Phase-1 MMU spec into the existing J-core. LAN8720 RMII on J1. **Debian SH4 base built via `debootstrap --arch=sh4`**, packaged as erofs with DAX support. Lightweight OTel collector cross-compiled for SH, shipped in the rootfs, pointed at the observability VM.
+Scope: integrate the Phase-1 MMU per [mmu/design-spec.md](mmu/design-spec.md), [mmu/hardware-spec.md](mmu/hardware-spec.md), [mmu/linux-spec.md](mmu/linux-spec.md) into the existing J-core. Notable: 12-bit ASID + 4-bit generation packed into the dedicated 16-bit ASIDR register (UltraSPARC `PRIMARY_CONTEXT` model — preserves the 4 KB–1 GB page-size range), 16 KB default page, no VMID hardware field. P4 MMIO assignments per [soc/p4-mmio-map.md](soc/p4-mmio-map.md). LAN8720 RMII on J1. **Debian SH4 base built via `debootstrap --arch=sh4`**, packaged as erofs with DAX support. Lightweight OTel collector cross-compiled for SH, shipped in the rootfs, pointed at the observability VM.
 
 Dependencies: Phase 1.
 
@@ -599,7 +599,7 @@ Deliverable: Claude Code can flash bitstreams and tail console while developing 
 
 ### Phase 3 — Phase-2 IOMMU (1 month)
 
-Scope: implement BMID-tagged IOMMU per spec. Wire the Ethernet and SD paths through it. Validate device DMA cannot cross BMID boundary via a deliberate misbehavior test from a kernel module.
+Scope: implement BMID-tagged IOMMU per [iommu/design-spec.md](iommu/design-spec.md), [iommu/hardware-spec.md](iommu/hardware-spec.md), [iommu/linux-spec.md](iommu/linux-spec.md). The fabric-side BMID assignment policy (BMID tagged at master port, unforgeable, allocation ranges for CPU cores / DMA engines / peripherals / guest pass-through) lives in [bus/fabric-spec.md §4](bus/fabric-spec.md). Wire the Ethernet and SD paths through it. Validate device DMA cannot cross BMID boundary via a deliberate misbehavior test from a kernel module.
 
 Dependencies: Phase 2.
 
@@ -607,7 +607,7 @@ Deliverable: IOMMU active in single-tenant mode; fault log entries appearing in 
 
 ### Phase 4 — Phase-3 hypervisor + KVM port + virtio-pmem + per-VM tagging (2–3 months)
 
-Scope: HPRIV mode, trap delegation register, hypervisor in HS mode, paravirt-aware KVM userspace. virtio-pmem device emulation in KVM userspace mapping the shared erofs image. Per-VM telemetry tagging propagated through hypercall traces, IOMMU faults, panic snapshots.
+Scope: HPRIV mode (SR.HPRIV at bit 14 per [hypervisor/hardware-spec.md §2.1](hypervisor/hardware-spec.md)), trap delegation register (HEDR with the 24-row EXPEVT mapping in §2.3.1 of the hardware spec), hypervisor in HS mode, paravirt-aware KVM userspace per [hypervisor/linux-spec.md](hypervisor/linux-spec.md). ASID partitioning (16 guests × 128 ASIDs, host gets 2048) per [hypervisor/design-spec.md §3.7](hypervisor/design-spec.md). Virtual interrupt controller per [aic/aic2-spec.md Tier 2](aic/aic2-spec.md) (`jcore_vintc` ABI). virtio-pmem device emulation in KVM userspace mapping the shared erofs image. Per-VM telemetry tagging propagated through hypercall traces, IOMMU faults, panic snapshots.
 
 Dependencies: Phase 3.
 
@@ -688,17 +688,16 @@ Deliverable: the diff harness can run a seed-corpus binary on all three targets 
 
 ### Phase 6 — Dual-issue OoO J32 core (3–6 months)
 
-Scope: replace the in-order J32 with a dual-issue out-of-order J32 designed around memory-latency hiding (not arithmetic parallelism). The 85F's 32 MB SDRAM at ~200 MB/s shared is the binding workload constraint; OoO's value is keeping the ALU busy during 30–50 cycle SDRAM stalls, not feeding multiple multipliers.
+Scope: replace the in-order J32 with the dual-issue out-of-order J32 specified in [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md), designed around memory-latency hiding (not arithmetic parallelism). The 85F's 32 MB SDRAM at ~200 MB/s shared is the binding workload constraint; OoO's value is keeping the ALU busy during 30–50 cycle SDRAM stalls, not feeding multiple multipliers. The spec covers: pipeline (§2), front-end + branch prediction (§3), rename + ROB (§5), atomic-group CAS.L handling (§10), L1+L2 cache hierarchy interaction (§11), the PMU (§12), FGMT (§13), and the gate budget (§15).
 
-Microarchitecture sketch:
+Key microarchitecture points the spec pins down:
 
-- **Two integer ALUs**, one of each specialized unit (mul, shift, eventual FPU, eventual SIMD)
+- **Two integer ALUs**, one of each specialized unit (mul, shift, eventual FPU, eventual SIMD coprocessor port)
 - **BRAM-heavy state:** rename map, reorder buffer, issue queue, load-store queue, physical register file, branch predictor all in BRAM. ~15% of total BRAM per core.
 - **~10K LUT4 per core** for the dual-issue logic, wakeup, bypass, scoreboarding
 - **SH4 memory model preserved:** stores commit in program order; loads OoO with LSQ hazard checks; `synco` drains the LSQ; CAS.L drains and re-issues without speculation past
+- **Atomicity:** CAS.L now uses **L2 per-line lock** (see [cache/l2-spec.md §6](cache/l2-spec.md)) for J32-OOO and beyond, not legacy bus-lock; J2 cores without L2 keep bus-lock for backward compatibility
 - **Fmax expectation:** ~50–65 MHz on ECP5-6 (down from in-order's ~80 MHz), but ~1.4–1.8× wall-clock improvement on memory-bound tenant workloads via latency hiding
-
-Spec deliverable: a new `10-ooo-design-spec.md` document the microarchitecture explicitly (issue rules, retire rules, memory ordering guarantees, hypervisor visibility — none).
 
 Dependencies: Phase 5.5 (differential harness must exist as the safety net before deploying OoO to tenants).
 
@@ -706,7 +705,14 @@ Deliverable: tenants opt into "OoO J32" profile at reservation; differential har
 
 ### Phase 6.5 — Dual-core + 2-way FGMT on OoO core (1–2 months)
 
-Scope: promote `cpus_two_fpga.vhd` to coherent SMP with the dual-issue OoO core. Add 2-way FGMT per core. Hypervisor scheduler updated to assign vCPUs to hardware threads. Realistic concurrent-VM count nudges from 2–3 to 3–4 (RAM still binding constraint, but more CPU to spread across guests).
+Scope: promote `cpus_two_fpga.vhd` to coherent SMP with the dual-issue OoO core and add 2-way FGMT per core. Two pieces drive this:
+
+- **Coherent L2 + L1-D MSI directory + L2-line-lock CAS.L** per [cache/l2-spec.md](cache/l2-spec.md) Tier 1. This is what makes lazy TLB shootdown (and hypervisor SMP guests) work.
+- **FGMT inside each OoO core** per [ooo/j32ooo-spec.md §13](ooo/j32ooo-spec.md) (ready-thread arbiter, per-TC ARF/RAT/RAS/GHR, auto-priority on CAS.L spin and SLEEP). FGMT vocabulary and tier coverage in [glossary §4](glossary.md). The J2 dual-core+FGMT predecessor proposal (still relevant for the smaller J2 variant) lives in [fgmt/dual-fgmt-proposal.md](fgmt/dual-fgmt-proposal.md) and [fgmt/mt2x2-plan.md](fgmt/mt2x2-plan.md).
+
+Per-thread interrupt routing via [aic/aic2-spec.md §4 (Tier 1)](aic/aic2-spec.md): each interrupt source carries a `(core_id, thread_id)` target, and the `per_tc_pending` sideband wakes SLEEP-parked threads directly into the OoO ready-thread arbiter.
+
+Hypervisor scheduler updated to assign vCPUs to hardware threads. Realistic concurrent-VM count nudges from 2–3 to 3–4 (RAM still binding constraint, but more CPU to spread across guests).
 
 Dependencies: Phase 6.
 
@@ -714,7 +720,7 @@ Deliverable: 4 CPUs visible in `/proc/cpuinfo` on host; or 2 VMs each with 2 vCP
 
 ### Phase 7 — SH4-compat FPU coprocessor (2–3 months)
 
-Scope: SH4-compat FPU exposed via coprocessor interface, power-gateable. Includes FIPR, FTRV, FSCA, FSRRA — the full SH4 FP instruction set so Dreamcast / Renesas SH4 binaries can use hardware FP. Single FPU shared across cores via coprocessor bus arbitration (not duplicated per core, per the OoO design philosophy).
+Scope: the SH4-complete FPU specified in [fpu/spec.md](fpu/spec.md), exposed via coprocessor interface, power-gateable. The spec is tiered: **Tier 0** is the existing J2 baseline; **Tier 1** is SH4-complete (FIPR, FTRV, FSCA, FSRRA, FRCHG, FSCHG, FPCHG, SR.FD trap at SR bit 15, full FPSCR, little-endian — what this phase delivers so Dreamcast / Renesas SH4 binaries use hardware FP); **Tier 2** is hypervisor-aware (EXC_FPU_DISABLED at EXPEVT 0x1B0 / HEDR bit 3, lazy FPU context-switch ABI, 132-byte FPU save/restore image) and lands together with the Phase 4 hypervisor for J32-FM. Single FPU shared across cores via coprocessor bus arbitration (not duplicated per core, per the OoO design philosophy). Tier 0 SIMD horizontal reductions also depend on the Tier 1 FPU register file — see Phase 7.5.
 
 Dependencies: Phase 6 (the OoO core's coprocessor interface).
 
@@ -722,7 +728,9 @@ Deliverable: SH4 binaries with hardware floating point run at native speed; diff
 
 ### Phase 7.5 — SIMD prefix unit (2–3 months)
 
-Scope: SIMD prefix instruction scheme as a separate coprocessor, 128-bit lanes, opt-in per tenant. Crypto throughput on SSH improves substantially (3–5× on SSH bulk transfers); checksums and memcpy on TCP improve materially.
+Scope: the tiered SIMD ISA specified in [simd/spec.md](simd/spec.md) as a separate coprocessor, 128-bit lanes mandatory, opt-in per tenant. The spec is tiered: **Tier 0** = core 128-bit SIMD (V0..V15 dedicated register file, SIMDV/SIMDH prefixes, swizzle, vertical/horizontal modes, governed integer/FPU ops, vector load/store/gather/scatter, P0 predicate); **Tier 1** = integer/saturation extensions (VABS, VPOPCNT, VUNPK4, VABSDIFF, VPACK, VMULSU — recommended for INT8/INT4 quantized inference); **Tier 2** = GF(2) crypto (VCLMUL.D, VCRC32C.B — drives the SSH-bulk speedup); **Tier 3** = reserved 256-bit J64. Tier coverage by product point in [glossary §3](glossary.md). Implementation guides in [simd/hardware-impl.md](simd/hardware-impl.md) and [simd/software-impl.md](simd/software-impl.md).
+
+Crypto throughput on SSH improves substantially (3–5× on SSH bulk transfers via Tier 2 VCRC32C / VCLMUL); checksums and memcpy on TCP improve materially via Tier 0+1.
 
 Dependencies: Phase 7 (FPU and SIMD share DSPs; sequence to share is established here).
 
@@ -773,7 +781,7 @@ Phase 8 SIMD work roughly **doubles** TCP and **3–5×s** SSH throughput.
 
 - **Verify j-core upstream state.** The LUT estimates assume the j-core repo hasn't moved significantly. Worth a `git log` and mailing-list review before Phase 2 lands. Any new FPU work upstream would shift Phase 7 sizing.
 - **ECP5-6 fmax of the dual-issue OoO J32.** Conservative estimate is 50–65 MHz; the actual number depends heavily on whether the wakeup CAM ends up in LUT logic (longer paths) or BRAM-backed (shorter, lookup-time-dominated). Empirically validate by Phase 6 midpoint.
-- **OoO microarchitecture spec.** Write `10-ooo-design-spec.md` before implementation: issue rules, retire ordering, LSQ disambiguation strategy, memory ordering guarantees, hypervisor-visibility (none). Blocks Phase 6.
+- ~~**OoO microarchitecture spec.** Write `10-ooo-design-spec.md` before implementation~~ — **DONE.** Specified in [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md) (v0.3, 2026-05). Covers issue rules, retire ordering, LSQ disambiguation (store-set predictor), memory ordering guarantees (SH-Compact weak preserved), hypervisor-visibility (none), FGMT in §13, gate budget in §15. No longer blocks Phase 6.
 - **OoO trace cache / uop cache decision.** Adds BRAM cost but amortizes decode; might be worth it for tight loops. Decide during Phase 6 design.
 - **Bitstream reflash brick rate.** Estimated 5% on remote reflash. Validate with a torture test in Phase 1; if higher than expected, implement the watchdog-revert-to-golden mechanism before Phase 5 public launch.
 - **Tenant Ethernet gateway MikroTik model.** CRS326 (24 GbE, ~$200), RB5009 (ARM64, ~$250), or hEX S (5 GbE, ~$60) depending on planned fleet size. For ≤4 boards: hEX S. Decide before ordering hardware for Phase 0.
@@ -800,10 +808,28 @@ Phase 8 SIMD work roughly **doubles** TCP and **3–5×s** SSH throughput.
 
 ## 12. References
 
-- Phase 1 MMU spec: `01-design-spec.md`, `02-hardware-spec.md`, `03-linux-spec.md`
-- Phase 2 IOMMU spec: `04-iommu-design-spec.md`, `05-iommu-hardware-spec.md`, `06-iommu-linux-spec.md`
-- Phase 3 hypervisor spec: `07-hypervisor-design-spec.md`, `08-hypervisor-hardware-spec.md`, `09-hypervisor-linux-spec.md`
-- OoO microarchitecture spec (to be written): `10-ooo-design-spec.md` — see Phase 6 for content scope
+### Per-phase spec map
+
+| Phase | Subsystem | Specs |
+|---|---|---|
+| 2 | MMU | [mmu/design-spec.md](mmu/design-spec.md), [mmu/hardware-spec.md](mmu/hardware-spec.md), [mmu/linux-spec.md](mmu/linux-spec.md) |
+| 2 | SoC bus + P4 map | [bus/fabric-spec.md](bus/fabric-spec.md), [soc/p4-mmio-map.md](soc/p4-mmio-map.md) |
+| 2 | Interrupt controller | [aic/aic2-spec.md](aic/aic2-spec.md) (Tier 0 baseline) |
+| 3 | IOMMU | [iommu/design-spec.md](iommu/design-spec.md), [iommu/hardware-spec.md](iommu/hardware-spec.md), [iommu/linux-spec.md](iommu/linux-spec.md) |
+| 4 | Hypervisor | [hypervisor/design-spec.md](hypervisor/design-spec.md), [hypervisor/hardware-spec.md](hypervisor/hardware-spec.md), [hypervisor/linux-spec.md](hypervisor/linux-spec.md); AIC2 Tier 2 [aic/aic2-spec.md §5](aic/aic2-spec.md) |
+| 6 | Out-of-order J32 | [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md) |
+| 6.5 | FGMT + coherent L2 | [fgmt/dual-fgmt-proposal.md](fgmt/dual-fgmt-proposal.md), [fgmt/mt2x2-plan.md](fgmt/mt2x2-plan.md); [cache/l2-spec.md](cache/l2-spec.md) Tier 1; AIC2 Tier 1 [aic/aic2-spec.md §4](aic/aic2-spec.md) |
+| 7 | SH4-complete FPU | [fpu/spec.md](fpu/spec.md) Tier 1 (+ Tier 2 with hypervisor for J32-FM) |
+| 7.5 | SIMD | [simd/spec.md](simd/spec.md), [simd/hardware-impl.md](simd/hardware-impl.md), [simd/software-impl.md](simd/software-impl.md) |
+| 8 | J64 widening | [glossary §3](glossary.md) (J64 row); [cache/l2-spec.md](cache/l2-spec.md) Tier 2 (40-bit PA) |
+
+### Project-wide
+
+- [`glossary.md`](glossary.md) — naming, FGMT, prior-art-pre-2006 policy, sibling-repo map
+- [`README.md`](../README.md) — workspace entry point
+
+### External
+
 - J-core repo: `github.com/j-core/jcore-cpu`, `github.com/j-core/jcore-soc`
 - J-core roadmap: `j-core.org/roadmap.html`
 - OpenSPARC T1 Hypervisor API spec (primary virtualization reference)
