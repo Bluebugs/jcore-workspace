@@ -68,11 +68,13 @@ V12 (128 bits)    V13 (128 bits)    V14 (128 bits)    V15 (128 bits)
 
 V0..V15 are named in SIMD context by reinterpreting the SH instruction's 4-bit register field (`nnnn` or `mmmm`) as a direct vector index 0..15. There is no multiple-of-4 constraint, and `FPSCR.FR` has no effect on SIMD register naming.
 
-V0..V15 are saved and restored on context switch by the operating system, using the dedicated vector load/store instructions VLD.Q and VST.Q (§5.6). The OS-visible context grows by 256 bytes per thread (16 × 16 bytes). **Save and restore are lazy when SR.VD is supported (§2.6)** — the OS sets SR.VD=1 on context-out and lets the SIMD-disabled trap drive the actual save/restore on first use, eliminating the 264-byte cost (V0..V15 + P0 + VCSR) for tasks that never touch SIMD.
+V0..V15 are saved and restored on context switch by the operating system, using the dedicated vector load/store instructions VLD.Q and VST.Q (§5.6). The OS-visible context grows by 256 bytes per thread for the V file (16 × 16 bytes), plus 4 bytes for P0, 4 bytes for VCSR, and 8 bytes for VFPUL — total **272 bytes** per task. **Save and restore are lazy when SR.VD is supported (§2.6)** — the OS sets SR.VD=1 on context-out and lets the SIMD-disabled trap drive the actual save/restore on first use, eliminating the 272-byte cost for tasks that never touch SIMD.
 
-**Relationship to scalar FPU.** FR0..FR15 (front bank) and XF0..XF15 (back bank) remain scalar FPU registers, unchanged from SH-4. They are used by ordinary SH-4 FPU instructions when those instructions appear *outside* a SIMD block. SH-4 FIPR and FTRV continue to operate on quartets of FR registers as 4-element FP32 vectors — they are a separate, legacy 4-element vector facility orthogonal to the Tier 0 SIMD ISA. See [../fpu/spec.md](../fpu/spec.md) for the FPU's own tier structure; Tier 0 SIMD reductions write into FR0/DR0/FPUL on implementations that also provide a Tier 1 (SH-4-complete) FPU. The reduction-destination semantics for FP16→FP32, FP32→FP64, and FP64 reductions are specified per type in §2.3 below and cross-referenced from [../fpu/spec.md §6.1](../fpu/spec.md). Implementations that omit the FPU entirely (e.g. J2) also omit Tier 0 SIMD, since Tier 0's horizontal-reduction destinations require the SH-4 FPU register file. See §2.3.
+**VFPUL — SIMD-side scalar FP register.** A dedicated **64-bit architectural register**, **VFPUL** (Vector FP scalar register), holds the scalar FP result of any SIMD operation that produces an FP scalar. It exists so that no SIMD instruction ever writes the scalar FPU register file (FR / DR / FPUL) directly; this keeps SIMD blocks atomic with respect to SR.FD (§2.6) and avoids the silent-corruption hazard that would otherwise exist when SIMD reductions mutate FPU state owned by a different lazily-saved task. VFPUL is part of SIMD architectural state, saved and restored alongside V0..V15 / P0 / VCSR under SR.VD lazy save. The full reduction destination table is in §2.3; FP lane-bridge operations route through VFPUL per §5.7; cross-file moves between VFPUL and FR/DR happen only at the four boundary instructions specified in §5.8.
 
-**Data movement between scalar FPU and SIMD.** Two-instruction sequences VLNS+VEXTF.L / VLNS+VINSF.L and the integer variants VEXT.B/W/L/Q and VINS.B/W/L/Q (§5.7) move single lane values between an FRn or Rn register and a specified lane of a Vn register. For wider transfers, software stages data through memory using VLD/VST and FMOV.S / MOV.L.
+**Relationship to scalar FPU.** FR0..FR15 (front bank) and XF0..XF15 (back bank) remain scalar FPU registers, unchanged from SH-4. They are used by ordinary SH-4 FPU instructions when those instructions appear *outside* a SIMD block. SH-4 FIPR and FTRV continue to operate on quartets of FR registers as 4-element FP32 vectors — they are a separate, legacy 4-element vector facility orthogonal to the Tier 0 SIMD ISA. SIMD and the scalar FPU are otherwise **register-file-disjoint**: no SIMD instruction reads or writes FR/DR/FPUL/FPSCR. The four boundary instructions in §5.8 (`FMOV.VS`, `FMOV.VD`, both directions) are the only path between VFPUL and the scalar FPU file, and they execute outside any SIMD block. See [../fpu/spec.md](../fpu/spec.md) for the FPU's own tier structure. Implementations that omit the FPU entirely (e.g. J2) also omit Tier 0 SIMD, since the SH-4 FPU register file is the natural destination of the boundary instructions and meaningful SIMD-FP workloads need round-trippable scalar values.
+
+**Data movement between scalar FPU and SIMD.** Two-instruction sequences `VLNS`+`VEXTF.L` / `VLNS`+`VINSF.L` and the integer variants `VEXT.B/W/L/Q` and `VINS.B/W/L/Q` (§5.7) move single lane values between a SIMD-side scalar register (`VFPUL` for FP, Rn for integer) and a specified lane of a Vn register. For cross-file moves between VFPUL and an FR/DR register, see the boundary instructions in §5.8. For wider transfers, software stages data through memory using VLD/VST and FMOV.S / MOV.L.
 
 ### 2.2 Lane organisation
 
@@ -89,7 +91,9 @@ Lane *i* of V*n* at width *w* occupies bits `[w·i + w − 1 : w·i]` of V*n*, i
 
 ### 2.3 Reduction destination
 
-Horizontal (reductive) SIMD operations write their scalar result to an existing architectural register **one type-class wider than the lane width** (for additive reductions). Widening reductions preserve precision in long accumulation chains and prevent overflow in the common ML and DSP kernels (int8 → int32, FP16 → FP32). Each destination matches SH-4's existing scalar conventions for that wider type. See [../fpu/spec.md §4.1, §4.2](../fpu/spec.md) for the FPU register definitions referenced below. The dependency goes both ways: Tier 0 SIMD horizontal reductions require at least a Tier 1 FPU register file to deliver their results, and the FPU spec records this coupling in [../fpu/spec.md §6.1](../fpu/spec.md).
+Horizontal (reductive) SIMD operations write their scalar result either to the existing SH-4 integer scalar pair (MACL/MACH) for integer reductions, or to the SIMD-side scalar FP register **VFPUL** for FP reductions. **No SIMD reduction writes the scalar FPU register file** (FR / DR / FPUL) directly. This is the design choice that keeps SIMD blocks atomic with respect to SR.FD (see §2.6 rationale).
+
+For additive reductions, the destination is **one type-class wider than the lane width** to preserve precision in long accumulation chains and prevent overflow in the common ML and DSP kernels (int8 → int32, FP16 → FP32).
 
 | Lane width *w* | Lane type | Destination | Destination type |
 |---|---|---|---|
@@ -97,17 +101,21 @@ Horizontal (reductive) SIMD operations write their scalar result to an existing 
 | 16 | integer | MACL + MACH pair | int32 / int64 |
 | 32 | integer | MACL + MACH pair | int64 |
 | 64 | integer | MACL + MACH pair | int64 (truncates; software must guard against overflow) |
-| 16 | FP (half) | FPUL | FP32 |
-| 32 | FP (single) | DR0 = {FR0, FR1} | FP64 |
-| 64 | FP (double) | DR0 = {FR0, FR1} | FP64 (no widening) |
+| 16 | FP (half) | **VFPUL (low 32 bits)** | FP32 |
+| 32 | FP (single) | **VFPUL (low 32 bits)** | FP32 (or FP64 with widening, per operator) |
+| 64 | FP (double) | **VFPUL (full 64 bits)** | FP64 |
 
 Min/max/bitwise reductions (added in Tier 0) do not widen; the destination matches the input lane width (e.g., int16 min → MACL holds an int16). FP min/max use IEEE 754-2008 `minNum`/`maxNum` semantics. The add reduction is the canonical widening case.
 
 **No V-register restrictions.** Any V register may be used as a source or destination in any SIMDH variant.
 
-**Chaining cost.** A horizontal reduction's result is immediately usable in same-type scalar arithmetic. To consume in a *narrower* type, software inserts a single conversion (`FCNVDS DR0, FPUL` for FP64 → FP32, or arithmetic narrowing for integer types via shifts). To consume the reduction back into a SIMD vector, use VINSF.L (FP) or VINS.L (integer) per §5.7 to place the scalar result into a specified lane of a V register.
+**Implicit clear at prefix decode.** When a SIMDH prefix is decoded, the reduction destination is implicitly cleared to zero: MACL and MACH are zeroed for integer-typed reductions; VFPUL is zeroed for FP-typed reductions. (This matches the legacy behavior, just retargeted to VFPUL.)
 
-**FPU register-file sharing.** Tier 0 horizontal reductions write to FR/XF/MACL/MACH in implementations that also provide a Tier 1 FPU. Implementations targeting Tier 0 SIMD must implement at least the FPU register file (FR0..FR15, FPUL, MACL, MACH); SIMD without these registers cannot deliver reduction results. This couples SIMD-enabled product points to an FPU-bearing baseline (J32 and up; see [../glossary.md §3](../glossary.md)).
+**Chaining cost.** A horizontal reduction's FP result is in VFPUL. To consume it in a scalar FR register, software uses one of the boundary instructions in §5.8 (`FMOV.VS VFPUL, FRn` for single-precision, `FMOV.VD VFPUL, DRn` for double-precision) — one cycle. To consume it back into another SIMD reduction, leave it in VFPUL across the next SIMDH prefix only after explicitly saving it (the prefix re-zeros VFPUL); the typical chained-reduction idiom saves VFPUL to an FR between reductions and finishes with an `FADD`. To consume the reduction back into a SIMD vector lane, use `VINSF.L` (which reads VFPUL) per §5.7. Integer reductions in MACL/MACH consume normally via `STS MACL, Rn` / `STS MACH, Rn`.
+
+**FPU register-file independence.** Tier 0 SIMD does **not** write FR / DR / FPUL — only VFPUL and MACL/MACH. The scalar FPU register file is touched only by the boundary instructions in §5.8 and by ordinary scalar FPU code outside any SIMD block. As a corollary, SIMD lazy save (under SR.VD, §2.6) and FPU lazy save (under SR.FD, [../fpu/spec.md §6.3](../fpu/spec.md)) are **fully independent**: a task can own SIMD without owning FPU, and vice versa.
+
+**FPU register file required nonetheless.** Although SIMD does not write FR/DR/FPUL directly, the boundary instructions in §5.8 do. Implementations targeting Tier 0 SIMD must therefore also implement the SH-4 FPU register file (FR0..FR15, FPUL, MACL, MACH) and **SR.FD** (Tier 1 FPU). This couples SIMD-enabled product points to an FPU-bearing baseline at Tier 1 minimum (J32 and up; see [../glossary.md §3](../glossary.md)). The Tier 0-SIMD-only-without-SR.FD configuration is **not architecturally allowed**.
 
 ### 2.4 Mode bits in FPSCR and VCSR
 
@@ -138,8 +146,9 @@ Tier 0 architectural state:
 - **V0..V15** (16 × 128 = 2048 bits).
 - **P0** (16 bits): the SIMD predicate mask register. Each bit corresponds to one lane at the narrowest width (w = 8). At wider widths, lane *i* is enabled by P0[*i* · (*w*/8)] — i.e., the low bit of each *(w/8)*-bit group within P0. P0 is saved and restored via dedicated `LDS Rm, P0` and `STS P0, Rn` instructions (§5.6).
 - **VCSR** (32 bits, 2 bits currently defined): mode/status as in §2.4.
+- **VFPUL** (64 bits): the SIMD-side scalar FP register. Holds the result of SIMD horizontal FP reductions (§2.3) and the FP lane-bridge operations (§5.7); source/destination of the boundary instructions (§5.8). Saved/restored via `STS VFPUL, Rn` / `LDS Rm, VFPUL` (§5.6).
 
-Total Tier 0 architectural addition versus a baseline SH-4: **2096 new architectural bits** (an increase of approximately 5–15% of the J32 core area depending on flip-flop vs SRAM register-file implementation).
+Total Tier 0 architectural addition versus a baseline SH-4: **2160 new architectural bits** (an increase of approximately 5–15% of the J32 core area depending on flip-flop vs SRAM register-file implementation). SIMD context-switch image size: **272 bytes** (V0..V15 = 256 + P0 = 4 + VCSR = 4 + VFPUL = 8).
 
 Tier 1 and Tier 2 add **no new architectural state**.
 
@@ -152,7 +161,7 @@ Total decode-stage shadow state: 18 bits Tier 0 + 2 bits Tier 1 saturation modif
 
 ### 2.6 SR.VD — SIMD-disable trap (Tier 0; enables lazy context switch)
 
-A new bit in the CPU status register, **SR.VD** at **SR bit 13**, gates access to the entire SIMD facility. It is the SIMD analogue of SR.FD ([../fpu/spec.md §6.3](../fpu/spec.md)) and exists for the same reason: to let the OS skip the 264-byte SIMD save/restore (V0..V15 + P0 + VCSR) on context switches between tasks that do not touch SIMD.
+A new bit in the CPU status register, **SR.VD** at **SR bit 13**, gates access to the entire SIMD facility. It is the SIMD analogue of SR.FD ([../fpu/spec.md §6.3](../fpu/spec.md)) and exists for the same reason: to let the OS skip the 272-byte SIMD save/restore (V0..V15 + P0 + VCSR + VFPUL) on context switches between tasks that do not touch SIMD.
 
 The SR layout authoritative source is [../hypervisor/hardware-spec.md §2.1](../hypervisor/hardware-spec.md); SR.VD occupies an SH-4-reserved bit slot (no compatibility break).
 
@@ -170,9 +179,10 @@ The SR layout authoritative source is [../hypervisor/hardware-spec.md §2.1](../
 | Vector memory ops | `VLD.{B,W,L,Q}`, `VST.{B,W,L,Q}`, `VGATHER.Q`, `VSCATTER.Q`, `VLDI.Q` |
 | Lane bridges | `VLNS`, `VEXT.{B,W,L,Q}`, `VINS.{B,W,L,Q}`, `VEXTF.L`, `VINSF.L` |
 | Mode toggles | `VMKCHG`, `SWIZZLE.I` |
-| Control-register access | `LDS Rn, P0`, `STS P0, Rn`, `LDS Rn, VCSR`, `STS VCSR, Rn` |
+| Control-register access | `LDS Rn, P0`, `STS P0, Rn`, `LDS Rn, VCSR`, `STS VCSR, Rn`, `LDS Rn, VFPUL`, `STS VFPUL, Rn` |
+| Boundary instructions (§5.8) | `FMOV.VS FRn, VFPUL`, `FMOV.VS VFPUL, FRn`, `FMOV.VD DRn, VFPUL`, `FMOV.VD VFPUL, DRn` (these also trap under SR.FD because they touch FR/DR) |
 
-The rule is simple: **any decode that would access V0..V15, P0, or VCSR, or that would set SIMD_VAL in the decode shadow, traps under SR.VD = 1.** There is no SIMD-control escape; SR.VD truly disables the facility end-to-end. This mirrors the FPU's no-escape rule for SR.FD and is what makes the lazy-context-switch idiom reliable.
+The rule is simple: **any decode that would access V0..V15, P0, VCSR, or VFPUL, or that would set SIMD_VAL in the decode shadow, traps under SR.VD = 1.** There is no SIMD-control escape; SR.VD truly disables the facility end-to-end. This mirrors the FPU's no-escape rule for SR.FD and is what makes the lazy-context-switch idiom reliable.
 
 **Trap classification.**
 
@@ -202,21 +212,23 @@ on_simd_disabled_trap():
         return_from_exception()
 
     if current_simd_owner != NULL:
-        save_simd_state(current_simd_owner)   # 264 bytes via VST.Q + STS P0 + STS VCSR
+        save_simd_state(current_simd_owner)   # 272 bytes via VST.Q × 16 + STS P0 + STS VCSR + STS VFPUL
 
     if current_task.has_saved_simd_state:
-        restore_simd_state(current_task)      # 264 bytes via VLD.Q + LDS P0 + LDS VCSR
+        restore_simd_state(current_task)      # 272 bytes via VLD.Q × 16 + LDS P0 + LDS VCSR + LDS VFPUL
 
     current_simd_owner = current_task
     SR.VD = 0
     return_from_exception()
 ```
 
-Cost per context switch when neither outgoing nor incoming task touches SIMD: **zero** save/restore. Cost when both touch SIMD: one trap + one 264-byte save + one 264-byte restore — same total as eager save, just shifted in time. On typical Linux workloads where <5 % of processes use SIMD, this eliminates ~95 % of the save/restore overhead.
+Cost per context switch when neither outgoing nor incoming task touches SIMD: **zero** save/restore. Cost when both touch SIMD: one trap + one 272-byte save + one 272-byte restore — same total as eager save, just shifted in time. On typical Linux workloads where <5 % of processes use SIMD, this eliminates ~95 % of the save/restore overhead.
 
 **Interaction with FGMT.** SR is per-thread on a J32-OOO/J32-FM core under FGMT ([../ooo/j32ooo-spec.md §13.1](../ooo/j32ooo-spec.md)). SR.VD is therefore naturally per-thread; one thread using SIMD does not impose save/restore overhead on the sibling thread that does not.
 
-**Interaction with FPU reductions.** Tier 0 SIMD horizontal reductions write to FR0 / DR0 / FPUL ([§2.3](#23-reduction-destination)). A reduction is a SIMD-touching operation, so SR.VD=1 traps it (the FPU side is not consulted yet). If both SR.VD=1 and SR.FD=1 are set when an FPU-reducing SIMD reduction is decoded, **SR.VD wins** (the trap is `EXC_SIMD_DISABLED`, not `EXC_FPU_DISABLED`); the handler restores SIMD state first, and the subsequent retry will then hit the FPU trap if SR.FD is still set. This ordering matches Linux's expectation that lazy save reports the higher-level extension first.
+**Interaction with the scalar FPU — fully independent.** SIMD instructions write only SIMD-side state (V0..V15, P0, VCSR, VFPUL, MACL/MACH). They **never** write the scalar FPU register file (FR / DR / FPUL / FPSCR). Consequently, the SR.VD lazy-save mechanism for SIMD and the SR.FD lazy-save mechanism for the scalar FPU are completely independent: a task can own SIMD without owning FPU and vice versa; no SIMD instruction can corrupt FPU state owned by a different lazily-saved task. The only place the two facilities interact is the four boundary instructions in §5.8, which **trap under both SR.VD and SR.FD** since they touch both files. When both bits are set on a boundary instruction, **SR.VD wins** (the trap is `EXC_SIMD_DISABLED`); after the SIMD handler restores VFPUL and clears SR.VD, the retry then hits SR.FD if still set. This ordering matches Linux's expectation that lazy save reports the higher-level (SIMD) extension first.
+
+**Why no SR.FD trap inside SIMD blocks.** An earlier design considered making SIMD FP-reductions and the lane bridges VEXTF.L / VINSF.L trap under SR.FD because they would have written FR/DR. This was rejected because exceptions inside SIMD blocks force block abandon-and-restart (§4.2 atomicity), making mid-block traps operationally expensive. The §2.3 / §5.7 redesign confines all FPU register-file touching to instructions outside SIMD blocks (the §5.8 boundary instructions), eliminating the mid-block-trap case entirely.
 
 **Hardware cost.** One SR flip-flop (the bit itself; the SR register already exists) plus the trap condition wired into SIMD decode. Across the full SIMD facility decode, the trap is a single OR of all the SIMD-touching decode signals AND'ed with `SR.VD`. Estimated 30–50 LUT4 total. Negligible.
 
@@ -225,11 +237,11 @@ Cost per context switch when neither outgoing nor incoming task touches SIMD: **
 - The hypervisor maintains a per-vCPU `simd_owner` flag and a per-pCPU `current_simd_owner_vcpu` register.
 - At vCPU dispatch, the hypervisor sets `SR.VD = 1` in the guest's `HSSR` shadow before `HRTE`. The guest resumes with SIMD disabled.
 - First guest SIMD instruction → `EXC_SIMD_DISABLED` trap. HEDR bit 24 routing:
-  - `HEDR[24] = 0` (default): trap to hypervisor. Hypervisor checks `current_simd_owner_vcpu`; if different, saves previous owner's 264-byte SIMD image, restores this vCPU's image (if any), updates `current_simd_owner_vcpu`, clears `SR.VD = 0` in `HSSR`, `HRTE` back to the guest at the trapping instruction (which re-executes successfully).
+  - `HEDR[24] = 0` (default): trap to hypervisor. Hypervisor checks `current_simd_owner_vcpu`; if different, saves previous owner's 272-byte SIMD image, restores this vCPU's image (if any), updates `current_simd_owner_vcpu`, clears `SR.VD = 0` in `HSSR`, `HRTE` back to the guest at the trapping instruction (which re-executes successfully).
   - `HEDR[24] = 1`: trap delegated to guest's S-mode handler. Guest OS implements its own lazy-SIMD policy for its user threads (mirror of the bare-metal pattern above).
-- vCPU migration to a different pCPU: hypervisor cross-calls the source pCPU to save the 264-byte SIMD image, ships it to the destination pCPU, sets `SR.VD = 1` in the destination `HSSR`; first SIMD touch on the destination re-installs the image.
+- vCPU migration to a different pCPU: hypervisor cross-calls the source pCPU to save the 272-byte SIMD image, ships it to the destination pCPU, sets `SR.VD = 1` in the destination `HSSR`; first SIMD touch on the destination re-installs the image.
 
-The 264-byte SIMD image layout: `V0..V15` (256 bytes) + `P0` (4 bytes, low 16 bits used) + `VCSR` (4 bytes). Saved via `VST.Q` × 16 + `STS P0` + `STS VCSR`; restored via `VLD.Q` × 16 + `LDS P0` + `LDS VCSR`. The 16 vector stores can be issued back-to-back (no inter-dependencies); a typical save/restore round-trip is ~40–50 cycles on a 2-wide OoO with the L1-D in M state.
+The 272-byte SIMD image layout: `V0..V15` (256 bytes) + `P0` (4 bytes, low 16 bits used) + `VCSR` (4 bytes) + `VFPUL` (8 bytes). Saved via `VST.Q` × 16 + `STS P0` + `STS VCSR` + `STS VFPUL`; restored symmetrically. The 16 vector stores can be issued back-to-back (no inter-dependencies); a typical save/restore round-trip is ~45–55 cycles on a 2-wide OoO with the L1-D in M state.
 
 **Pre-2006 prior art.**
 
@@ -626,7 +638,7 @@ Tier 0 vector memory and SIMD-control instructions are reproduced unchanged from
 - **VLDI.Q #imm, Vn** (8-bit signed immediate broadcast; inside SIMD block).
 - **SWIZZLE.I Vn, #pattern, #param** (immediate-pattern variant of SWIZZLE; inside SIMD block).
 - **VMKCHG** (toggle VCSR.MKE; outside SIMD block).
-- **LDS Rn, P0 / STS P0, Rn / LDS Rn, VCSR / STS VCSR, Rn** (predicate and control register access; outside SIMD block).
+- **LDS Rn, P0 / STS P0, Rn / LDS Rn, VCSR / STS VCSR, Rn / LDS Rn, VFPUL / STS VFPUL, Rn** (predicate, mode, and SIMD-scalar-FP register access; outside SIMD block). VFPUL transfers via these mnemonics move the low 32 bits to/from an integer scalar register Rn; for cross-file moves to/from the SH-4 FPU file (FRn / DRn) use the boundary instructions in §5.8.
 
 #### 5.6.1 Memory access N=1 rule
 
@@ -638,11 +650,39 @@ The SIMDV `rrr[0]` bit is the NT (Non-Temporal) flag. When set on a memory-acces
 
 ### 5.7 Lane extract/insert (VLNS+VEXT/VINS)
 
-Bridging individual lanes between V registers and scalar registers (FRn or Rn) uses a **two-instruction sequence**: a VLNS prefix arms a microarchitectural lane-select latch (`V_LANE_REG`, `V_LANE_IDX`); the immediately-following VEXT/VINS consumes the latch.
+Bridging individual lanes between V registers and a SIMD-side scalar register uses a **two-instruction sequence**: a VLNS prefix arms a microarchitectural lane-select latch (`V_LANE_REG`, `V_LANE_IDX`); the immediately-following VEXT/VINS consumes the latch.
 
 The pair must be **adjacent and atomic**: any instruction between VLNS and a following VEXT/VINS raises slot-illegal, and external interrupts are deferred between the two instructions. This makes the lane-select latch microarchitectural (not architecturally visible, never saved on exception).
 
-**Encodings** (full table in Appendix A): VLNS at `0100 mmmm llll 1011`; VEXT.B/W/L/Q at `0100 nnnn {1000..1011} 1011`; VINS.B/W/L/Q at `0000 nnnn {1000..1011} 1011`; VEXTF.L / VINSF.L at `{0100,0000} nnnn 1100 1011`. Valid inside and outside SIMD blocks. Assembler accepts the single-mnemonic form (`VEXT.L V5.2, R3`) and emits the VLNS+VEXT pair automatically.
+**Scalar-side targets.** Integer variants (`VEXT.B/W/L/Q`, `VINS.B/W/L/Q`) read/write a SH-2 integer scalar register Rn. FP variants (`VEXTF.L`, `VINSF.L`) read/write **VFPUL**, the SIMD-side scalar FP register (§2.1, §2.3) — **not** an FR/DR register. To move the lane's value to or from the scalar FPU register file, follow / precede the VLNS+VEXTF.L (or VLNS+VINSF.L) pair with one of the boundary instructions in §5.8 (`FMOV.VS` for single-precision, `FMOV.VD` for double-precision). The two-step pattern keeps all FPU register-file touching outside SIMD blocks.
+
+**Encodings** (full table in Appendix A): VLNS at `0100 mmmm llll 1011`; VEXT.B/W/L/Q at `0100 nnnn {1000..1011} 1011`; VINS.B/W/L/Q at `0000 nnnn {1000..1011} 1011`; VEXTF.L at `0100 0000 1100 1011` (destination is implicit VFPUL — no register field); VINSF.L at `0000 0000 1100 1011` (source is implicit VFPUL — no register field). Valid inside and outside SIMD blocks. Assembler accepts the single-mnemonic forms (`VEXT.L V5.2, R3` and `VEXTF.L V5.2` → result in VFPUL).
+
+### 5.8 SIMD↔FPU boundary instructions (FMOV.VS / FMOV.VD)
+
+Four instructions move scalar FP between **VFPUL** and the SH-4 FPU register file (FR / DR). They are the **only** path between the two register files and are executable only outside a SIMD block (raise slot-illegal inside one). They trap under **both SR.VD and SR.FD** because they touch both files; trap ordering is SR.VD first per §2.6.
+
+| Mnemonic | Direction | Semantics |
+|---|---|---|
+| `FMOV.VS FRn, VFPUL` | scalar FPU → SIMD | move single-precision FP from FRn into VFPUL (low 32 bits; high 32 bits of VFPUL are zeroed) |
+| `FMOV.VS VFPUL, FRn` | SIMD → scalar FPU | move single-precision FP from VFPUL (low 32 bits) into FRn |
+| `FMOV.VD DRn, VFPUL` | scalar FPU → SIMD | move double-precision FP from DRn = {FR2n, FR2n+1} into VFPUL (full 64 bits) |
+| `FMOV.VD VFPUL, DRn` | SIMD → scalar FPU | move double-precision FP from VFPUL (full 64 bits) into DRn |
+
+**Encoding allocation** (preliminary; final bit assignments in Appendix A):
+- Live in the SH-4 FPU sub-family (`xxxx 1010` / `xxxx 0011` LDC/STC pattern) using slots not consumed by PTEH/PTEL/TTB/TEA/MMUCR/ASIDR or by SH-DSP. Two unused slot pairs cover the four mnemonics. The encoding-space audit is deferred to the consolidated opcode-map pass.
+
+**Privilege and traps:**
+- User-mode access permitted (these are not privileged).
+- SR.VD=1: trap with `EXC_SIMD_DISABLED` (cause 0x1C0 under hypervisor; bare-metal cause per §2.6).
+- SR.VD=0, SR.FD=1: trap with FPU-disabled (cause 0x1B0 under hypervisor with Tier 2 FPU; bare-metal per [../fpu/spec.md §6.3](../fpu/spec.md)).
+- Both bits set: SR.VD wins (handler restores SIMD; retry then hits SR.FD if still set).
+
+**Latency:** one cycle in a typical Tier 1 FPGA implementation; pipelined as a register-file-to-register-file move with no FP-unit involvement. The double-precision variants share the existing FR-pair access pattern from FMOV.D (Tier 1 FPU spec §5).
+
+**No FPSCR effect.** These instructions do not modify FPSCR (no rounding, no conversion, no flag update). They are pure bit-pattern moves.
+
+**Pre-2006 prior art:** Intel SSE MOVD / MOVQ between XMM and x87/general registers (1999); MIPS-3D paired-single moves between FP scalar and FP pair (1999); Cray-1 VL→S register copy through a dedicated path (1976). All establish the precedent of explicit cross-file moves between a SIMD-side scalar register and the host scalar file.
 
 ---
 
@@ -768,13 +808,18 @@ VCRC32C.B Vm, Vn       ; legal only under SIMDHA.B
     VLD.Q    @R_vec,    V4
 
     SIMDH.L  #1
-    FMUL     FR4, FR0                ; V0 · V4, widened sum → DR0
-    FCNVDS   DR0, FPUL
-    FSTS     FPUL, FR6
-    VINSF.L  FR6, V5.0               ; assembler emits VLNS V5, #0; VINSF.L FR6
+    FMUL     FR4, FR0                ; V0 · V4, widened sum → VFPUL
+    ; VFPUL holds the FP32 sum; move it across the SIMD/FPU boundary
+    FMOV.VS  VFPUL, FR6              ; §5.8 boundary move
+    VINSF.L  V5.0                    ; reads VFPUL (assembler emits VLNS V5, #0; VINSF.L)
     ; ... rows 1..3 identical pattern ...
     VST.Q    V5, @R_result
 ```
+
+(Note: earlier drafts of this example used `FCNVDS DR0, FPUL ; FSTS FPUL, FR6`
+to drain the reduction. With VFPUL as the reduction destination at the
+prefix-declared width, those two instructions collapse into a single
+`FMOV.VS VFPUL, FR6`.)
 
 **Vertical SIMD-FP FMA loop.** With multiplier broadcast (A) in V0:
 
@@ -1041,12 +1086,22 @@ LANE EXTRACT/INSERT (Tier 0; valid in or out of SIMD blocks):
   VEXT.W Rn              0100 nnnn 1001 1011
   VEXT.L Rn              0100 nnnn 1010 1011
   VEXT.Q Rn,Rn+1         0100 nnnn 1011 1011   ; Rn must be even
-  VEXTF.L FRn            0100 nnnn 1100 1011
+  VEXTF.L                0100 0000 1100 1011   ; destination implicit: VFPUL
   VINS.B Rn              0000 nnnn 1000 1011
   VINS.W Rn              0000 nnnn 1001 1011
   VINS.L Rn              0000 nnnn 1010 1011
   VINS.Q Rn,Rn+1         0000 nnnn 1011 1011
-  VINSF.L FRn            0000 nnnn 1100 1011
+  VINSF.L                0000 0000 1100 1011   ; source implicit: VFPUL
+
+SIMD↔FPU BOUNDARY (Tier 0, §5.8; outside SIMD block; trap under SR.VD and SR.FD):
+  FMOV.VS FRn, VFPUL     (encoding pending opcode-map audit, §5.8)
+  FMOV.VS VFPUL, FRn     (encoding pending opcode-map audit, §5.8)
+  FMOV.VD DRn, VFPUL     (encoding pending opcode-map audit, §5.8)
+  FMOV.VD VFPUL, DRn     (encoding pending opcode-map audit, §5.8)
+
+SIMD CONTROL-REGISTER ACCESS — VFPUL (Tier 0; outside SIMD block):
+  LDS Rn, VFPUL          (encoding pending opcode-map audit; in the SIMD-control LDS/STS family)
+  STS VFPUL, Rn          (encoding pending opcode-map audit; in the SIMD-control LDS/STS family)
 
 PREDICATION AND CONTROL (Tier 0, outside SIMD block):
   VMKCHG                 1111 1100 1111 1101

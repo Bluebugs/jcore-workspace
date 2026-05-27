@@ -1323,8 +1323,14 @@ has a direct **SIMD parallel**: `SR.VD` (SR bit 13) and `EXC_SIMD_DISABLED`
 (EXPEVT `0x1C0`, HEDR bit 24) implement the same trap-on-first-use idiom
 for SIMD state. See [../simd/spec.md §2.6](../simd/spec.md) for the SIMD
 mechanism, which mirrors §7.1–§7.3 of this section structurally.
-The two facilities are independent: SR.FD and SR.VD trap separately, so
-a task can have one disabled and the other enabled.
+The two facilities are **fully independent at the register-file level**:
+SIMD never writes FR / DR / FPUL directly (it routes scalar FP through
+its own VFPUL register, see [../simd/spec.md §2.3](../simd/spec.md)), so
+the lazy ownership for SIMD and for the scalar FPU are tracked
+independently. The only point of interaction is the four boundary
+instructions in [../simd/spec.md §5.8](../simd/spec.md) (`FMOV.VS` /
+`FMOV.VD` between VFPUL and FR/DR), which trap under both SR.VD and
+SR.FD; SR.VD wins when both are set.
 
 ### 7.1 EXC_FPU_DISABLED cause and HEDR interaction. [T2]
 
