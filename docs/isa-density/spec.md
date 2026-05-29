@@ -40,25 +40,44 @@ idioms compile poorly:
    `r8..r14` + `PR` one register at a time — up to 8 instructions in and 8 out
    per non-leaf function.
 
-Static analysis of a baseline `-m2` SH-2 binary (BusyBox, ~268 KB `.text`;
-methodology and caveats recorded with the analysis) attributes:
+**Measured** (differential recompile, 2026-05-29): the CSiBE benchmark (193
+files that cross-compile cleanly under both) built with the *same* GCC 14.2 at
+`-O2`, `-m2` (SH-2) vs `-m2a` (SH-2A), both big-endian:
 
-| Idiom | Replacement | Measured `.text` saving |
+| Build | size (`.text`+`.rodata`+`.data`) | vs `-m2` |
+|---|---|---|
+| `-m2` (SH-2) | 925,184 B | — |
+| `-m2a` (SH-2A) | 911,352 B | **−1.50%** (−13,832 B) |
+
+**Attribution is decisive: the realized win is almost entirely `movi20`.**
+Disassembling every object, `-m2a` emits `movi20` **11,290** times and `movi20s`
+135 (both 0 under `-m2`), but `movmu` only **1** and `movml` **0**. Stock GCC's
+SH-2A codegen materializes large constants with `movi20` but barely uses the
+save/restore-multiple forms — so the prologue/epilogue benefit of
+`movmu`/`movml` is **latent**: realizing it needs GCC backend work
+([`software-impl.md`](software-impl.md) §3.2), not merely enabling `-m2a`.
+
+> **Why 1.5%, not the ~6–8% upper bound below.** The 1.5% is what stock GCC
+> *actually emits* today; the table below is a static-idiom *upper bound* (every
+> idiom replaced, full regalloc cooperation). Both are correct for what they
+> measure. CSiBE (compilers, codecs, parsers, `-O2`) is also less
+> prologue/epilogue-heavy than BusyBox, and this metric includes `.rodata`/`.data`,
+> not `.text` alone. See [`software-impl.md`](software-impl.md) §7 and
+> `.density-analysis/sh2a-run/RESULTS.md` for full method and caveats.
+
+For design rationale, the per-idiom static upper bounds (single-corpus BusyBox
+`.text`, counting each idiom the instruction *could* replace) were:
+
+| Idiom | Replacement | Static upper-bound `.text` saving |
 |---|---|---|
 | Literal-pool loads (singleton constants) | `movi20` | ~4.7% (singletons only; shared pools stay pooled) |
 | Push/pop runs (contiguous, ending at r14+PR) | `movmu`/`movml` | ~1.8%, up to ~3.5% with regalloc help |
 
-> **Honesty note on the numbers.** These are first-order, single-corpus,
-> static-idiom estimates (count the idiom each new instruction would replace,
-> compute byte delta). They are *upper bounds* that assume the compiler emits
-> the new instruction wherever the idiom appears. They are not measured against
-> a `-m2a`-style recompilation, which is the proper confirmation (see
-> [`software-impl.md`](software-impl.md) §7). Treat them as "worth doing,"
-> not as a guarantee.
-
-The two together target ~6–8% smaller `.text` and reduced fetch/I-cache
-pressure — directly serving the original SuperH design rationale even though
-main-memory cost is no longer the driver.
+These bound the *opportunity*; the measured 1.5% bounds what *today's* compiler
+captures. The gap — mostly the un-emitted `movmu`/`movml` share — is the
+backend work this spec's [`software-impl.md`](software-impl.md) describes. Either
+way the instructions serve the original SuperH density/I-cache rationale even
+though main-memory cost is no longer the driver.
 
 ### 1.2 Goals
 

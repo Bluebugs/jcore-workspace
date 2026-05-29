@@ -199,24 +199,38 @@ Complements the RTL/sim tests in [`hardware-impl.md`](hardware-impl.md) §8.
 
 ---
 
-## 7. Measuring the win (closing the honesty gap)
+## 7. Measuring the win — RESULTS IN
 
-[`spec.md`](spec.md) §1 gives *static-idiom upper-bound estimates*. The proper
-confirmation is a **differential recompile**:
+The differential recompile has been **run** (2026-05-29). Method: two GCC 14.2
+cross-compilers built from the same source — `--with-cpu=m2` and
+`--with-cpu=m2a`, both `--with-endian=big` (SH-2A is big-endian only, matching
+the J-core sh2eb target) — compiling the CSiBE corpus to objects at `-O2`
+(`-c`, no link). 193 of 528 files cross-compile cleanly under both and are
+compared apples-to-apples.
 
-1. Build a fixed corpus (BusyBox + musl, the gcc-sh-monitor CSiBE/CoreMark
-   suites) twice: baseline `-m2` and `-m32-density`.
-2. Compare `.text` size per binary and in aggregate.
-3. Break the delta down by instruction (how much from `movi20` vs
-   `movmu`/`movml`) by diffing disassembly.
-4. Report the *measured* percentage and update [`spec.md`](spec.md) §1, replacing
-   the estimates. Expected ballpark: combined ~6–8% `.text`, with `movi20`
-   contributing the larger share *if* the singleton-only heuristic (§3.1) is
-   implemented correctly — if it is not, `movi20` can *lose* on shared pools.
-5. The gcc-sh-monitor dashboard (CSiBE -Os, CoreMark `.text`, BusyBox badges)
-   is the natural CI home for tracking this over time.
+**Result: 925,184 → 911,352 bytes (`.text`+`.rodata`+`.data`) = −1.50%.**
 
-Do not quote the §1 estimates as results once measured numbers exist.
+**Attribution (objdump over every object):** `movi20` **11,290** uses under
+`-m2a` (0 under `-m2`), `movi20s` 135, `movmu` **1**, `movml` **0**. The win is
+almost entirely `movi20` (constant materialization). **Stock GCC barely emits
+`movmu`/`movml`** — so the save/restore-multiple share is *latent* and requires
+the backend work in §3.2 to realize; simply enabling `-m2a` does not capture it.
+
+This is the empirical confirmation of [`spec.md`](spec.md) §1's prediction. The
+1.5% is *below* the ~6–8% static upper bound, which is expected: the upper bound
+assumes every idiom is replaced with full regalloc cooperation, whereas this is
+what stock `-m2a` emits today, on a corpus (compilers/codecs/parsers) less
+prologue-heavy than BusyBox, measured over `.text`+`.rodata`+`.data`. Full
+method, per-file sizes, and caveats: `.density-analysis/sh2a-run/RESULTS.md`
+(scripts `run.sh` + `csibe.sh` alongside).
+
+Open follow-ups: (a) once §3.1's singleton-only `movi20` heuristic and §3.2's
+`movmu`/`movml` prologue emission land, re-run to measure the *realized* gain
+against the upper bound; (b) the gcc-sh-monitor dashboard (CSiBE -Os, CoreMark
+`.text`, BusyBox badges) is the natural CI home for tracking it over time;
+(c) a BusyBox `.text`-only number awaits a big-endian SH `ld` (Debian's sh4
+binutils ship only little-endian SH emulations, which blocks the BusyBox
+partial-link — CSiBE sidesteps this by never linking).
 
 ---
 
