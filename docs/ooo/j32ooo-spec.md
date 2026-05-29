@@ -147,6 +147,13 @@ Most SH instructions decode to a single uop. Multi-cycle instructions decode to 
 | `rte`                  | 3    | Pop SR, pop PC, branch                                     |
 | `trapa #imm`           | 4+   | Save context, vector, jump; serializing                    |
 | `sleep`                | 1    | Parks thread (see §10.6)                                   |
+| `movmu.l`/`movml.l`    | 1–17 | Store/load-multiple; crack to N mem uops + 1 pointer-update uop. See [../isa-density/spec.md](../isa-density/spec.md) §4.2 and [../isa-density/hardware-impl.md](../isa-density/hardware-impl.md) §6 |
+| `movi20`/`movi20s`     | 1    | 32-bit (two-word) immediate load; fetch delivers both words, decode emits one imm uop. See [../isa-density/spec.md](../isa-density/spec.md) |
+
+The `movi20`/`movmu`/`movml` density extensions are specified in full in the
+[isa-density triad](../isa-density/spec.md) (architectural spec, hardware-impl,
+software-impl); §6 of its hardware-impl details the uop-cracking that this
+section's general mechanism (§4.1, §5.1) makes natural.
 
 ### 4.2 Decode-time uop annotations
 
