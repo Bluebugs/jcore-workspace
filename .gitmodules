@@ -1,0 +1,3 @@
+[submodule "jcore-soc"]
+	path = jcore-soc
+	url = git@github.com:Bluebugs/jcore-soc.git
