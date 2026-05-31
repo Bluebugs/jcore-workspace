@@ -504,6 +504,25 @@ future 32-bit SH-2A instruction (disp12 moves, bit-ops, etc.). It is specified
 in detail in [`hardware-impl.md`](hardware-impl.md) §4 and flagged there as the
 item to prototype first.
 
+**Second-word fetch can itself fault (J32 + TLB).** Once address translation is
+enabled, word0 and word1 may sit on different pages, so the word1 fetch can miss
+the TLB / page-fault. Because word1 is the *interior* of one architectural
+instruction (not a separate instruction), the fault **must report word0's PC**,
+so that `RTE` re-executes the whole two-word instruction from the start (re-fetch
+both words) once the page is mapped. Reporting word1's address would return
+control into the middle of an instruction — word1 is immediate data, not a valid
+opcode — and decode it as garbage. This is the instruction-side analogue of the
+SIMD block-fetch hazard ([`../simd/spec.md`](../simd/spec.md) §6.5); the same
+"report the start-of-unit PC, restart atomically" rule applies, and it is the
+canonical x86-386 (1985) page-split-instruction behavior. The in-order
+implementation requirement (keep the exception PC at word0 until the instruction
+completes) is in [`hardware-impl.md`](hardware-impl.md) §4.2; the MMU-side
+contract and verification point are in
+[`../mmu/hardware-spec.md`](../mmu/hardware-spec.md) §5.1. This hazard does not
+exist without an MMU (J2/J32: physical fetch cannot page-fault; a bus error is
+fatal, no retry) and OoO handles it for free (the fetch buffer delivers both
+words as one decode action, §[hardware-impl 6.4](hardware-impl.md)).
+
 ### 4.6 `lea` displacement: sign-extended and unscaled (decided 2026-05-30)
 
 `lea`'s 12-bit displacement is **sign-extended and unscaled** (−2048..+2047,
@@ -594,6 +613,36 @@ This is exactly why SH-2A made only the *no-displacement* branches (`jsr/n`,
   imply an empty or wrapping range (e.g. `movmu` with `m = 15`) is **reserved /
   illegal-instruction**. The exact decode is defined in
   [`hardware-impl.md`](hardware-impl.md) §5.3.
+- **Second-word fetch fault (two-word instructions, J32 + TLB):**
+  `movi20`/`movi20s`/`lea`/disp12-`mov.l` fetch a second instruction word. If
+  word0 and word1 lie on different pages and the word1 fetch misses the TLB /
+  page-faults, the exception **must report word0's PC**, not word1's address, so
+  `RTE` re-executes the whole instruction from the start. The block carries no
+  committed architectural state mid-fetch (Rn is written only at completion,
+  PC advances by 4 only at completion), so restart-from-word0 is idempotent.
+  In-order: hold the exception/architectural PC at word0 until the instruction
+  retires (the fetch pointer advances to word1 independently —
+  [`hardware-impl.md`](hardware-impl.md) §4.2). OoO: the fetch buffer pairs the
+  words, so the fault is naturally attributed to the single instruction (§6.4).
+  No MMU ⇒ no such fault. See [`../simd/spec.md`](../simd/spec.md) §6.5 (same
+  rule for SIMD blocks) and [`../mmu/hardware-spec.md`](../mmu/hardware-spec.md)
+  §5.1.
+- **`movmu`/`movml` recoverable page fault mid-chain (J32 + TLB):** the in-order
+  "non-interruptible v1" model (§4.4, [`hardware-impl.md`](hardware-impl.md)
+  §5.5) defers *interrupts*, but a synchronous **page fault** on a stack access
+  (translated P0 stack on a TLB system) cannot be deferred. Because the chain has
+  a single commit point — `r15` and the register writes are not architecturally
+  visible until completion — the in-order core takes the fault, reports the
+  `movmu`/`movml` instruction's own PC (a single 16-bit instruction, so no
+  interior-word ambiguity), and `RTE` re-runs the entire transfer from `r15`'s
+  unchanged value. This is idempotent: loads/stores replay against the same
+  addresses with the same data. The instruction's full memory footprint
+  (≤ 8 longwords = ≤ 32 bytes, spanning at most two pages) must be able to be
+  simultaneously resident for forward progress — the standard "operands fit
+  together" guarantee any multi-access instruction requires. OoO needs none of
+  this: per-uop retirement gives precise partial completion ([`hardware-impl.md`](hardware-impl.md)
+  §6.2). No MMU ⇒ stack accesses cannot page-fault, so v1's interrupt-only model
+  is complete.
 - **`movi20` in a branch delay slot:** a 32-bit instruction in a delay slot is
   **illegal** (the delay-slot fetch machinery assumes a 16-bit successor). The
   existing `check_illegal_delay_slot` predecode is extended to flag it. See

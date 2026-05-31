@@ -161,6 +161,30 @@ modeled on the existing multi-cycle stall:
 > "fetch two words, write the second to Rn" instruction first and confirm PC and
 > `if_dr` behave, then layer the immediate assembly on top.
 
+**Faulting second-word fetch (mandatory on J32 + TLB).** When the word1 fetch
+crosses into a different page that misses the TLB or faults, the exception must
+restart the *whole* two-word instruction, which requires the
+**exception/architectural PC to remain at word0** even though the fetch pointer
+has advanced by 2 to grab word1. Concretely:
+
+- Step 0 advances the *fetch* pointer (`pc_inc`) to issue the word1 fetch but
+  must **not** advance the committed instruction PC (the value that becomes
+  `SPC` on exception entry) — that commit happens only at step 1 completion,
+  alongside the `Rn` writeback. In the J2 datapath this is the distinction
+  between `this.pc` (the instruction's PC) and `this.pc_inc` (next fetch); keep
+  `this.pc` at word0 across the hold cycle.
+- A fault signalled while the instruction is parked at step 0/1 (`ir0` holding
+  word0) therefore enters the standard fetch-fault path with `SPC = word0_PC`.
+  The handler is unaware this was a two-word instruction; `RTE` returns to
+  word0, the instruction re-decodes, and the second fetch is re-issued against
+  the now-mapped page. No `ir0` or microcode-step state needs saving — it is all
+  reconstructed by re-execution.
+- This is byte-for-byte the rule SIMD blocks use ([`../simd/spec.md`](../simd/spec.md)
+  §6.5) and the MMU side documents as a requirement and verification point
+  ([`../mmu/hardware-spec.md`](../mmu/hardware-spec.md) §5.1). On a core without
+  an MMU there is nothing to do — a physical-bus error on the word1 fetch is
+  fatal (no retry). OoO gets it free via the fetch buffer (§4.6, §6.4).
+
 ### 4.3 Immediate assembly
 
 The immediate is built today in `decode_table_simple.vhd` (the SIMPLE decoder)
@@ -431,6 +455,21 @@ field** — higher risk, more verification. Documented here only as a contingenc
   ~8 longword memory cycles of added latency — bounded and acceptable.
 - This guarantees `r15` and the register set are mutually consistent at every
   interruptible boundary, so no partial-state save/restore is needed.
+
+**Recoverable page fault mid-chain (J32 + TLB).** Holding off *interrupts* is
+not enough once the stack lives in translated memory: a synchronous page fault
+on one of the chain's accesses cannot be deferred. The single-commit-point
+design that makes the chain non-interruptible also makes it cleanly
+**restartable** — the fault is taken with `SPC` = the `movmu`/`movml`
+instruction's own PC, and because `r15` and the destination register/memory
+writes are not committed until the chain completes, `RTE` re-runs the entire
+transfer from the unchanged `r15`, replaying loads/stores against the same
+addresses with the same data (idempotent). The only obligation on the platform
+is that the instruction's whole footprint (≤ 32 bytes, ≤ 2 pages) be
+simultaneously mappable, so the restart eventually makes progress. No new
+hardware is needed beyond not committing `r15`/register writes early — which v1
+already requires. (See [`spec.md`](spec.md) §5; OoO instead gets precise partial
+completion per §6.2, and never restarts.)
 
 ### 5.6 `movmu`/`movml` on OoO — see §6.
 

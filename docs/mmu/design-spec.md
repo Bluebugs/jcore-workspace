@@ -193,6 +193,7 @@ The following are noted but not specified in detail in this document:
 - **I/O MMU:** Not addressed. If needed for DMA isolation, a separate IOMMU design is required.
 - **Cache coherency:** Inherited from existing J-Core SMP design. Multi-CPU cache coherence is orthogonal to MMU design.
 - **Fast parallel SMP resume:** The serial primary-then-secondary resume model is specified. A future fast-parallel variant requiring always-on persistent registers is deferred.
+- **Multi-word-unit instruction-fetch validation:** When this MMU is paired, on an in-order core, with any extension that adds a *multi-word instruction unit*, one extra hardware behavior is required: an instruction-fetch miss on an interior word must report the unit's **first-word PC** so the unit restarts cleanly rather than resuming inside an instruction. Two extensions trigger this — the SIMD prefix block ([../simd/spec.md §6.5](../simd/spec.md)) and the two-word density instructions `movi20`/`lea`/disp12 ([../isa-density/spec.md §5](../isa-density/spec.md)). The SIMD case uses prefix-time block-fetch validation; the two-word case just pins the architectural PC at word0. Both are specified in [hardware-spec.md §5.1](hardware-spec.md); J32-OOO gets the equivalent guarantee for free from its reorder buffer. Called out here because it is work the MMU + extension *combination* — not the MMU alone — incurs.
 
 ## 9. References
 

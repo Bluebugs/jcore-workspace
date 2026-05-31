@@ -644,6 +644,22 @@ Tier 0 vector memory and SIMD-control instructions are reproduced unchanged from
 
 A memory access instruction (VLD.Q, VST.Q, VGATHER.Q, VSCATTER.Q) used inside a SIMD block must be the **sole governed instruction** (prefix N=1) and must use a **SIMDV** (vertical) prefix. Violations raise slot-illegal at decode. This rule enables the **restart-from-prefix** fault-handling mechanism (§6.4) and makes the architecture transparently compatible with software-managed-MMU systems.
 
+This N=1 restriction is the **mandatory baseline** for every SIMD implementation, and is the form the in-order J32 enforces.
+
+##### Relaxed N>1 memory blocks (optional, J32-OOO and up)
+
+An out-of-order implementation that cracks the prefix and its governed group into a single ROB atomic-commit group (§6.1) can relax the N=1 restriction to allow a memory access to be combined with compute (and other memory ops) in an **N>1 SIMDV block**, because the same all-or-nothing group commit that handles interrupts also handles a mid-block memory fault: the fault prevents the group from committing, the group is flushed, and execution restarts from the prefix — idempotent for the whole block, exactly as for the N=1 case. An implementation may advertise this via the **`SIMD_RELAXED_MEM`** capability bit (feature register; Linux `HWCAP_JCORE_SIMD_RELAXED_MEM`, [software-impl.md §8.5](software-impl.md)).
+
+When `SIMD_RELAXED_MEM` is supported, the implementation must guarantee:
+
+- the cracked prefix+group commits atomically — stores in the group do **not** drain to memory / coherence, and post-increment / pre-decrement pointer updates do **not** commit, until the entire group commits;
+- a synchronous fault on any group member reports the **prefix PC** and flushes the group (no member retired);
+- the group's total memory footprint is bounded by N ≤ 4, so it fits the load/store queue.
+
+`SIMDH` (horizontal) memory access remains **slot-illegal** regardless of this capability — only the N>1 part of the baseline rule is lifted, not the SIMDV-only part.
+
+**Compatibility is one-way and fails safe.** A binary that uses N>1 memory blocks runs on any `SIMD_RELAXED_MEM` implementation, and on an implementation *without* the capability it raises slot-illegal at the first such block (§6.2) — a loud trap, never silent mis-execution. Conversely, every baseline (N=1) binary runs unchanged on a relaxed implementation. Because of this asymmetry the relaxed form is **not** emitted by default: a toolchain must gate it on the `SIMD_RELAXED_MEM` capability (a `-m`-flag / HWCAP check), so a J32+SIMD target never receives it. On J32-OOO the relaxation buys code density (fewer prefixes), not throughput — the OoO front end already issues a standalone `VLD.Q`/`VST.Q` independently of the compute block — so toolchains should weigh the density gain against the loss of in-order portability.
+
 #### 5.6.2 Non-temporal (NT) hint
 
 The SIMDV `rrr[0]` bit is the NT (Non-Temporal) flag. When set on a memory-access governed instruction, the implementation may bypass cache allocation (write-combining buffer for stores, streaming cache way for loads, or full cache bypass). Implementations without streaming-friendly cache pathways may treat NT as a no-op; the architectural result is identical. Prior art: Intel SSE MOVNTPS (1999), AltiVec dst/dstt (1996), PowerPC dcbt (1993).
@@ -692,7 +708,9 @@ Four instructions move scalar FP between **VFPUL** and the SH-4 FPU register fil
 
 External interrupts arriving while `SIMD_VAL = 1` or `V_LANE_VALID = 1` are held pending and delivered at the next architecturally-visible boundary (block exit, or VEXT/VINS retirement). Worst-case combined latency: 18 cycles (16 for a 4-instruction block + 2 for a VLNS+VEXT pair).
 
-Implementations may optionally support **mid-block interrupt with replay**: on interrupt, the block is abandoned, the saved PC is set to the prefix's PC, and the ISR is dispatched. Software is responsible for restart idempotency. This is permitted but not required.
+Implementations may optionally support **mid-block interrupt with replay**: on interrupt, the block is abandoned, the saved PC is set to the prefix's PC, and the ISR is dispatched. This is permitted but not required, and is the recommended low-latency policy for out-of-order implementations.
+
+On J32-OOO ([../ooo/j32ooo-spec.md](../ooo/j32ooo-spec.md)) the natural realization is to crack the prefix and its governed group into a single **ROB atomic-commit group** (the same mechanism the OoO core already uses for `CAS.L`, [../ooo/j32ooo-spec.md §10](../ooo/j32ooo-spec.md)): the group commits all-or-nothing, and an interrupt arriving before commit flushes the whole group, sets the saved PC to the prefix PC (recoverable from the group's ROB entries), and dispatches the ISR. Because nothing in the group has committed, restart-from-prefix is **idempotent for an arbitrary compute block**, not only the N=1 memory case of §6.4 — the architectural V/P0/MAC/VFPUL state was never updated, so re-execution from the prefix reads the same source operands. Stores in the group must not drain to memory/coherence and post-increment / pre-decrement pointer updates must not commit until the group commits. This makes mid-block interrupt latency equal to a branch-mispredict flush rather than waiting for the block (and its slowest governed op — e.g. a per-lane `FDIV`) to retire. Implementations choosing this policy should bound consecutive flush-restarts of the same block (or fall back to deferral after a threshold) to guarantee forward progress under a high-frequency interrupt source.
 
 ### 6.2 Slot-illegal exception
 
@@ -703,7 +721,7 @@ Raised by:
 - A VEXT/VINS instruction with `V_LANE_VALID = 0`.
 - Any instruction other than VEXT/VINS encountered with `V_LANE_VALID = 1`.
 - A SIMDV prefix with `rrr` value reserved at the implementation's tier (e.g. `rrr=110/111` on a Tier 1 implementation; `rrr∈{010..111}` on a Tier 0-only implementation).
-- A memory access instruction governed by a prefix with N > 1 or by a SIMDH prefix.
+- A memory access instruction governed by a prefix with N > 1 (unless the implementation advertises `SIMD_RELAXED_MEM`, §5.6.1) or by a SIMDH prefix (always).
 - A Tier 1 instruction (VABS, VPOPCNT, VUNPK4, VABSDIFF, VPACK, VMULSU, SIMDVS/SIMDVU saturation) on a Tier 0-only implementation.
 - A Tier 2 instruction (VCLMUL.D, VCRC32C.B) on an implementation without Tier 2 support.
 - VCLMUL.D outside `SIMDV.Q`, or VCRC32C.B outside `SIMDH<add>.B`.
@@ -731,6 +749,26 @@ VLD.Q, VST.Q, VGATHER.Q, VSCATTER.Q can raise standard SH-4 memory exceptions (a
 This restart is correct because the N=1 block contains only the memory access, with no committed compute. Loads are idempotent. Stores re-write the same data from an unchanged source register. Gathers and scatters re-execute per-lane (previously-completed lanes act as no-ops modulo memory ordering). Post-increment / pre-decrement modes commit only on success, so a faulting access does not advance the address register.
 
 This makes software-managed TLB systems transparently compatible with SIMD code. See [hardware-impl.md §3](hardware-impl.md) for the restart microarchitecture.
+
+### 6.5 Instruction-fetch faults inside a block (translated-memory implementations)
+
+§6.4 covers *data*-side faults on governed load/store instructions. A separate hazard exists on the *instruction* side once address translation is enabled: a SIMD block is a run of consecutive halfwords (the prefix plus up to four governed instructions, ≤ 10 bytes; or a `VLNS`+`VEXT`/`VINS` pair, 4 bytes — §3.2, §5.7), and that run may straddle a page boundary. If the prefix lies on one page and a later governed instruction lies on a different page that misses the TLB / faults on fetch, a naive implementation takes the instruction-fetch exception *after* the prefix has set the decode shadow latch (`SIMD_VAL = 1`, [hardware-impl.md §2](hardware-impl.md)). Exception entry clears the shadow latch ([hardware-impl.md §3.2](hardware-impl.md)); after the handler maps the page and `RTE`s to the faulting governed instruction, that instruction would decode with `SIMD_VAL = 0` — i.e. as an ordinary scalar SH instruction operating on R-registers rather than lane-wise on V-registers. **Silent corruption.**
+
+**Architectural rule (mandatory contract).** *Every synchronous fault taken with a SIMD block (or `VLNS` pair) open reports the prefix PC.* This generalizes the restart-from-prefix rule of §6.4 from data faults to instruction-fetch faults. The block carries no committed architectural state until it retires, so reporting the prefix PC always yields a correct, idempotent restart: the handler is SIMD-unaware, `RTE` returns to the prefix, and the block re-opens and re-executes from the beginning. The restart is correct only when the handler *fixes* the fault and retries (TLB miss / page fault); a non-recoverable instruction-fetch fault (e.g. a permission violation with no fixup) terminates the thread and never returns, so no resumption is required.
+
+**Scope.** This hazard arises only when **both** (a) translation is enabled (MMU present, `MMUCR.AT = 1`) and the block sits in a translated segment (SH-4 P0/P3), **and** (b) the block spans a page boundary. A ≤ 10-byte block crosses at most one boundary at any supported page size (≥ 4 KB; the J-Core default is 16 KB — see [../mmu/design-spec.md §3.3](../mmu/design-spec.md)), and the prefix's own page is already known-good because the prefix was fetched from it. Implementations without an MMU (e.g. J2-class) and code running untranslated (P1/P2 kernel space) cannot raise it; a physical-bus error on an untranslated fetch is fatal (no retry) and therefore poses no resumption hazard.
+
+**Resolution by product point.** The mandatory contract above is satisfiable three ways, matching the three implementation styles:
+
+| Implementation | Mechanism |
+|---|---|
+| **J2 / J32 without MMU** | Nothing required — no translation means no recoverable instruction-fetch fault. |
+| **J32 + TLB (in-order)** | **Prefix-time block-fetch validation** (below). |
+| **J32-OOO** | The ROB atomic-commit group of §6.1 already reports the prefix PC on any flush, so an instruction-fetch fault on a governed uop flushes the group and restarts from the prefix with no extra mechanism. |
+
+**Prefix-time block-fetch validation (in-order J32 + TLB).** The block length *N* is known at prefix decode (the `NN` field, §3.2), so the address of the block's last halfword, `end = prefix_PC + 2·N`, is known immediately. When `end` lies in a different page than `prefix_PC`, the implementation probes the fetch-translation of `end`'s page *before any governed instruction issues*, using the prefix's otherwise-idle memory/MA slot (the prefix performs no compute and no data access). A miss or fault on that probe is raised against the **prefix PC** (clean restart; the block never opens). Once the probe succeeds, every governed-instruction fetch in the block is guaranteed to translate, so a mid-block instruction-fetch fault becomes impossible. The same-page common case (the overwhelming majority at a 16 KB page — a ≤ 10-byte block crosses a boundary with probability ≈ 10/16384) needs only a page-number comparison and no probe. The `VLNS`+`VEXT`/`VINS` pair (§5.7) is validated identically by probing `prefix_PC + 2`. See [../mmu/hardware-spec.md §5.1](../mmu/hardware-spec.md) for the MMU-side requirement and verification point.
+
+**Prior art.** The Intel 386 (1985) validates that an instruction whose encoding spans a page boundary is fully fetchable — faulting against the instruction's starting address — before it executes. A SIMD block is architecturally a single atomic fetch unit, so validating its entire fetch extent at the prefix is the same established technique.
 
 ---
 
@@ -999,7 +1037,7 @@ Combined named-algorithm count across Tiers 0+1+2: ≈ 70+ algorithms in product
 Implementations are free to pick any subset `{Tier 0} ∪ Tier_set ⊆ {Tier 1, Tier 2}` and to advertise their support via the implementation feature register (§16). Tier 3 is excluded until specified. Suggested product mappings:
 
 - **J32:** Tier 0+1 (ML, signal processing, analytics, video).
-- **J32-OOO:** Tier 0+1 (the OoO spec cracks the prefix; same SIMD coverage as J32).
+- **J32-OOO:** Tier 0+1 (the OoO spec cracks the prefix; same SIMD coverage as J32). May additionally advertise the optional `SIMD_RELAXED_MEM` capability (§5.6.1), which lifts the N=1 memory-block restriction; this is a one-way-compatible microarchitectural feature, not a tier.
 - **J32-FM:** Tier 0+1+2 (adds crypto, FEC, storage, post-quantum).
 - **J64:** Tier 0+1+2+3 (Tier 3 yet to be specified).
 
@@ -1018,7 +1056,7 @@ The following are deferred:
 5. **Tier 3 (256-bit).** J64 wide-vector extensions. Whether Tier 0/1/2 instructions transparently promote to 256-bit or whether Tier 3 adds distinct opcodes is the principal open question.
 6. **Tier 2 multi-stream / vertical-parallel CRC.** Currently single-stream. A vertical-SIMD CRC variant under a SIMDV prefix could exploit the upper 96 bits of the accumulator register for parallel streams.
 7. **GHASH reduction constants.** Well-known (Gueron-Kounavis 2009); package as a header constant table for library reuse.
-8. **HWCAP bit allocation.** A new `HWCAP_JCORE_GF2` (and per-tier feature bits) must be assigned in the jcore Linux port. See [software-impl.md §8.8](software-impl.md).
+8. **HWCAP bit allocation.** A new `HWCAP_JCORE_GF2` (and per-tier feature bits), plus the microarchitectural-capability bit `HWCAP_JCORE_SIMD_RELAXED_MEM` (§5.6.1), must be assigned in the jcore Linux port. See [software-impl.md §8.5](software-impl.md).
 
 ---
 

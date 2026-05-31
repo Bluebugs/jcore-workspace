@@ -200,7 +200,7 @@ Same shape: intrinsics defined in `llvm/include/llvm/IR/IntrinsicsJCore.td`, low
 
 ### 4.4 Feature detection at runtime
 
-Linux exposes CPU features via `/proc/cpuinfo` and the auxiliary vector (`AT_HWCAP`). Allocate one HWCAP bit per SIMD tier in the J-core Linux port (TBD; tracked in [spec.md §11](spec.md) and §8.8 below):
+Linux exposes CPU features via `/proc/cpuinfo` and the auxiliary vector (`AT_HWCAP`). Allocate one HWCAP bit per SIMD tier in the J-core Linux port, plus one microarchitectural-capability bit for the relaxed-memory feature (TBD; tracked in [spec.md §11](spec.md) and §8.5 below):
 
 ```c
 #include <sys/auxv.h>
@@ -213,6 +213,9 @@ bool has_jcore_simd_int(void) {       /* Tier 1 */
 }
 bool has_jcore_simd_gf2(void) {       /* Tier 2 */
     return (getauxval(AT_HWCAP) & HWCAP_JCORE_SIMD_GF2) != 0;
+}
+bool has_jcore_simd_relaxed_mem(void) {   /* N>1 memory blocks; orthogonal to tier */
+    return (getauxval(AT_HWCAP) & HWCAP_JCORE_SIMD_RELAXED_MEM) != 0;
 }
 ```
 
@@ -529,9 +532,20 @@ For variants shipping Tier 2 in the iterative (Tier C) hardware mode (see [hardw
 New HWCAP bits must be defined in `arch/sh/include/uapi/asm/hwcap.h` (or J-core-specific equivalent):
 
 ```c
-#define HWCAP_JCORE_SIMD       (1UL << X)   /* Tier 0; bit TBD */
-#define HWCAP_JCORE_SIMD_INT   (1UL << Y)   /* Tier 1; bit TBD */
-#define HWCAP_JCORE_SIMD_GF2   (1UL << Z)   /* Tier 2; bit TBD */
+#define HWCAP_JCORE_SIMD             (1UL << X)   /* Tier 0; bit TBD */
+#define HWCAP_JCORE_SIMD_INT         (1UL << Y)   /* Tier 1; bit TBD */
+#define HWCAP_JCORE_SIMD_GF2         (1UL << Z)   /* Tier 2; bit TBD */
+#define HWCAP_JCORE_SIMD_RELAXED_MEM (1UL << W)   /* N>1 memory blocks; bit TBD */
+```
+
+The first three bits are **tier** bits (additive feature levels). `HWCAP_JCORE_SIMD_RELAXED_MEM` is a **microarchitectural-capability** bit, orthogonal to tier: it signals that the core lifts the N=1 memory-block restriction ([spec.md §5.6.1](spec.md)), as J32-OOO may. It is *not* implied by any tier and must be tested independently.
+
+A binary or library may only emit N>1 SIMDV memory blocks when this bit is set; otherwise such a block raises slot-illegal on the running core (the feature is one-way compatible — see [spec.md §5.6.1](spec.md)). Toolchains gate the relaxed form behind a `-m` flag plus this runtime check:
+
+```c
+static inline int jcore_simd_relaxed_mem(void) {
+    return (getauxval(AT_HWCAP) & HWCAP_JCORE_SIMD_RELAXED_MEM) != 0;
+}
 ```
 
 Bit numbers must be coordinated with the J-core Linux port; tracked as an open question in [spec.md §11](spec.md).
