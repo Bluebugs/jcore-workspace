@@ -1,4 +1,4 @@
-# Software Implementation: `movi20` and `movmu`/`movml`
+# Software Implementation: `movi20`, `movmu`/`movml`, `lea`, and the delay-slot-free branches
 
 **Status:** Draft / Proposed
 **Companion to:** [`spec.md`](spec.md) (architecture), [`hardware-impl.md`](hardware-impl.md) (RTL)
@@ -51,7 +51,18 @@ movmu.l  Rm, @-r15       ; 0100 mmmm 1111 0000
 movmu.l  @r15+, Rn       ; 0100 nnnn 1111 0100
 movml.l  Rm, @-r15       ; 0100 mmmm 1111 0001
 movml.l  @r15+, Rn       ; 0100 nnnn 1111 0101
+lea      @(disp,Rm), Rn  ; 0011 nnnn mmmm 0001  1010 dddddddddddd   (NEW; not SH-2A)
+mov.l    @(disp12,Rm),Rn ; 0011 nnnn mmmm 0001  0110 dddddddddddd   (SH-2A; GOT-slot load)
+jsr/n    @Rm             ; 0100 mmmm 0100 1011                     (SH-2A; no delay slot)
+rts/n                    ; 0000 0000 0110 1011                     (SH-2A; no delay slot)
+rtv/n    Rm              ; 0000 mmmm 0111 1011                     (SH-2A; Rm→R0 + return)
 ```
+
+`movi20`/`movi20s`/`movmu`/`movml`, the disp12 `mov.l`, and
+`jsr/n`/`rts/n`/`rtv/n` are already known to `gas` under `-isa=sh2a`; the work is
+enabling them on the J32 target. **`lea` is a new mnemonic** — `gas` has no SH-2A
+`lea`, so it needs a fresh opcode-table entry (`0011nnnnmmmm0001`/word1-minor
+`1010`, signed unscaled 12-bit `disp`, range −2048..+2047).
 
 ### 2.2 Encoding/assembly rules
 
@@ -62,8 +73,21 @@ movml.l  @r15+, Rn       ; 0100 nnnn 1111 0101
   *or* document that they are dropped (match SH-2A `gas` behavior exactly).
 - `movmu`/`movml`: the base must be literally `@-r15` / `@r15+`; reject other
   base registers (these forms are stack-only by definition).
-- Forbid `movi20`/`movi20s` in a delay slot (assembler diagnostic), mirroring
-  the hardware illegal-slot rule ([`hardware-impl.md`](hardware-impl.md) §4.5).
+- `lea`: `disp` is a **signed, unscaled** 12-bit displacement;
+  `−2048 ≤ disp ≤ 2047`, out-of-range is an assembler error (the compiler picks
+  a different sequence — §3.5). `Rm` is any GPR. Accept a relocation operand
+  (`R_SH_GOTOFF`/`R_SH_GOTOFF12` — see §3.5) in the `disp` position for PIC.
+  The disp12 `mov.l` (GOT-slot load) takes an **unsigned ×4-scaled** 12-bit
+  displacement (`0 ≤ disp ≤ 16380`, longword-aligned) — note the *different*
+  displacement semantics from `lea`, matching the hardware ([`spec.md`](spec.md)
+  §3.4 / §4.6); the assembler must not share one disp parser between them.
+- Forbid `movi20`/`movi20s`/`lea`/disp12 forms in a delay slot (assembler
+  diagnostic), mirroring the hardware illegal-slot rule
+  ([`hardware-impl.md`](hardware-impl.md) §4.5) — all are 32-bit.
+- `jsr/n`/`rts/n`/`rtv/n`: 16-bit, and `gas` must mark them as **non-delayed**
+  (no delay slot to fill or pad) — unlike `jsr`/`rts`. The branch-in-delay-slot
+  diagnostic applies to them as to any branch. `rtv/n` takes one GPR operand
+  (`Rm`); `rts/n` takes none.
 
 ### 2.3 Target gating
 
@@ -142,6 +166,84 @@ This is where the regalloc interaction matters:
 off until the core feature ships. Document that the resulting binaries require a
 density-enabled core.
 
+### 3.5 `lea` and disp12 `mov.l` for PIC/GOT codegen
+
+These help **only** position-independent code (`-fPIC`/`-fpic`), where `r12` is
+the GOT pointer (`PIC_OFFSET_TABLE_REGNUM`). Two distinct patterns, two distinct
+instructions:
+
+- **GOTOFF (local symbol address)** — today `mov.l .Lgotoff,r0; add r12,r0`
+  (a literal + an add, clobbering `R0`). With `lea`:
+
+  ```
+  lea  @(sym@GOTOFF, r12), rN        ; rN = &sym, one instruction, no R0, no literal
+  ```
+
+  Emit a `RELOC_SH_GOTOFF12` (new) fixup in the `lea` `disp` field. Because the
+  field is **signed 12-bit, byte-granular** (±2048), this fires only when the
+  symbol's GOT-relative offset fits; larger offsets fall back to the existing
+  `movi20`/`add`/literal path (and would overflow any 12-bit form regardless —
+  [`spec.md`](spec.md) §4.6). Small-data / hot-symbol layout near the GOT base
+  maximises hits.
+
+- **GOT-slot load (external/preemptible symbol address)** — today
+  `mov.l .Lslot,r0; mov.l @(r0,r12),rN` (a literal + an indexed load via `R0`).
+  With the adopted disp12 `mov.l`:
+
+  ```
+  mov.l @(sym@GOT, r12), rN          ; rN = &sym, one instruction, no R0, no literal
+  ```
+
+  Emit a `RELOC_SH_GOT12` (new) fixup; the field is **unsigned ×4 (4095 slots)**,
+  so it covers essentially any GOT. Beyond that, fall back to the `R0` sequence.
+
+Both replace a 2-instruction-plus-literal idiom with one 4-byte instruction and,
+critically, **free `R0`** — which on SH is the implied index/operand for many
+ops, so PIC prologues and GOT-heavy code see register-pressure relief beyond the
+raw byte count. The GOT pointer register stays `r12` (no ABI change — these take
+an explicit base; [`spec.md`](spec.md) §1.3).
+
+**Prior art to follow:** the GOT-base + displacement addressing model is the
+classic PIC idiom — MIPS `$gp`-relative `lw` (o32, ≤1995), PowerPC `r2` TOC,
+x86 `EBX`-relative `lea`/`mov`, and SH's own `@(disp,GBR)` mode — all pre-2006
+([`spec.md`](spec.md) §1.4 / [../glossary.md §2](../glossary.md)). The SH novelty
+is only carrying it in a 32-bit SH-2A-format instruction.
+
+### 3.6 `jsr/n`/`rts/n`/`rtv/n` — emitting the delay-slot-free forms
+
+Stock GCC does not emit the `/N` forms (confirmed: every `rts` it produces has a
+delay slot, padded with `nop` when unfillable). The realized win
+([`spec.md`](spec.md) §3.5: ~0.8 % of instructions on CSiBE) needs a small
+machine-specific pass:
+
+- **Where:** run it **after `dbr_schedule`** (the delay-slot scheduler), so it
+  only ever fires on the slots `dbr_schedule` *left as `NOP`* — i.e. the
+  unfillable residue. Filling is `dbr_schedule`'s job (it already wins 80.6 % of
+  indirect-call slots); this pass only mops up what it could not fill, and does
+  so by *removing* the slot rather than filling it. (The `gcc-sh-monitor`
+  `peephole-delay-slot-jsr-fill.md` negative result is exactly why we remove
+  rather than try harder to fill.)
+- **Rewrite rules:**
+  - `jsr @Rm` + `nop` slot → `jsr/n @Rm` (drop the `nop`).
+  - `rts` + `nop` slot → `rts/n` (drop the `nop`).
+  - `mov Rm,r0` ; `rts` (+ slot) → `rtv/n Rm` — fold the return-value move into
+    the return when the function's result is in `Rm ≠ r0` at the epilogue. (If the
+    result is already in `r0`, plain `rts/n` suffices.)
+- **Do *not* touch `bra`/`braf`/`jmp`** — there is no slot-free unconditional
+  branch ([`spec.md`](spec.md) §4.8), so their `NOP`s stay. The pass covers only
+  `jsr`/`rts`.
+- **CFI / unwind:** `jsr/n`/`rts/n` change *where* the return address points (no
+  slot skipped, §5) but not the frame; epilogue CFI is unaffected. `rtv/n`'s
+  `R0 ← Rm` is a normal scratch write, no CFI.
+- **Gating:** behind the same `-m32-density` flag (§2.3 / §3.4).
+
+This is the most tractable of the density compiler tasks — a local
+peephole/rewrite over already-scheduled code — and unlike the others needs no new
+RTL capability beyond the decode mapping ([`hardware-impl.md`](hardware-impl.md)
+§4A). Prior art for the optimization itself: choosing the non-delayed branch
+encoding to avoid a wasted slot is standard for ISAs offering both (e.g. MIPS
+non-`/likely` vs `/likely` branch selection), all pre-2006.
+
 ---
 
 ## 4. ABI considerations
@@ -176,6 +278,17 @@ density-enabled core.
   instruction-length logic for the J32 target knows the `0000 nnnn iiii 000x`
   forms are 4 bytes (otherwise breakpoints/stepping land mid-instruction). This
   is the software mirror of the hardware delay-slot/length concern.
+- **`lea` / disp12 `mov.l`:** likewise 4-byte (`0011 nnnn mmmm 0001` prefix);
+  the same J32 instruction-length table entry must mark the whole group as 4
+  bytes. `lea` needs no CFI (it writes a scratch GPR, touches no frame state);
+  the disp12 `mov.l` is an ordinary load for debug purposes.
+- **`jsr/n`/`rts/n`/`rtv/n`:** 2-byte, **no delay slot** — the debugger's
+  control-flow model must know these transfer *without* executing a successor
+  (unlike `jsr`/`rts`). Single-stepping over `jsr/n` lands in the callee; the
+  return address (`PR`) is the *next* instruction (`call+2`), not `call+4` — GDB's
+  SH frame/return logic must select the right offset per form or backtraces across
+  a `/N` call frame are off by one instruction. `rtv/n` additionally sets `R0`
+  before returning; stepping shows the value in `r0` after the step.
 
 ---
 
@@ -196,6 +309,21 @@ Complements the RTL/sim tests in [`hardware-impl.md`](hardware-impl.md) §8.
 4. **Unwind tests:** throw/catch or backtrace across a `movmu`-saved frame;
    assert correct unwinding and register recovery.
 5. **Interop:** link a density-built object against a baseline object; run.
+6. **PIC tests (`-fPIC`):** small shared objects exercising (a) a local-symbol
+   address — assert `lea @(sym@GOTOFF,r12),rN` emitted, no `R0` clobber, no
+   literal; (b) an external-symbol address — assert disp12
+   `mov.l @(sym@GOT,r12),rN`; (c) range overflow — assert clean fallback to the
+   `movi20`/literal path; (d) execute the `.so`, confirm correct symbol
+   resolution against a dynamic linker. Assembler round-trip the
+   `R_SH_GOT12`/`R_SH_GOTOFF12` relocations.
+7. **Delay-slot-free tests:** (a) functions whose `jsr`/`rts` slots GCC leaves as
+   `NOP` — assert the §3.6 pass emits `jsr/n`/`rts/n` and drops the `nop`;
+   (b) a function returning a value computed in `Rm ≠ r0` — assert `rtv/n Rm`;
+   (c) a function whose result is already in `r0` — assert plain `rts/n` (not
+   `rtv/n`); (d) `bra`/`braf` NOP cases — assert they are **left unchanged** (no
+   `bra/n`); (e) execution: call/return across `/N` lands correctly and the
+   successor instruction is not skipped; (f) backtrace across a `jsr/n` frame
+   unwinds with the correct return offset (§5).
 
 ---
 
@@ -230,7 +358,14 @@ against the upper bound; (b) the gcc-sh-monitor dashboard (CSiBE -Os, CoreMark
 `.text`, BusyBox badges) is the natural CI home for tracking it over time;
 (c) a BusyBox `.text`-only number awaits a big-endian SH `ld` (Debian's sh4
 binutils ship only little-endian SH emulations, which blocks the BusyBox
-partial-link — CSiBE sidesteps this by never linking).
+partial-link — CSiBE sidesteps this by never linking);
+(d) **`lea`/disp12 PIC measurement is not yet done.** The §7 recompile is
+*non-PIC*, so it says nothing about `lea`. Quantifying it needs a separate
+`-O2 -fPIC` differential recompile (baseline vs. `lea`+disp12-enabled GCC),
+counting GOTOFF/GOT idioms replaced and the net `.text` delta on a
+shared-library-shaped corpus (the GOT-heavy parts of CSiBE, or a `.so`-built
+BusyBox). Until that runs, the `lea` benefit in [`spec.md`](spec.md) is
+**qualitative only** — do not quote a percentage.
 
 ---
 
@@ -251,6 +386,17 @@ A pragmatic order that front-loads the cheap, decisive checks:
 6. **GCC `movi20`** with the singleton heuristic (§3.1) — highest payoff but the
    most subtle (easy to regress); do it last, gated on the measurement harness
    (§7) so regressions are caught immediately.
+7. **`lea` + disp12 `mov.l` for PIC** (§3.5) — independent of the above and of
+   each other's payoff; gated only on the new `gas` `lea` opcode entry (§2) and
+   the `RELOC_SH_GOT12`/`GOTOFF12` relocations. Land the two relocations + GCC
+   PIC patterns, then run the §7(d) `-fPIC` differential to confirm the win
+   before quoting any number. Lower priority than 1–6 unless PIC/shared-library
+   density is a near-term target.
+8. **Delay-slot-free `/N` pass** (§3.6) — the most tractable compiler task and
+   fully independent of 1–7: a post-`dbr_schedule` peephole, no new immediate
+   forms or relocations, RTL cost is decode-only ([`hardware-impl.md`](hardware-impl.md)
+   §4A). Good early win once binutils (step 2) knows the mnemonics; re-measure
+   against the 0.80 %-of-instructions opportunity.
 
 This order means each step is independently testable and the measurement harness
 (§7) exists before the subtle `movi20` heuristic is tuned.

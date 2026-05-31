@@ -1,4 +1,4 @@
-# Hardware Implementation: `movi20` and `movmu`/`movml`
+# Hardware Implementation: `movi20`, `movmu`/`movml`, `lea`, and the delay-slot-free branches
 
 **Status:** Draft / Proposed
 **Companion to:** [`spec.md`](spec.md) (architecture), [`software-impl.md`](software-impl.md) (toolchain)
@@ -15,7 +15,10 @@ density instructions. It is organized as:
 - §2 — Verified facts about the current RTL (with citations) that the design
   builds on.
 - §3 — Where each change lands in the file/generator structure.
-- §4 — `movi20` implementation (second-word fetch + immediate path).
+- §4 — `movi20` implementation (second-word fetch + immediate path), plus §4.7
+  `lea` and the SH-2A disp12 loads, which ride the same second-word fetch.
+- §4A — `jsr/n`/`rts/n`/`rtv/n` (reuse the existing non-delayed-branch redirect;
+  the lowest-risk item, no fetch or sequencer change).
 - §5 — `movmu`/`movml` in-order implementation (shared microcode chain).
 - §6 — OoO implementation (uop cracking).
 - §7 — Datapath/regfile impact.
@@ -110,6 +113,10 @@ guarantees against later drift.
 |---|---|---|
 | New opcodes → microcode entry addresses | `decode/gen` input (`.ods`/TOML) → `decode_body.vhd predecode_rom_addr`, `decode_table_*.vhd` | yes (regenerate) |
 | New `immval_t` form `IMM_S_20` (+ `IMM_S_20_8` for `movi20s`) | `decode_pkg.vhd` enum + generated imm builder | yes |
+| `lea`/disp12 group opcodes (`0011nnnnmmmm0001` prefix) → microcode entries | `decode/gen` input → `predecode_rom_addr` group `x"3"` | yes (regenerate) |
+| New `immval_t` forms `IMM_S_12_0` (`lea`, unscaled signed) + `IMM_U_12_2` (disp12 `mov.l`, ×4) | `decode_pkg.vhd` enum + generated imm builder | yes |
+| `lea` ALU add to write port (no mem); disp12 `mov.l` = add → mem read → Rn | reuse existing ALU/mem datapath; microcode rows only | yes (regenerate) |
+| `jsr/n`/`rts/n`/`rtv/n` opcodes → microcode entries (reuse `bt`/`bf` non-delayed redirect + existing call/return datapath; no new fetch/field) | `decode/gen` input rows | yes (regenerate) |
 | Second-word fetch sequencing | `core/cpu.vhd` fetch FSM + new control field | **hand RTL + generator field** |
 | Word1 latch + 20-bit immediate assembly | `core/datapath.vhd` (or decode EX imm path) | hand RTL |
 | `movmu`/`movml` shared microcode chain | `decode/gen` input rows | yes (regenerate) |
@@ -194,6 +201,126 @@ Trivial relative to in-order: the OoO fetch unit (OoO §4.1, already gaining a
 fetch buffer) delivers both words to decode in one decode action; decode emits
 **one uop** carrying the assembled 32-bit immediate. No microcode chain, no
 stall. The immediate assembly logic (§4.3) is shared.
+
+### 4.7 `lea` and the SH-2A disp12 loads — in-order implementation
+
+`lea` and the adopted disp12 `mov.l` ([`spec.md`](spec.md) §3.4) are the
+**cheapest** members of this bundle: they reuse the §4.2 second-word fetch
+unchanged and add **no new datapath** — only microcode rows and one new
+immediate form. Both are two-word, so they share `movi20`'s shape (fetch word0,
+issue word1 fetch, hold one cycle, complete on word1).
+
+**`lea @(disp,Rm),Rn` — 2 micro-steps:**
+
+```
+step 0 (instr_seq_zero):  capture word0 (n, m, group=0011..0001);
+                          issue second fetch (PC += 2); hold one cycle
+step 1:                   word1 in if_dr; disp = sign_extend_12(word1[11:0]);
+                          ALU: Rn = Rm + disp  (Rm via read port, disp via imm mux);
+                          write Rn (Z port); PC += 2 (total +4)
+```
+
+- **No memory access.** `lea` is just an ALU add of a register and an immediate,
+  writing one register — the same datapath as `add #imm,Rn` except the base is an
+  arbitrary `Rm` (read port `num_x`) instead of `Rn`, and the immediate is the
+  sign-extended 12-bit `disp`. The existing add path and Z write port suffice.
+- **New immediate form `IMM_S_12_0`**: like the existing `imms_12_1`
+  (`decode_table_simple.vhd`) but sourced from **word1** rather than `op.code`,
+  and **unscaled** (no `<<` ; [`spec.md`](spec.md) §4.6). The immediate
+  mux gains a word1-sourced input — the same plumbing §4.3 adds for `movi20`,
+  reused.
+
+**`mov.l @(disp12,Rm),Rn` (GOT-slot load) — 3 effective steps:** add
+`Rm + (disp << 2)` (new immediate form `IMM_U_12_2`: unsigned, ×4, from word1),
+drive a longword memory read at that address (existing `mem.addr_sel` load path),
+write `Rn`. This is an ordinary `mov.l @(...),Rn` whose address comes from the
+12-bit word1 displacement instead of a 4-bit `op.code` displacement — the memory
+and writeback datapath is unchanged; only the address-immediate source is new.
+Normal `mov.l` address-error/alignment behaviour applies ([`spec.md`](spec.md) §5).
+
+**Decode-side:** predecode the `0011nnnnmmmm0001` prefix (group `x"3"` of
+`predecode_rom_addr`) to the disp12 microcode entries, dispatching on word1's
+high nibble (minor `1010`=`lea`, `0110`=`mov.l` load, etc.). Extend
+`check_illegal_delay_slot` to flag the whole group (32-bit, illegal in a delay
+slot — §4.5). As with `movi20`, confirm the predecode boolean-minimization does
+not perturb neighbouring `0011` (arithmetic-group) entries — covered by the
+differential decode sweep (§8.1).
+
+> **Note — second-word fetch is the shared prerequisite.** `lea` and the disp12
+> loads add essentially nothing the §4.2 fetch work does not already build. Once
+> `movi20`'s second fetch is validated, these are microcode-row + immediate-form
+> changes only. They are the lowest-risk way to *amortise* the §4.2 effort across
+> more than one instruction.
+
+---
+
+## 4A. `jsr/n` / `rts/n` / `rtv/n` — delay-slot-free branches
+
+These are the **cheapest** instructions in the bundle: 16-bit, no second-word
+fetch, no new immediate form, no microcode chain, no new sequencer state. They
+reuse two mechanisms the core already has — the **non-delayed-branch redirect**
+(from `bt`/`bf`) and the **call/return datapath** (from `jsr`/`rts`) — and only
+decouple them.
+
+### 4A.1 The mechanism already exists
+
+SH's `bt`/`bf` are **non-delayed**: on a taken `bt`/`bf` the front-end squashes
+the sequentially-fetched successor and redirects fetch to the target, with no
+delay-slot instruction issued. (`bt/s`/`bf/s` are the delayed variants.) So the
+core already contains the "take a branch, do not execute a successor" path. The
+`/N` branches are that path applied to call/return:
+
+| Instruction | Reuses redirect of | Plus datapath of | Net new logic |
+|---|---|---|---|
+| `jsr/n @Rm` | `bt`/`bf` (taken, no slot) | `jsr @Rm` (`PR ← return; PC ← Rm`) | predecode mapping only |
+| `rts/n`     | `bt`/`bf` (taken, no slot) | `rts` (`PC ← PR`) | predecode mapping only |
+| `rtv/n Rm`  | `bt`/`bf` (taken, no slot) | `rts` + a GPR→R0 move | `R0 ← Rm` write before redirect |
+
+`jsr` already computes the link value and writes `PR`; `rts` already drives
+`PC ← PR`. The *only* difference for the `/N` forms is that **no delay slot is
+issued** — which is exactly the `bt`/`bf` behaviour. `rtv/n` adds one register
+read (`Rm`) routed to the `R0` write port before the redirect (the existing
+register-move datapath).
+
+### 4A.2 In-order (J2/J32)
+
+- **Predecode:** map `0100mmmm01001011` (`jsr/n`), `0000000001101011` (`rts/n`),
+  `0000mmmm01111011` (`rtv/n`) to microcode entries that assert the
+  **non-delayed taken-branch** control (the `bt`/`bf` redirect select) together
+  with the link/return datapath. No new control field — both signals already
+  exist; this is a new *combination* in the decode table.
+- **`PR` value:** `jsr/n` writes `PR =` address of the instruction *after* the
+  `jsr/n` (no slot skipped). The link adder that `jsr` uses for `PC+4` (skip
+  slot) selects `PC+2` here. This is one mux input on the existing PR-link path,
+  the only genuinely new datapath detail and the item to check in sim.
+- **`rtv/n`:** read `Rm` → `R0` write port, then redirect to `PR`. Schedule the
+  `R0` write and the redirect so they do not collide with the W/Z write-port
+  rule (§2 CRITICAL constraint) — `rtv/n` writes only `R0` (one port), so this is
+  trivial, but confirm the redirect does not also need a same-cycle write.
+- **No delay slot:** because the redirect is the `bt`/`bf` (non-delayed) select,
+  the successor is squashed by the existing mechanism. Nothing new.
+
+### 4A.3 Illegal-in-delay-slot
+
+A `/N` branch in another branch's delay slot is illegal — the **branch-in-slot**
+rule, already enforced by `check_illegal_delay_slot` for every branch. Add the
+three encodings to that predecode check (independent of the 32-bit-in-slot rule
+used for `movi20`/`lea`).
+
+### 4A.4 OoO (J32-OoO)
+
+Simpler than in-order: a non-delayed branch has *no* delay-slot instruction to
+fetch, predict around, or track, so it is strictly easier than the delayed forms
+the OoO front-end already handles. `jsr/n` is a branch-with-link uop (writes the
+renamed `PR`); `rts/n`/`rtv/n` are return uops (predicted via the return-address
+stack, OoO §6); `rtv/n` carries an extra `R0 ← Rm` move uop or folds the move
+into the return uop's writeback. No delay-slot fixup, which removes a special
+case the delayed `jsr`/`rts` need.
+
+> **Lowest-risk, do-first candidate.** Unlike `movi20` (new fetch) or
+> `movmu`/`movml` (sequencing), the `/N` branches need no new hardware capability
+> — only a decode-table combination of two existing controls plus one PR-link mux
+> input. They can land independently of the second-word-fetch work.
 
 ---
 
@@ -361,20 +488,53 @@ single immediate-writing uop. Requires the fetch unit to present both words;
 since OoO Phase 1 adds a fetch buffer (OoO §6.1), word pairing is naturally
 handled there.
 
+### 6.5 `lea` / disp12 load → 1 uop
+
+Both crack to a single uop, the simplest case:
+
+- `lea` → one ALU uop `Rn = Rm + disp` (renamed source `Rm`, fresh physical
+  `Rn`); no memory, no `R0`, fully pipelined alongside other ALU uops.
+- disp12 `mov.l` → one load uop `Rn = mem[Rm + (disp<<2)]`, identical to any
+  other load uop for scheduling, disambiguation, and fault handling (precise via
+  the ROB, §6.2). Word pairing handled by the same fetch buffer as `movi20`
+  (§6.4).
+
+These add no new uop *types* — `lea` is an existing add-immediate uop with a
+12-bit immediate; the disp12 load is an existing load uop with a 12-bit address
+offset. The only front-end change is delivering the second word, already done
+for `movi20`.
+
+### 6.6 `jsr/n` / `rts/n` / `rtv/n` on OoO — see §4A.4
+
+Covered with the in-order discussion in §4A.4: a non-delayed branch is *simpler*
+for the OoO front-end than the delayed forms (no delay-slot instruction to fetch
+or track). `jsr/n` = branch-with-link uop; `rts/n`/`rtv/n` = return uops via the
+return-address stack; `rtv/n` carries an extra `R0 ← Rm` move. No new uop type.
+
 ---
 
 ## 7. Datapath / register-file impact summary
 
-| Resource | `movi20` | `movmu`/`movml` (in-order) | `movmu`/`movml` (OoO) |
-|---|---|---|---|
-| Register read ports | 0 (imm only) | 1/cycle (save) | 1/uop |
-| Register write ports | 1 (Rn) | 1/cycle (restore) | 1/uop |
-| New datapath | imm source mux (word0[11:8]++word1) + `ir0` latch | none (reuses pre-dec/post-inc) | none |
-| Fetch | **second-word fetch FSM** | none | fetch-buffer word pairing |
-| New decode/microcode field | `if_word2`, `IMM_S_20` | entry-point predecode (no new field if shared-chain works) | uop-crack table |
-| New sequencer state | `ir0` | none (primary) / counter (fallback) | n/a (ROB handles it) |
+| Resource | `movi20` | `movmu`/`movml` (in-order) | `movmu`/`movml` (OoO) | `lea` | disp12 `mov.l` |
+|---|---|---|---|---|---|
+| Register read ports | 0 (imm only) | 1/cycle (save) | 1/uop | 1 (`Rm`) | 1 (`Rm`) |
+| Register write ports | 1 (Rn) | 1/cycle (restore) | 1/uop | 1 (`Rn`) | 1 (`Rn`) |
+| New datapath | imm source mux (word0[11:8]++word1) + `ir0` latch | none (reuses pre-dec/post-inc) | none | none (reuses ALU add + word1 imm mux) | none (reuses load path + word1 imm mux) |
+| Fetch | **second-word fetch FSM** | none | fetch-buffer word pairing | reuses `movi20` second-word fetch | reuses `movi20` second-word fetch |
+| New decode/microcode field | `if_word2`, `IMM_S_20` | entry-point predecode (no new field if shared-chain works) | uop-crack table | `IMM_S_12_0` (word1, unscaled) | `IMM_U_12_2` (word1, ×4) |
+| New sequencer state | `ir0` | none (primary) / counter (fallback) | n/a (ROB handles it) | `ir0` (shared w/ `movi20`) | `ir0` (shared) |
 
-The register file needs **no new ports** for any variant.
+**Delay-slot-free branches** (`jsr/n`/`rts/n`/`rtv/n`) sit outside this table
+because they add essentially nothing: 0–1 register read (`Rm` for `jsr/n`/`rtv/n`),
+0–1 write (`PR` for `jsr/n`, `R0` for `rtv/n`), **no** fetch change, **no** new
+immediate form, **no** new sequencer state. The only new datapath is one mux
+input on the existing `PR`-link adder (`PC+2` instead of `jsr`'s `PC+4`); the
+redirect itself is the existing `bt`/`bf` non-delayed path (§4A).
+
+The register file needs **no new ports** for any variant. `lea`, the disp12
+load, and the `/N` branches are the cheapest entries: zero new datapath beyond
+the word1 immediate mux that `movi20` already introduces (and, for the branches,
+the one PR-link mux input).
 
 ---
 
@@ -396,6 +556,17 @@ boolean-minimization regressions (§4.5, §5.3).
 - `movmu`/`movml`: every register count (1..8 / 1..16), both directions,
   round-trip (save then restore restores identical state and `r15`), and the
   reserved-anchor illegal cases.
+- `lea`: positive/negative/zero `disp` across ±2048; `Rm = Rn` (in-place add)
+  and `Rm ≠ Rn`; `Rm = r0`/`r12`/`r15`; assert **no memory access** and no flag
+  change; PC += 4; delay-slot-illegal. disp12 `mov.l`: aligned/misaligned `Rm`,
+  full 12-bit displacement range, `Rm = r12` GOT pattern.
+- `jsr/n`/`rts/n`/`rtv/n`: assert **the successor is not executed** (place a
+  poison instruction after the branch; it must not retire) — the core
+  differentiator vs `jsr`/`rts`. For `jsr/n`: `PR` = address of that successor
+  (return lands there). `rts/n`: returns to `PR`. `rtv/n Rm`: `R0 = Rm` *and*
+  returns; check `Rm = r0` (identity) and `Rm ≠ r0`. All three: `T` and other
+  flags unchanged; branch-in-delay-slot raises illegal. Round-trip
+  `jsr/n`→callee→`rts/n` lands on the instruction after the call.
 
 ### 8.3 Exception precision
 
