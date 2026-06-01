@@ -8,6 +8,25 @@
 
 ---
 
+> ## ⚠️ Gating: GCC co-development and a measured win precede commitment
+>
+> **No instruction in this document is committed to RTL or silicon yet.** Each is
+> gated on a **GCC co-development** step that makes the backend *actually emit*
+> the instruction, followed by a **measured `.text`/density gain** on a real
+> corpus, before any hardware is built. The reason is empirical: the CSiBE
+> measurement (§7) showed that of the SH-2A bundle, **only `movi20` is emitted by
+> stock GCC** — `movmu`/`movml`, the disp12/`lea` PIC forms, and the
+> delay-slot-free branches are all **latent**, contributing ~0 until a backend
+> pass exists to emit them. So an encoding that "fits and is collision-free" is
+> *necessary but not sufficient*: the deliverable that justifies committing each
+> instruction is **(1) a GCC patch that emits it + (2) a measured win** that
+> clears a per-instruction threshold. Instructions that cannot be made to pay off
+> in the compiler stay proposed-only, regardless of how cleanly they encode.
+> This gate applies equally to the PC-relative `lea @(disp,PC),Rn` in
+> [`../isa-pcrel/spec.md`](../isa-pcrel/spec.md).
+
+---
+
 ## 0. Document Map
 
 This is the **architectural / design spec** for a set of code-density
@@ -332,7 +351,10 @@ void LEA (int d, int m, int n)   # disp = sign_extend_12(d), unscaled (bytes)
   `LEA` / 68k `LEA` — the address-arithmetic operation the SH ISA otherwise
   lacks. The only existing address-compute instruction, `MOVA @(disp,PC),R0`, is
   hardwired to `R0` and PC-relative; `lea` generalises it to an arbitrary base
-  `Rm` and an arbitrary destination `Rn`.
+  `Rm` and an arbitrary destination `Rn`. The one base `lea` cannot take is
+  **PC** (no `mmmm` field selects it); the PC-relative, any-`Rn` completion of
+  this family — `lea @(disp,PC),Rn`, for FDPIC text-internal code addresses — is
+  specified separately in [`../isa-pcrel/spec.md`](../isa-pcrel/spec.md).
 - `disp` is the 12-bit field `word1[11:0]`, **sign-extended** (range
   −2048..+2047) and **unscaled** (byte granularity) — decided over the scaled,
   unsigned form of the disp12 *loads* that share this encoding group; rationale
