@@ -4,3 +4,6 @@
 [submodule "gcc"]
 	path = gcc
 	url = git@github.com:Bluebugs/gcc.git
+[submodule "gcc-sh-monitor"]
+	path = gcc-sh-monitor
+	url = git@github.com:mountain-reverie/gcc-sh-monitor.git
