@@ -1,3 +1,6 @@
 [submodule "jcore-soc"]
 	path = jcore-soc
 	url = git@github.com:Bluebugs/jcore-soc.git
+[submodule "gcc"]
+	path = gcc
+	url = git@github.com:Bluebugs/gcc.git
