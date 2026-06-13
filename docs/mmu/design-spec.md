@@ -76,6 +76,31 @@ The SuperH fixed segment layout is preserved unchanged:
 
 For J64, the layout extends naturally: P1 becomes the high half of the address space with `PA = VA & ((1 << PA_BITS) - 1)`.
 
+### 3.8 Optional wide physical addressing (PAE) on J32
+
+J32 keeps a **32-bit virtual** address space (≤ 2 GB user per process, unchanged), but the *physical* address may be widened to **40 bits (1 TB)** so the machine can carry more RAM — or a large byte-addressable memory-mapped store — than 4 GB, with the kernel windowing into it. This is the classic PAE (x86, 1999) / LPAE (ARM, 2011) pattern: more *system* physical, same per-process virtual.
+
+The width chosen is **40 bits**, matching the L2/fabric `ADDR_WIDTH=40` config already defined for T2/J64 ([cache/l2-spec.md §4](../cache/l2-spec.md)). The same 40-bit physical datapath therefore serves both J32-PAE and J64 — PAE is "J64's physical width under a 32-bit virtual MMU," not a third datapath.
+
+**What it costs in hardware.** Almost nothing beyond what J64 already budgets. The TLB entry's `PPN` field is already sized "up to 36 bits" ([hardware-spec.md §4.2](hardware-spec.md)) for J64, so the high physical bits reuse existing capacity. The only genuinely new hardware is (a) one register, **PTEU** ([hardware-spec.md §2.10](hardware-spec.md)), to carry `PA[39:32]` into `LDTLB`, and (b) widening the L1 cache tags and the TLB physical-output port from 32 to 40 bits. The software-loaded TLB is the enabler: because there is **no hardware page-table walker**, the page-table format is an OS decision (§3.1), so a wider (PAE) page table needs *no* walker change — only the `PTEU` load path and the wider `PPN` are hardware. This is wide-physical "for free on the page-table side," and is a direct dividend of the §3.1 choice.
+
+**The two ceilings it does not lift** (and why J64 remains the destination):
+- **Per-process working set stays ≤ 2 GB** (user virtual is still 32-bit). PAE adds breadth (more processes / more RAM), not bigger single processes.
+- **The kernel direct map is 512 MB.** P1 (§3.7) is fixed at 512 MB and only ever produces low-physical addresses (`PA = VA & 0x1FFFFFFF`), so any physical RAM above 512 MB — including everything above 4 GB — is **highmem** the kernel must transiently map (via P3) to touch. This is the standard Linux 32-bit highmem cost; it is incurred the moment RAM exceeds 512 MB, independent of the 4 GB line.
+
+PAE is therefore a legitimate **intermediate** for big-storage / many-process J32 deployments, with J64 ([§5.3](#53-j64-extension)) as the clean endpoint that removes both ceilings with no ISA break. It is **optional**: a J32 build with `ADDR_WIDTH=32` omits `PTEU` and the wide tags entirely.
+
+**Prior art (pre-2006).** The "narrow virtual address, wider physical, kernel maps windows into it" technique is decades older than the 20-year line and is thoroughly unencumbered:
+
+- **DEC PDP-11/70** (1975): 16-bit per-process virtual (64 KB), **22-bit physical** (4 MB). The MMU's Page Address / Page Descriptor registers map each process's 64 KB window anywhere in physical, with `MMR3` selecting 22-bit mode. The conceptual origin: small per-process address space, more physical than any one process can name, kernel remaps windows.
+- **SPARC V8 Reference MMU (SRMMU)** (sun4m, 1992): maps multiple **32-bit virtual** address spaces into a **36-bit physical** (64 GB) space at 4 KB pages — the same software-managed-MMU lineage J-Core already borrows for the TLB (§3.1–§3.2).
+- **Intel x86 PAE** (Pentium Pro, 1995): the technique's namesake — **32-bit virtual, 36-bit physical** (64 GB) via **64-bit PTEs** (page-frame field widened 20→24 bits) plus an added page-directory-pointer level. J32-PAE follows this 64-bit-PTE structure, but because our *virtual* address is unchanged it keeps **two** table levels rather than adding x86's third.
+- **PowerPC Book E** (architecture ~2002; Freescale **e500v2** implementation ~2004): **32-bit effective, 36-bit real** address, with the high real-address bits supplied by a dedicated **`MAS7`** register — the direct analogue of our `PTEU` ([hardware-spec.md §2.10](hardware-spec.md)).
+
+So both halves of J32-PAE have clean pre-2006 precedent: the 64-bit-PTE wide-physical page table (x86 PAE, 1995; SPARC SRMMU, 1992) and the separate high-physical-bits register (PowerPC `MAS7`, ~2004).
+
+See [hardware-spec.md §2.10, §3.1, §4.2, §7](hardware-spec.md) for the hardware and [linux-spec.md §3.4](linux-spec.md) for the kernel side.
+
 ## 4. Architecture Overview
 
 ### 4.1 Translation pipeline
@@ -207,5 +232,9 @@ The following are noted but not specified in detail in this document:
 - UltraSPARC I/II User's Manual, Sun Microsystems, 1997
 - MIPS R4000 User's Manual, 1991
 - ARM Architecture Reference Manual (ARMv8-A), 16K granule chapter
+- DEC PDP-11/70 Processor Handbook, 1975 (16-bit virtual / 22-bit physical memory management) — §3.8 PAE prior art
+- The SPARC Architecture Manual, Version 8, 1992, §7 SPARC Reference MMU (32-bit virtual / 36-bit physical); sun4m Architecture, 1992 — §3.8 PAE prior art
+- Intel Pentium Pro Family Developer's Manual / IA-32 SDM Vol. 3, Physical Address Extension (PAE), 1995 — §3.8 PAE prior art
+- PowerPC Book E Architecture, ~2002; Freescale e500v2 Core Reference Manual (`MAS7` real-address-extension register), ~2004 — §3.8 / §2.10 PTEU prior art
 - Linux kernel `arch/sh/`, `arch/sparc/`, `arch/mips/` MMU implementations
 - J-core mailing list, [J-core] MMU-Design thread, December 2017

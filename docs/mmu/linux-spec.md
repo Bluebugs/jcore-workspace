@@ -68,6 +68,19 @@ config PAGE_SIZE_16KB
 config PAGE_SIZE_64KB
     bool "64 KB"
 endchoice
+
+config JCORE_PAE
+    bool "Wide physical addressing (40-bit PA) on J32"
+    depends on CPU_SUBTYPE_JCORE && !64BIT
+    select PHYS_ADDR_T_64BIT
+    select HIGHMEM
+    help
+      Enable > 4 GB physical address space on 32-bit J-Core via 64-bit
+      PTEs and the PTEU register (the PAE/LPAE pattern). Per-process
+      virtual stays 32-bit; RAM above the 512 MB P1 direct map is highmem.
+      Requires a core built with ADDR_WIDTH=40 (see hardware-spec §2.10).
+      Leave off for J32 cores with <= 4 GB physical; implied off on J64,
+      which addresses wide physical natively.
 ```
 
 ### 2.2 PAGE_SHIFT
@@ -145,6 +158,33 @@ Virtual address layout (48-bit VA):
 ```
 
 P4D is folded (standard Linux pattern when not using 5-level). All PTE bit definitions above are unchanged; only the walker depth differs. The `#if defined(CONFIG_64BIT)` machinery already in generic `pgtable.h` handles the level-folding.
+
+### 3.4 J32 with wide physical addressing (PAE)
+
+Selected by `CONFIG_JCORE_PAE` (§2.1), for J32 cores built with 40-bit physical ([design-spec.md §3.8](../mmu/design-spec.md), [hardware-spec.md §2.10](../mmu/hardware-spec.md)). The **virtual** layout is unchanged from §3.1 — still 32-bit, still **two-level** (PGD + PTE). Only the *physical*/PTE width grows, exactly as Intel x86 PAE did (Pentium Pro, 1995; see [design-spec.md §3.8](../mmu/design-spec.md) for the full pre-2006 prior art). The kernel-mm code structure follows the later ARM LPAE port (2011) as the modern reference implementation — except that, because our virtual address is unchanged, we stay **two-level** where LPAE needs a third level (LPAE adds the level only to widen the virtual address, which we do not).
+
+```c
+typedef u64 pte_t;            /* 64-bit PTE carries a 40-bit frame */
+typedef u64 pmd_t;            /* (folded on 2-level)               */
+#define phys_addr_t u64       /* CONFIG_PHYS_ADDR_T_64BIT          */
+```
+
+**PTE = 8 bytes.** The low 32 bits are the hardware `PTEL` image (the §3.2 bit layout, with `PPN = PA[31:14]`); the high 32 bits are the `PTEU` image — only `[7:0]` are live (`PA[39:32]`), the rest zero/software:
+
+```
+PTE[31:0]   = PTEL image  (PPN[31:14] | flags)     -> ldc r,ptel
+PTE[39:32]  = PA[39:32]   (PTEU.PPNH)              -> ldc r,pteu
+PTE[63:40]  = reserved / software
+```
+
+Consequences for the `pgtable.h` plumbing:
+- `pfn_pte()` / `pte_pfn()` operate on a 26-bit PFN (`PA[39:14]`) packed across the PTEL/PTEU split; `_PAGE_PFN_MASK` widens into the high word.
+- PGD and PTE tables hold 64-bit entries, so each table is `512 × 8 = 4 KB` (was 2 KB). Both still fit well within a 16 KB page.
+- The TSB-fill path ([§4.2](#42-the-c-walker)) writes the full 40-bit frame into the 64-bit TSB `Data` word; the hot-path handler stages it as two `ldc` (PTEL then PTEU) — see [hardware-spec.md §7 "PAE variant"](../mmu/hardware-spec.md) and §4.1 below.
+
+**Highmem.** Physical RAM above the 512 MB P1 direct map (everything above 4 GB, and anything 0.5–4 GB) is `CONFIG_HIGHMEM` memory: the kernel cannot reach it through P1 and must `kmap()` it transiently into the translated **P3** (vmalloc/ioremap) window. `lowmem` = the P1-mapped low 512 MB (where page tables, the TSB, and kernel data must live — consistent with the [TSB-in-P1 rule, design-spec.md §4.3](../mmu/design-spec.md)). This is the standard arch/sh / arch/arm highmem model; the J-Core port reuses it unchanged apart from the `kmap` window living in P3.
+
+**Storage vs. RAM — what PAE is and is not for.** Large *block* storage (SD cards, big files) needs none of this: 32-bit Linux already maps windows of multi-GB files via 64-bit `loff_t` and `mmap2`, paging in only the working set — the aggregate mapped data across processes can far exceed 4 GB with no wide-physical at all. PAE is specifically for > 4 GB of **resident physical** (RAM, or a byte-addressable memory-mapped store placed in high physical, then mapped via wide-PA PTEs / DAX).
 
 ## 4. TLB Miss Handler
 
@@ -235,6 +275,8 @@ jcore_tlb_real_fault:
 ```
 
 The hot path is 7 instructions. The slow path adds ~15 more plus the C walker.
+
+**PAE (`CONFIG_JCORE_PAE`) hot path.** The TTE `Data` becomes the full 64-bit TSB `Data` word: the final `mov.l @r0, r3 ; ldc r3, ptel` is replaced by a two-stage load of the low word into `PTEL` and the high word into `PTEU` before `ldtlb.r` (+2 instructions, no extra TSB traffic — both halves are in the already-loaded 16-byte entry). The exact sequence is in [hardware-spec.md §7 "PAE variant"](../mmu/hardware-spec.md); the file carries it under `#ifdef CONFIG_JCORE_PAE`.
 
 ### 4.2 The C walker
 
@@ -775,6 +817,8 @@ The same source tree compiles for both. Differences:
 | Asm `mov.l` | 32-bit loads | becomes `mov.q` for 64-bit fields |
 
 The TLB miss assembly uses `mov.l` on J32 and `mov.q` on J64 (or just `MOVL` with macro). One `#ifdef CONFIG_64BIT` block in `tlbmiss.S` handles this.
+
+**J32-PAE is a third column** (`CONFIG_JCORE_PAE`, §3.4): `unsigned long`/VA stay 32-bit and the page table stays 2-level, but `phys_addr_t`/`pte_t` become 64-bit, `PA bits` = 40, and `CONFIG_HIGHMEM` is forced on. It shares J32's virtual machinery and J64's 40-bit physical width — i.e. "J64 physical under a J32 virtual MMU." The `tlbmiss.S` PAE path adds the `PTEU` load under `#ifdef CONFIG_JCORE_PAE`.
 
 ## 13. Test Plan
 

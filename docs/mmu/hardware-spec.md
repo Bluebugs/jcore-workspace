@@ -215,6 +215,27 @@ Read-only MMIO register, per-CPU-distinct. Each CPU reading address `0xFF000020`
 
 No new instruction is needed; standard `MOV.L @rA, Rn` from a register holding `0xFF000020` reads it. The SoC's address decoder routes this access to a small per-core hard-wired register.
 
+### 2.10 PTEU — Page Table Entry Upper (NEW, optional — PAE only)
+
+Present only when the core is built for **wide physical addressing** (PAE; [design-spec.md §3.8](design-spec.md)). Carries the high physical-address bits that do not fit in the 32-bit `PTEL`, so that `LDTLB` can install a > 32-bit physical frame. Omitted entirely when `ADDR_WIDTH = 32`.
+
+**Access:** new LDC/STC encoding (see §3.3) and MMIO at `0xFF000034` (proposed; coordinate with [soc/p4-mmio-map.md](../soc/p4-mmio-map.md), as for the §4.6 cause registers).
+
+**J32-PAE layout (32 bits):**
+```
+[31:8]   reserved (read-as-zero, write-ignored)
+[7:0]    PPNH          Physical address bits PA[39:32]. Combined with
+                       PTEL.PPN (PA[31:14]) and the page offset, forms the
+                       full 40-bit physical address. Software-set; latched
+                       into the TLB entry by LDTLB / LDTLB.R alongside PTEL.
+```
+
+**LDTLB semantics.** The installed entry's physical frame is `{PTEU.PPNH, PTEL.PPN}`. `PTEU` is read at the same point as `PTEL` and `PTEH` at `LDTLB` time; software must arrange all three before issuing the instruction. On a non-PAE (`ADDR_WIDTH=32`) core, the high bits are implicitly zero and `PTEU` does not exist.
+
+**Untranslated segments are unaffected.** P1/P2 produce `PA = VA & 0x1FFFFFFF` — at most 29 bits — so the kernel direct map and the boot/XIP path always land in low physical. Wide physical (`PA[39:29] ≠ 0`) is reachable **only** through the translated P0/P3 path, i.e. only via `LDTLB`-installed entries that carry `PTEU`. This is what makes everything above 512 MB "highmem" ([design-spec.md §3.8](design-spec.md)).
+
+**Prior art (pre-2006).** A dedicated register holding the *high* physical-address bits of a wide-physical translation is the **PowerPC Book E `MAS7`** register (Freescale e500v2, ~2004), which extends the e500's real address from 32 to 36 bits exactly as `PTEU` extends J32's from 32 to 40. The broader 64-bit-PTE wide-physical paging technique is Intel x86 **PAE** (Pentium Pro, 1995); a 32-bit-virtual → 36-bit-physical software-managed MMU is the **SPARC V8 SRMMU** (sun4m, 1992); and the narrow-virtual / wide-physical concept itself dates to the **DEC PDP-11/70** (1975). See [design-spec.md §3.8](design-spec.md) for the full lineage.
+
 ## 3. Instruction Encodings
 
 The SH ISA reserves the LDC/STC family for control register transfers via the pattern:
@@ -274,6 +295,17 @@ New single-cycle instruction that fuses LDTLB and RTE. Equivalent to executing L
 
 The existing LDTLB (encoding `0x0038`) is preserved for compatibility; the only difference is LDTLB.R also returns.
 
+### 3.3 PTEU encoding (PAE only)
+
+`PTEU` joins the SH-4 **page-table register family** (`0100 mmmm xxxx 1010` for LDC, `0000 nnnn xxxx 0011` for STC) alongside `PTEH` (`xxxx=0000`), `PTEL` (`xxxx=0001`), and `ASIDR` (`xxxx=0101`, §3.1):
+
+| Mnemonic | Encoding | Hex Pattern |
+|----------|----------|-------------|
+| `LDC Rm, PTEU` | `0100 mmmm 0010 1010` | `0x402A \| m<<8` |
+| `STC PTEU, Rn` | `0000 nnnn 0010 0011` | `0x0023 \| n<<8` |
+
+`PTEU` is privileged and exists only on PAE (`ADDR_WIDTH=40`) builds; on a non-PAE core the encoding is unallocated and decodes to illegal-instruction. The `xxxx=0010` slot is **proposed** — confirm it is free against the generated decoder and against SH-4 `PTEA` usage (J-Core does not implement SH-4 `PTEA`, so its slot is reusable, exactly as ASIDR reused the SH-DSP `MOD` slot in §3.1).
+
 ## 4. TLB Structure
 
 ### 4.1 Recommended TLB organization (suggestion, not mandate)
@@ -307,6 +339,8 @@ Data fields:
 ```
 
 Total ~91 bits per entry on J32, ~131 bits on J64. For 32 entries: ~3 Kib of state. The VMID field present in earlier drafts has been **removed** (see project-wide decision in [glossary §5](../glossary.md)); hypervisor isolation is achieved via ASID partitioning, not VMID tagging.
+
+**PAE reuses the J64 PPN budget.** A J32-PAE core ([design-spec.md §3.8](design-spec.md)) carries a 40-bit physical frame: `PPN = PA[39:14] = 26 bits` at the 16 KB base page. That fits inside the `up to 36 bits` already reserved here for J64, so a PAE entry costs **no extra TLB storage** over a non-PAE J32 entry beyond the high `PPN` bits the field already allows — the entry width sits between the ~91-bit J32 and ~131-bit J64 figures. The only entry-adjacent hardware cost is widening the physical-output port (and the L1 cache tags, §8) from 32 to 40 bits.
 
 ### 4.3 TLB match function
 
@@ -395,6 +429,19 @@ tlb_miss:
 ```
 
 Hot path: ~10 instructions (VPN compare + ASID compare + LDTLB.R). With the slow path inlined, the full handler fits in ~30 instructions.
+
+**PAE variant.** On a wide-physical build ([design-spec.md §3.8](design-spec.md)), the TTE `Data` is the full 64-bit TSB `Data` word (the non-PAE handler above uses only its low 32 bits). The handler stages both halves before `LDTLB.R`:
+
+```asm
+        mov.l   @r0+, r3        ! TTE data low  (PTEL image: PPN[31:14]+flags)
+        ldc     r3, ptel
+        mov.l   @r0, r3         ! TTE data high (PTEU image: PA[39:32] in [7:0])
+        ldc     r3, pteu
+        ldtlb.r                 ! {PTEU,PTEL,PTEH,ASIDR} -> TLB entry, return
+         nop
+```
+
+Two extra instructions (≈ +2 on the hot path). No extra TSB traffic: the 16-byte TSB entry's `Data` field is already 64 bits ([design-spec.md §4.3](design-spec.md)), so the high word is in the same cache line that was already loaded.
 
 ## 8. SMP Considerations
 
