@@ -110,13 +110,17 @@ Offset  Field        Width   Description
 
 The same layout works for J32 (with upper VPN/PPN bits unused) and J64 (with all bits populated). Hash function for indexing: XOR-fold the VPN with itself shifted right by `log2(TSB_entries)`, masked to entry count.
 
-The TSB lives in normal cacheable memory, allocated by the kernel at boot (one per CPU). Its size is a kernel policy decision; typical sizes are 8 KB (512 entries) for embedded, 64 KB (4096 entries) for systems with significant working sets.
+The TSB lives in normal cacheable memory **in the untranslated P1 segment**, allocated by the kernel at boot (one per CPU). Its size is a kernel policy decision; typical sizes are 8 KB (512 entries) for embedded, 64 KB (4096 entries) for systems with significant working sets.
+
+**P1 placement is required, not advisory.** The privileged architecture saves only one level of `SPC`/`SSR` (no hardware trap-level stack — see [priv-arch/design-spec.md §4.7](../priv-arch/design-spec.md)), so the miss handler must never itself fault. Its memory accesses are the `TSBPTR`-relative TTE load and (on TSB miss) the page-table walk; if either address were translated it could miss the TLB and recursively corrupt `SPC`/`SSR`. Keeping the TSB and the kernel page tables in P1 (`PA = VA & 0x1FFFFFFF`, cached but untranslated) makes the miss handler provably non-faulting and a single save level sufficient. This mirrors classic SH-4/MIPS (`kseg0`) kernel-structure placement.
 
 ### 4.4 Register banking
 
 SH-3 and SH-4 already provide R0–R7 register banking controlled by `SR.RB`. On exception entry, hardware sets `SR.RB=1, SR.MD=1, SR.BL=1` and saves `PC→SPC`, `SR→SSR`. The TLB-miss handler thus inherits 8 scratch registers with zero save/restore cost — equivalent to UltraSPARC's alternate global registers, achieved by inheriting the existing SH banking mechanism unchanged.
 
 J2 does not implement this banking machinery or the `SSR`/`SPC`/`R*_BANK`/`LDTLB` instructions it depends on; the baseline SH-4 (SH-4A) instructions the MMU must add — and the SH-4-only instructions it explicitly does *not* need — are enumerated in [hardware-spec.md §3.0](hardware-spec.md) and catalogued in [../sh4-nonfpu.json](../sh4-nonfpu.json). The cache-maintenance instructions that the shootdown path (§4.6) leans on are specified separately in [cache/l2-spec.md §17.5](../cache/l2-spec.md).
+
+**Prerequisite.** The supervisor/user mode, register banking, and `SPC`/`SSR` exception model this MMU assumes are not part of the MMU itself — they are the SH-4 *privileged architecture*, which J2 (an SH-2-class core) lacks entirely. They are specified, with their own implementation milestones, in [../priv-arch/design-spec.md](../priv-arch/design-spec.md). The MMU's `LDTLB`/`LDTLB.R` and miss-handler hot path are only meaningful once that work (its PM1 banking + PM2 exception model) is in place.
 
 ### 4.5 SMP topology
 
