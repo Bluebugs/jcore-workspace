@@ -116,6 +116,8 @@ The TSB lives in normal cacheable memory, allocated by the kernel at boot (one p
 
 SH-3 and SH-4 already provide R0–R7 register banking controlled by `SR.RB`. On exception entry, hardware sets `SR.RB=1, SR.MD=1, SR.BL=1` and saves `PC→SPC`, `SR→SSR`. The TLB-miss handler thus inherits 8 scratch registers with zero save/restore cost — equivalent to UltraSPARC's alternate global registers, achieved by inheriting the existing SH banking mechanism unchanged.
 
+J2 does not implement this banking machinery or the `SSR`/`SPC`/`R*_BANK`/`LDTLB` instructions it depends on; the baseline SH-4 (SH-4A) instructions the MMU must add — and the SH-4-only instructions it explicitly does *not* need — are enumerated in [hardware-spec.md §3.0](hardware-spec.md) and catalogued in [../sh4-nonfpu.json](../sh4-nonfpu.json). The cache-maintenance instructions that the shootdown path (§4.6) leans on are specified separately in [cache/l2-spec.md §17.5](../cache/l2-spec.md).
+
 ### 4.5 SMP topology
 
 Each CPU in an SMP J-core configuration has:

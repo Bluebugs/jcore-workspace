@@ -226,6 +226,21 @@ STC REG, Rn :  0000 nnnn xxxx 0010
 
 where `xxxx` selects the register. SH-4 uses values 0000–0100 (SR, GBR, VBR, SSR, SPC) and 1nnn (R0_BANK–R7_BANK). Values 0101, 0110, 0111 are free.
 
+### 3.0 Baseline SH-4 instructions the MMU requires (absent from J2)
+
+The new encodings in §3.1–§3.2 extend a family that **J2 does not currently implement**. Before any MMU register or TLB-fill instruction is meaningful, the core must first add the pre-existing SH-4 instructions on which the exception model and the miss-handler hot path are built. These are not new inventions — they are stock SH-4 (SH-4A) opcodes, catalogued with their encodings in [docs/sh4-nonfpu.json](../sh4-nonfpu.json) (Tier-1, "mmu-required"). Adding them is cheap precisely because §3.1's new registers reuse the same `0100 mmmm xxxx 1110` / `0000 nnnn xxxx 0010` decode family, so the decoder paths exist anyway.
+
+| Mnemonic | Encoding | Why the MMU needs it |
+| -------- | -------- | -------------------- |
+| `LDTLB` | `0000000000111000` (0x0038) | The TLB-fill primitive. Latches `{ASIDR, PTEH.VPN, PTEL}` into a TLB entry. §3.2's `LDTLB.R` is the fused-with-RTE variant; both are required. |
+| `LDC Rm,SSR` / `STC SSR,Rn` (+`.l`) | `0100mmmm00111110` / `0000nnnn00110010` | Saved-SR. Exception entry does `SR→SSR` (§5 step 4); the slow path and any nested fault must save/restore it. `LDTLB.R`/`RTE` restore it on the way out. |
+| `LDC Rm,SPC` / `STC SPC,Rn` (+`.l`) | `0100mmmm01001110` / `0000nnnn01000010` | Saved-PC. Exception entry does `PC→SPC`; the multi-word-fetch restart contract (§5.1) is defined in terms of what gets latched here. |
+| `LDC Rm,Rn_BANK` / `STC Rm_BANK,Rn` (+`.l`) | `0100mmmm1nnn1110` / `0000nnnn1mmm0010` | Alternate-bank register access. The zero-save/restore scratch the hot path relies on (design-spec §4.4, §6 here) is the banked R0–R7; explicit `BANK` moves ferry values across banks and save both banks at `switch_mm`. |
+
+**Privilege.** All four groups are privileged (illegal-instruction trap if `SR.MD=0`), consistent with their SH-4 definitions.
+
+**Not required by the MMU.** Three further SH-4-only instructions surface in the same J2 gap but are *orthogonal* to translation and may be deferred or dropped: `LDC/STC DBR` (debug base register — UBC, not MMU), `STC SGR` (saved R15 — redundant here, since scratch comes from register banking, not an SGR shadow), and `CLRS`/`SETS` (the MAC saturation `S` bit). The operand-cache-maintenance instructions (`ocbi`/`ocbp`/`ocbwb`/`pref`/`movca.l`) are also in this gap but belong to the cache milestone, not the MMU core — see [cache/l2-spec.md §17.5](../cache/l2-spec.md). `pref` is additionally useful in the miss hot path (§7) to prefetch the `TSBPTR` slot.
+
 ### 3.1 New LDC/STC encodings
 
 | Mnemonic | Encoding | Hex Pattern |

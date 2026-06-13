@@ -798,6 +798,20 @@ Unchanged.
 
 T0: L1-I and L1-D invalidations on eviction (via the v1 inval interface). T1/T2: Recall to all L1-Ds in `dir_vec`; L1-I incoherence stays orthogonal (§7.6).
 
+### 17.5 Software cache-maintenance instructions `[T0/T1/T2]`
+
+The MMU and lazy TLB-shootdown protocol ([mmu/design-spec.md §4.6](../mmu/design-spec.md)) are driven by the SH-4 operand-cache-maintenance instructions, which the current J2 does not implement. These are user-mode instructions (no `SR.MD` privilege) that issue at the L1-D and resolve through the L2 coherence path. The SH-4 operand-cache block is 32 bytes, which matches the baseline `L2_LINE_BYTES=32` (§4) one-to-one; for `L2_LINE_BYTES=64` each instruction operates on the 32-byte sub-block and the L2 action applies to the containing line. All five are absent from J2 and are catalogued in [docs/sh4-nonfpu.json](../sh4-nonfpu.json) (Tier-2, "cache").
+
+| Instruction | Encoding | L1-D action | L2 / coherence action (T1/T2) |
+| ----------- | -------- | ----------- | ----------------------------- |
+| `ocbwb @Rn` | `0000nnnn10110011` | Write back if dirty; line **stays valid** (clean) | If L1 line is `M`: `Wb` to L2, downgrade local copy `M→S`, L2 `dirty` set. No directory change for other cores. |
+| `ocbp @Rn`  | `0000nnnn10100011` | Write back if dirty, then **invalidate** | `M→I`: `Wb` then drop; clear this core's `dir_vec` bit at L2. Clean line: silent local invalidate. |
+| `ocbi @Rn`  | `0000nnnn10010011` | **Invalidate without writeback** | Drop the L1 line and clear `dir_vec` bit *without* flushing — architecturally discards dirty data (programmer's responsibility per SH-4). The L2 copy, if any, is unaffected; no `Wb` is generated. |
+| `pref @Rn`  | `0000nnnn10000011` | Non-binding fill hint into L1-D | Issues `GetS` to L2 (droppable under contention, §5.3 priority 7). Used by the TLB-miss handler to prefetch the `TSBPTR` slot ahead of the tag load ([mmu/hardware-spec.md §7](../mmu/hardware-spec.md)). |
+| `movca.l R0,@Rn` | `0000nnnn11000011` | Store R0, **allocating the block without fetching** it from memory | `GetM` *without* the read-for-ownership fill: the line is allocated in `M` with only the written word defined and the remainder undefined until written. Fast `clear_page`. |
+
+**Coherence interaction (T1/T2).** `ocbi` is the one sharp edge: in a coherent MSI cache it must clear only the issuing core's directory bit and must not emit a writeback, so a dirty line is silently lost — correct per SH-4 semantics, but the kernel must reserve `ocbi` for pages it knows are clean or being discarded. `ocbp`/`ocbwb` are the safe flush primitives the TLB-shootdown path (§7) and TSB-store→MMU-read coherence ([mmu/hardware-spec.md §1](../mmu/hardware-spec.md)) rely on to make a PTE write visible before `LDTLB`. On T0 (no L2 coherence, single L1-D) these reduce to local L1-D operations plus the existing write-through path.
+
 ---
 
 ## 18. Locked Accesses (T0 only) `[T0]`
@@ -1034,5 +1048,6 @@ Wider project terms (FGMT, ASID, BMID, …) live in [glossary.md](../glossary.md
 
 - Atomicity (line-lock vs bus-lock): this spec §6 ↔ [glossary §6](../glossary.md) ↔ [j32ooo-spec.md §10](../ooo/j32ooo-spec.md) ↔ [j32ooo-spec.md §14](../ooo/j32ooo-spec.md).
 - Coherence requirement: this spec §7 ↔ [mmu/design-spec.md §4.6](../mmu/design-spec.md) ↔ [hypervisor/linux-spec.md §8](../hypervisor/linux-spec.md) ↔ [fgmt/dual-fgmt-proposal.md §5.4](../fgmt/dual-fgmt-proposal.md).
+- Software cache-maintenance instructions (`ocbi`/`ocbp`/`ocbwb`/`pref`/`movca.l`): this spec §17.5 ↔ [mmu/design-spec.md §4.6](../mmu/design-spec.md) ↔ [mmu/hardware-spec.md §1, §7](../mmu/hardware-spec.md) ↔ [docs/sh4-nonfpu.json](../sh4-nonfpu.json).
 - Address-width parameterization: this spec §4, §8, §13.4 ↔ [glossary §3](../glossary.md) (J32 / J64 distinction).
 - PMU event allocation: this spec §13.5 ↔ [j32ooo-spec.md §12](../ooo/j32ooo-spec.md).

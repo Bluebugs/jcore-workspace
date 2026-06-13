@@ -8805,7 +8805,7 @@
       "DSP.issue": 0,
       "DSP.latency": 0,
       "format": "sets",
-      "abstract": "1 -> T",
+      "abstract": "1 -> S",
       "code": "0000000001011000",
       "T": "-",
       "description": "Sets the S bit to 1.<br /><br /><br />",
