@@ -7,3 +7,6 @@
 [submodule "gcc-sh-monitor"]
 	path = gcc-sh-monitor
 	url = git@github.com:mountain-reverie/gcc-sh-monitor.git
+[submodule "jcore-cpu"]
+	path = jcore-cpu
+	url = git@github.com:mountain-reverie/jcore-cpu.git

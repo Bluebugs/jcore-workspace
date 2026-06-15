@@ -42,7 +42,7 @@ All cited from the RTL facts in isa-density hardware-impl §2 (which carry
 
 ### 3.1 Decode row
 
-Add one row to the generator source (`decode/gen` — the `.ods`/TOML spec, per
+Add one row to the generator source (`decode/gen-go/spec/*.toml`, per
 the decoder-architecture notes), prefix `0011nnnnmmmm0001`, word1 minor `1011`:
 
 - **`mmmm` is NOT a base register for this minor.** The decode special-case:

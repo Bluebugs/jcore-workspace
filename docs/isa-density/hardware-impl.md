@@ -25,8 +25,8 @@ density instructions. It is organized as:
 - §8 — Verification.
 
 A recurring theme: **the decoder is generated, not hand-written.** Almost every
-change below is ultimately a change to the generator input (the `.ods`
-spreadsheet today, the planned `gen-go/` TOML tomorrow) plus, where noted, a
+change below is ultimately a change to the generator input (the per-category
+TOML under `decode/gen-go/spec/`) plus, where noted, a
 small amount of hand-written RTL for the genuinely new datapath/fetch behavior.
 See [`software-impl.md`](software-impl.md) §1 for the regenerate-first
 dependency.
@@ -111,15 +111,15 @@ guarantees against later drift.
 
 | Change | File(s) | Generated? |
 |---|---|---|
-| New opcodes → microcode entry addresses | `decode/gen` input (`.ods`/TOML) → `decode_body.vhd predecode_rom_addr`, `decode_table_*.vhd` | yes (regenerate) |
+| New opcodes → microcode entry addresses | `decode/gen-go/spec/*.toml` → `decode_body.vhd predecode_rom_addr`, `decode_table_*.vhd` | yes (regenerate) |
 | New `immval_t` form `IMM_S_20` (+ `IMM_S_20_8` for `movi20s`) | `decode_pkg.vhd` enum + generated imm builder | yes |
-| `lea`/disp12 group opcodes (`0011nnnnmmmm0001` prefix) → microcode entries | `decode/gen` input → `predecode_rom_addr` group `x"3"` | yes (regenerate) |
+| `lea`/disp12 group opcodes (`0011nnnnmmmm0001` prefix) → microcode entries | `decode/gen-go/spec/*.toml` → `predecode_rom_addr` group `x"3"` | yes (regenerate) |
 | New `immval_t` forms `IMM_S_12_0` (`lea`, unscaled signed) + `IMM_U_12_2` (disp12 `mov.l`, ×4) | `decode_pkg.vhd` enum + generated imm builder | yes |
 | `lea` ALU add to write port (no mem); disp12 `mov.l` = add → mem read → Rn | reuse existing ALU/mem datapath; microcode rows only | yes (regenerate) |
-| `jsr/n`/`rts/n`/`rtv/n` opcodes → microcode entries (reuse `bt`/`bf` non-delayed redirect + existing call/return datapath; no new fetch/field) | `decode/gen` input rows | yes (regenerate) |
+| `jsr/n`/`rts/n`/`rtv/n` opcodes → microcode entries (reuse `bt`/`bf` non-delayed redirect + existing call/return datapath; no new fetch/field) | `decode/gen-go/spec/*.toml` rows | yes (regenerate) |
 | Second-word fetch sequencing | `core/cpu.vhd` fetch FSM + new control field | **hand RTL + generator field** |
 | Word1 latch + 20-bit immediate assembly | `core/datapath.vhd` (or decode EX imm path) | hand RTL |
-| `movmu`/`movml` shared microcode chain | `decode/gen` input rows | yes (regenerate) |
+| `movmu`/`movml` shared microcode chain | `decode/gen-go/spec/*.toml` rows | yes (regenerate) |
 | Illegal-in-delay-slot + reserved-anchor decode | `decode_body.vhd` predecode functions | yes |
 | OoO uop cracking | OoO decode/rename (new `gen-go` or OoO decoder) | per OoO plan |
 | Sim model | `decode/sh2instr.c` | yes (regenerate) + hand for fetch |
@@ -423,8 +423,8 @@ microcode entries total — confirm against the 256-entry address budget
 > *per-step, opcode-conditional* `dispatch`; the restore chain needs a
 > *per-anchor start address*. Both are framework-compatible (dispatch and
 > predecode are both arbitrary combinational logic on `op.code`), but **no
-> existing instruction uses either pattern**. Confirm the generator (Clojure now,
-> `gen-go` later) can express them without a new microcode field. If not, the
+> existing instruction uses either pattern**. Confirm the Go generator (`gen-go`)
+> can express them without a new microcode field. If not, the
 > fallback is per-anchor unrolled rows (more ROM) or the §5.4 counter approach.
 
 ### 5.3 Reserved / illegal anchors

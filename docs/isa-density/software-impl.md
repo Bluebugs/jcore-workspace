@@ -9,22 +9,18 @@ measurement plan that confirms the code-density win.
 
 ## 1. Prerequisite: decoder regeneration & the sim model
 
-The CPU decoder and the C simulator model (`jcore-cpu/decode/sh2instr.c`) are
-**generated** from `decode/gen` (Clojure + the `.ods` spreadsheet today; the
-planned Go + TOML generator, `gen-go/`, is specified in
-`jcore-cpu/jcore-decoder-migration-spec-v2.md` but not yet built). Two facts
-shape all software work:
+The CPU decoder and the C simulator model are **generated** by the Go generator
+`jcore-cpu/decode/gen-go/` (`cmd/cpugen`) from hand-editable per-category **TOML**
+under `decode/gen-go/spec/*.toml`. Regenerate with `make -C decode generate`
+(needs **Go 1.26+** only). The legacy Clojure tool + `SH-2 Instruction Set.ods`
+are archived under `decode/gen-clj-archive/` (reference only). One fact shapes
+all software work:
 
-1. **The generation toolchain (lein/JVM/Clojure) is not currently installed**,
-   and `gen-go/` does not exist. Before any decoder change can be built, decide:
-   - restore the Clojure flow (install JDK + leiningen), or
-   - land the Go migration first and add the instructions in TOML.
-
-   The Go migration is the better foundation for *adding instructions* (the
-   `.ods` is a binary blob — terrible for review/diff), and its open questions
-   already flag "J32 forward-compatibility" of the field vocabulary. If multiple
-   SH-2A instructions are planned (these two are the first of a longer density
-   list), do the migration first.
+1. **Adding an instruction = editing TOML + regenerating** (git-diffable, no JVM).
+   New SH-2A/SH-4 opcodes get a `[[instr]]` row (opcode bit-pattern + ordered
+   `[[instr.slots]]` microcode steps); there is a reserved `spec/sh4/` subtree for
+   SH-4/priv-arch additions. `decode/gen-go/regression.sh` runs the end-to-end
+   check (generator tests + simulator + TAP).
 
 2. **The sim model must stay in lockstep.** The generated part of `sh2instr.c`
    comes from the same spec rows; the `movi20` second-word fetch needs a hand
@@ -373,8 +369,8 @@ BusyBox). Until that runs, the `lea` benefit in [`spec.md`](spec.md) is
 
 A pragmatic order that front-loads the cheap, decisive checks:
 
-1. **Decoder regeneration unblocked** (§1) — install Clojure flow *or* land the
-   Go migration. Nothing else builds without this.
+1. **Decoder regeneration ready** (§1) — Go 1.26+ and `make -C decode generate`;
+   edit the TOML spec, never the generated VHDL. Nothing else builds without this.
 2. **binutils** mnemonics + disassembler (§2) — enables hand-written asm tests
    and the measurement tooling before any compiler work.
 3. **Sim model** second-word fetch + semantics (§1) — lets software tests run

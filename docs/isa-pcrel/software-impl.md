@@ -8,8 +8,9 @@ GCC option machinery with.
 ## 1. Prerequisite
 
 Decoder regeneration and the sim model, exactly as isa-density software-impl §1
-(the generator pipeline; install JVM+lein or do the Go migration first — do not
-hand-edit generated VHDL). The new decode row is the spec §3.1 encoding.
+(the generator pipeline — edit the TOML spec and regenerate via
+`make -C decode generate`, Go 1.26+ only; do not hand-edit generated VHDL). The
+new decode row is the spec §3.1 encoding.
 
 ## 2. Assembler (binutils `gas`)
 
