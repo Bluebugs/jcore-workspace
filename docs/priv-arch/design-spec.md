@@ -102,6 +102,8 @@ Replace the SH-2 stack push/pop with:
 
 `SGR` (saved R15) is provided for SH-4A binary compatibility but is **architecturally redundant** here: the miss/exception fast paths get their scratch from bank 1, not from an `SGR` shadow. Implementations may omit `SGR` (and `STC SGR,Rn`) to save a register and a decode slot; the Linux port must then not read it. Catalogued as **Tier-3 "orthogonal"** in [../sh4-nonfpu.json](../sh4-nonfpu.json).
 
+**J4 omits `SGR`.** A prototype added `SGR` as a register-file slot with a read-only `STC SGR,Rn` (the read path works) and captured `SGR ← R15` during exception entry. The capture drives R15 onto the datapath bus while the entry microcode runs, and an in-flight memory cycle from the trapping context latched that value as a write address — a **spurious store to `@R15` on every exception entry**, silent only when the stack pointer is aligned (so it hid behind every aligned-SP test). The hazard reproduced with both a folded capture (sharing the cause-capture slot) and a dedicated capture slot, so it is intrinsic to reading a GPR onto the bus during entry, not an artifact of slot layout; a correct capture would need datapath work to suppress the entry-time memory cycle. Given `SGR`'s redundancy, J4 drops it: `STC SGR,Rn` remains an illegal-instruction trap and the toolchain targets SH-4 (not SH-4A), so the register is never read.
+
 ### 4.5 Exception vectors
 
 Adopt SH-4 fixed VBR-relative offsets, aligned with the values the MMU spec already uses:
