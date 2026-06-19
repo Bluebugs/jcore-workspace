@@ -98,6 +98,63 @@ config JCORE_PAE
 #define PAGE_MASK       (~(PAGE_SIZE - 1))
 ```
 
+### 2.3 Cache aliasing and page coloring (VIPT L1 contract)
+
+The J-Core L1 data cache is **virtually-indexed, physically-tagged (VIPT)**. On the
+J3 reference core it is **8 KB direct-mapped** with 32-byte lines, so the cache index
+is `VA[12:5]`. The hardware **does not detect synonyms**: it indexes on the virtual
+address and tags on the physical address, and trusts software to prevent two virtual
+aliases of one physical page from landing in different cache lines. This is the same
+contract as the SH-4 manual and is implemented for J-Core exactly as the existing
+`arch/sh` aliasing logic implements it for SH-4.
+
+**When coloring is required.** A virtual alias can diverge from its physical page only
+on index bits that lie *above* the page offset. With an 8 KB index reaching `VA[12]`:
+
+| `CONFIG_PAGE_SIZE` | Page offset | Index bits above offset | Coloring needed? |
+| ------------------ | ----------- | ----------------------- | ---------------- |
+| 16 KB              | `VA[13:0]`  | none (`12 < 14`)        | **No** — alias-free |
+| 64 KB              | `VA[15:0]`  | none                    | **No** |
+| **4 KB**           | `VA[11:0]`  | **`VA[12]`** (1 color bit) | **Yes** |
+
+So with the default 16 KB (or 64 KB) pages there is **nothing to do** — `PAGE_SIZE`
+already covers the cache index and aliasing cannot occur. Coloring is required **only**
+for `CONFIG_PAGE_SIZE_4KB`.
+
+**The 4 KB contract.** When 4 KB pages are configured, the kernel must guarantee
+`VA[12] == PA[12]` for every cacheable mapping of a page (strict coloring), so that a
+physical page always occupies the same cache line regardless of which virtual alias is
+used. The alignment quantum is the cache size:
+
+```c
+/* arch/sh/include/asm/shmparam.h */
+#define SHMLBA          0x2000          /* 8 KB = L1 size; alias boundary */
+
+/* arch/sh/mm/mmap.c — color-aligning allocator (4 KB pages only) */
+#define COLOUR_ALIGN(addr, pgoff) \
+        ((((addr) + shm_align_mask) & ~shm_align_mask) + \
+         (((pgoff) << PAGE_SHIFT) & shm_align_mask))
+/* shm_align_mask = SHMLBA - 1 when PAGE_SIZE < SHMLBA, else 0 */
+```
+
+`arch_get_unmapped_area[_topdown]` uses `COLOUR_ALIGN` so that file/shared mappings
+are placed on a color-consistent boundary; private anonymous pages are colored by the
+same rule at fault-fill time. When `PAGE_SIZE >= SHMLBA` (16 KB / 64 KB),
+`shm_align_mask` is 0 and the allocator degenerates to plain page alignment — no
+runtime cost.
+
+**No flush path is required.** This port uses *strict coloring*, not flush-on-alias, so
+it does **not** depend on cache line-flush/invalidate instructions (`ocbi`/`ocbp`/…),
+which belong to a separate cache milestone. `flush_dcache_page` and friends remain the
+standard `arch/sh` no-alias fast paths.
+
+**The TLB miss handler is unaffected.** Coloring is enforced upstream, at
+`mmap`/fault-fill time, when the PTE is built — never in the miss path. The handler
+runs in P1 (`PA = VA & 0x1FFFFFFF`, where `PA[12] == VA[12]` identically, so the
+handler's own TSB and page-table accesses are inherently color-safe) and simply installs
+whatever the page table already says. See [hardware-spec.md §2 / L1 VIPT note] for the
+matching hardware-side statement of this contract.
+
 ## 3. Page Table Format
 
 ### 3.1 J32 with 16 KB pages (two-level)
@@ -831,6 +888,12 @@ The TLB miss assembly uses `mov.l` on J32 and `mov.q` on J64 (or just `MOVL` wit
 - `mprotect` permission changes take effect
 - `fork()` + `exec()` (CoW correctness)
 - Multi-threaded process with shared `mm`
+- **Page coloring (4 KB only, §2.3):** `shmget`/`shmat` the same segment at multiple
+  addresses and assert every attach is `SHMLBA`-aligned (`VA[12]` color-consistent);
+  write-through-one / read-through-another must observe coherent data (no synonym
+  staleness). Verify `arch_get_unmapped_area` returns `COLOUR_ALIGN`ed addresses under
+  `CONFIG_PAGE_SIZE_4KB`, and that the test is a no-op (zero color constraint) under
+  `CONFIG_PAGE_SIZE_16KB`.
 
 ### 13.2 Stress tests
 - LTP `mm` test suite
