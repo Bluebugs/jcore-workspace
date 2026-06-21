@@ -2571,11 +2571,11 @@
       "description": "Extracts the middle 32 bits from the 64-bit contents of linked general registers<br />Rm and Rn, and stores the result in Rn.<br /><br /><br /><br />",
       "operation": "void XTRCT (int m, int n)\n{\n  unsigned long high = (R[m] &lt;&lt; 16) &amp; 0xFFFF0000;\n  unsigned long low = (R[n] &gt;&gt; 16) &amp; 0x0000FFFF;\n  R[n] = high | low;\n  PC += 2;\n}\n",
       "J2": true,
-      "J2.latency": 1,
+      "J2.latency": 4,
       "J2.issue": 1
     },
     {
-      "group": "Bit Manipulation Instructions",
+      "group": "Data Transfer Instructions",
       "SH1": false,
       "SH1.issue": 0,
       "SH1.latency": 0,
