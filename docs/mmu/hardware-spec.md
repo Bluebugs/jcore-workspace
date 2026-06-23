@@ -152,7 +152,7 @@ Inherited from SH-4. MMIO at `0xFF00000C`. On any TLB-related exception (miss, p
 
 Holds the physical base address of the per-CPU TSB and configuration bits.
 
-**Access:** New LDC/STC encoding (see §3) and MMIO at `0xFF000014`.
+**Access:** MMIO at `0xFF000014` (read/write). Cold boot-config register — MMIO only, no LDC/STC encoding (see §3.1 for the access-frequency rationale).
 
 **J32 layout (32 bits):**
 ```
@@ -171,7 +171,7 @@ On J64, TSB_BASE widens to a 64-bit physical address. The low 4 bits remain `TSB
 
 Holds the hash configuration used by hardware when computing TSBPTR.
 
-**Access:** New LDC/STC encoding and MMIO at `0xFF000018`.
+**Access:** MMIO at `0xFF000018` (read/write). Cold boot-config register — MMIO only, no LDC/STC encoding (see §3.1).
 
 **J32 layout (32 bits):**
 ```
@@ -189,7 +189,7 @@ For most kernels, software writes HASH_MODE=1 and HASH_SHIFT=TSB_SIZE_LOG at boo
 
 Hardware-populated on every TLB miss. Holds the address (in physical memory) of the TSB slot where the missing translation, if cached, would be found.
 
-**Access:** STC only (read-only from software). MMIO at `0xFF00001C` (also read-only).
+**Access:** `STC TSBPTR, Rn` (`0x0043`, read-only; the hot-path read — see §3.1) and MMIO at `0xFF00001C` (also read-only). There is no `LDC TSBPTR`.
 
 **Computation (hardware, on TLB miss):**
 ```
@@ -262,21 +262,37 @@ The new encodings in §3.1–§3.2 extend a family that **J2 does not currently 
 
 **Not required by the MMU.** Three further SH-4-only instructions surface in the same J2 gap but are *orthogonal* to translation and may be deferred or dropped: `LDC/STC DBR` (debug base register — UBC, not MMU), `STC SGR` (saved R15 — redundant here, since scratch comes from register banking, not an SGR shadow), and `CLRS`/`SETS` (the MAC saturation `S` bit). The operand-cache-maintenance instructions (`ocbi`/`ocbp`/`ocbwb`/`pref`/`movca.l`) are also in this gap but belong to the cache milestone, not the MMU core — see [cache/l2-spec.md §17.5](../cache/l2-spec.md). `pref` is additionally useful in the miss hot path (§7) to prefetch the `TSBPTR` slot.
 
-### 3.1 New LDC/STC encodings
+### 3.1 Register access: in-core vs MMIO (by access frequency)
+
+The choice between an in-core `LDC`/`STC` register and an uncached-MMIO register is made **by access frequency**, not by aesthetics, because the two mechanisms have opposite cost profiles:
+
+- **Performance.** An in-core register moves in **1 pipelined cycle**. An MMIO access is an uncached P4 bus round-trip that **stalls the pipeline** for several cycles. The TLB-miss handler (software-loaded TLB, ~7-instruction hot path — §7) runs on every working-set miss; making its register accesses MMIO would turn ~7 cycles into ~40–70 (a 5–10× slowdown on the hottest OS primitive). So registers touched per-miss **must** be in-core.
+- **Synthesis.** This core's Fmax bottleneck is the instruction-decoder combinational depth. Each in-core `LDC`/`STC` encoding loads that critical path and widens the `STC` read mux; an MMIO register's address comparator sits in the slack-rich memory datapath (and can live in the SoC P4 block). So for **cold/config** registers MMIO is actively *cheaper* for timing and more ASIC-portable.
+
+**The rule:** hot-path registers → in-core `LDC`/`STC`; cold/config registers → uncached MMIO.
+
+**Encoding-space reality.** The SH-4 control-register LDC family `0100 mmmm xxxx 1110` is *fully occupied* on J-Core: `xxxx` = `0000`–`0100` are `SR`/`GBR`/`VBR`/`SSR`/`SPC`, `0101`/`0110`/`0111` are `PTEH`/`PTEL`/`ASIDR`, and `1xxx` is `Rm_BANK`. There are **no** free control-register LDC slots, and the `0100 mmmm xxxx 1010` family is base `LDS` (MACH/MACL/PR/…) — so PTEH/PTEL/ASIDR cannot be relocated there. (Real SH-4 has *no* `LDC PTEH` either; its MMU registers are MMIO-only. The earlier draft of this section proposed an `xxxx 1010` relocation that is infeasible; it is corrected here.) This is exactly why the cold TSB-base/config registers are MMIO-only.
+
+**Hot-path registers — in-core (`xxxx 1110` LDC / `xxxx 0011` STC family):**
 
 | Mnemonic | Encoding | Hex Pattern |
 |----------|----------|-------------|
-| `LDC Rm, TSBBR` | `0100 mmmm 0101 1110` | `0x405E \| m<<8` |
-| `STC TSBBR, Rn` | `0000 nnnn 0101 0010` | `0x0052 \| n<<8` |
-| `LDC Rm, TSBCFG` | `0100 mmmm 0110 1110` | `0x406E \| m<<8` |
-| `STC TSBCFG, Rn` | `0000 nnnn 0110 0010` | `0x0062 \| n<<8` |
-| `STC TSBPTR, Rn` | `0000 nnnn 0111 0010` | `0x0072 \| n<<8` |
-| `LDC Rm, ASIDR` | `0100 mmmm 0101 1010` | `0x405A \| m<<8` |
-| `STC ASIDR, Rn` | `0000 nnnn 0101 0011` | `0x0053 \| n<<8` |
+| `LDC Rm, PTEH`  / `STC PTEH, Rn`  | `0100 mmmm 0101 1110` / `0000 nnnn 0101 0011` | `0x405E` / `0x0053` |
+| `LDC Rm, PTEL`  / `STC PTEL, Rn`  | `0100 mmmm 0110 1110` / `0000 nnnn 0110 0011` | `0x406E` / `0x0063` |
+| `LDC Rm, ASIDR` / `STC ASIDR, Rn` | `0100 mmmm 0111 1110` / `0000 nnnn 0111 0011` | `0x407E` / `0x0073` |
+| `STC TSBPTR, Rn` (read-only)      | `0000 nnnn 0100 0011` | `0x0043` |
 
-`LDC Rm, TSBPTR` (encoding `0x407E`) is **reserved** — TSBPTR is read-only from software. Decoding this should raise illegal-instruction exception.
+`TSBPTR` is read-only: it is hardware-computed on every TLB miss (§2.8) and has **no** `LDC` encoding (decoding one raises illegal-instruction). Its `STC` uses a free slot in the `xxxx 0011` family — the SH-4 `STC` control family `xxxx 0010` is fully occupied in base J-Core.
 
-**ASIDR encoding rationale.** The TSB-related registers occupy free slots in the SH-4 `xxxx 1110` / `xxxx 0010` LDC/STC family. That family had only three free `xxxx` values (`0101`, `0110`, `0111`); all are now used. ASIDR is placed in the SH-4 PT-register family (`xxxx 1010` / `xxxx 0011`), reusing the slot that SH-DSP allocated to `MOD` (xxxx=`0101`). J-Core does not implement the SH-DSP extension; the encoding is unambiguously free here. This co-locates ASIDR with the other page-table-related registers (PTEH at `0100 mmmm 0000 1010`, PTEL at `0100 mmmm 0001 1010`, etc.) in the same encoding family.
+**Cold/config registers — MMIO only (no LDC/STC):**
+
+| Register | MMIO address | Access |
+|----------|--------------|--------|
+| `TSBBR`  | `0xFF000014` | read/write (boot config) |
+| `TSBCFG` | `0xFF000018` | read/write (boot config) |
+| `TSBPTR` | `0xFF00001C` | read-only (mirror of the in-core value) |
+
+These are written once at boot, so MMIO costs nothing at runtime and keeps three encodings off the Fmax-critical decoder.
 
 ### 3.2 LDTLB.R — Load TLB and Return
 
@@ -297,7 +313,9 @@ The existing LDTLB (encoding `0x0038`) is preserved for compatibility; the only 
 
 ### 3.3 PTEU encoding (PAE only)
 
-`PTEU` joins the SH-4 **page-table register family** (`0100 mmmm xxxx 1010` for LDC, `0000 nnnn xxxx 0011` for STC) alongside `PTEH` (`xxxx=0000`), `PTEL` (`xxxx=0001`), and `ASIDR` (`xxxx=0101`, §3.1):
+> **Note (PAE/J64, deferred).** `PTEU` is only needed on a wide-physical J64 build and is not implemented in the J32 MMU. The encoding below is a *proposal* for that future work. It must not reuse the `0100 mmmm xxxx 1010` LDC family — that family is base `LDS` (MACH/MACL/PR/…) on J-Core (see the §3.1 encoding-space note); PTEH/PTEL/ASIDR live in the `xxxx 1110` / `xxxx 0011` family per §3.1. A real `PTEU` encoding must be assigned from genuinely free slots when J64 is implemented.
+
+`PTEU` would join the page-table register family alongside `PTEH`, `PTEL`, and `ASIDR` (§3.1):
 
 | Mnemonic | Encoding | Hex Pattern |
 |----------|----------|-------------|
