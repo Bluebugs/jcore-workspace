@@ -381,12 +381,14 @@ When a memory access misses the TLB and translation is enabled (MMUCR.AT=1):
 
 1. Compute hash and TSBPTR (see §2.8). Store result in TSBPTR register.
 2. Latch the faulting effective address into TEA.
-3. Latch the faulting VPN (extracted from VA based on the default page size, 16 KB) into PTEH[31:N] where N is determined by the default-page PageMask. The low bits `[N-1:0]` of PTEH are zeroed. **ASIDR is not touched** — the kernel has set ASIDR at context switch and it remains valid for the miss handler to read.
-4. Save PC → SPC and SR → SSR. Save register-bank state if applicable.
+3. Latch the faulting VPN into PTEH. The page size is not yet known at miss time (it is decided by the PTE the handler eventually loads), so hardware captures the VPN at the **finest** supported granularity — 4 KB, i.e. `PTEH[31:12] = VA[31:12]`, low bits `[11:0]` zeroed — and the handler masks coarser as needed at `LDTLB` time. (Capturing only `VA[31:14]` would alias 4 KB pages that differ in `VA[13:12]`.) **ASIDR is not touched** — the kernel has set ASIDR at context switch and it remains valid for the miss handler to read.
+4. Save PC → SPC and SR → SSR. The exception is a **re-execute** type: SPC must be the faulting instruction's own PC so `LDTLB.R`/`RTE` re-runs the access (critical for stores — a faulting load's destination register is already written, but a dropped store write is lost). I-fetch faults capture the live PC (detected at the fetch pointer); **D-access faults are detected in the MA stage, where the live PC has run a variable distance ahead**, so hardware latches the faulting instruction's restart-PC and SR on the first fault cycle (alongside TEA/PTEH) and sources SPC/SSR from those latches.
 5. Update SR: set MD=1, RB=1, BL=1, IMASK=0xF.
 6. Jump to `VBR + 0x400` (instruction-fetch miss) or `VBR + 0x420` (data-load miss) or `VBR + 0x440` (data-store miss) — same vector layout as SH-4.
 
 Exception priorities and ordering relative to other interrupts follow SH-4 conventions.
+
+**Implementation note (exception re-entry gate).** Architecturally, `SR.BL=1` blocks a second exception from overwriting `SPC`/`SSR` during entry. The reference core instead gates re-entry on **`SR.RB`** (the in-handler bank-select), because the single-level save model means the bare-metal/early-boot environment can leave `BL=1` from reset, which would make `BL` useless as the in-handler discriminator. Consequence: a context **legitimately** running with `RB=1` cannot itself take a TLB fault. This is acceptable for the kernel's miss-handler model (the handler runs entirely in P1/untranslated and is provably non-faulting — see [design-spec.md §4.3](design-spec.md)), but it is a deviation from stock SH-4 `BL` semantics worth noting for anyone porting a different handler model.
 
 ### 5.1 Instruction-fetch miss inside a multi-word instruction or SIMD block
 
