@@ -75,6 +75,8 @@ ASID_TAG[15:0] = (ASID[11:0] | (gen_low[3:0] << 12))
 
 Hardware does not interpret the split; only the kernel does. The Linux ASID allocator in [linux-spec.md §5](linux-spec.md) produces this 16-bit value directly.
 
+> **Security obligation (generation wrap):** only **4 bits** of `ASID_TAG` are the generation discriminator. The TLB is flushed at every rollover, so stale **TLB** entries are always rejected. **TSB** entries are not flushed and are rejected only by the tag compare — so after the generation field wraps (every 16 rollovers), a stale TSB slot with a matching `ASID[11:0]` and matching `gen_low[3:0]` is a **false hit** that the handler would install as a live, possibly cross-tenant, translation. The kernel **MUST** rebuild or zero the TSB on `gen_low` wrap (not merely bump the counter). Stale-TSB rejection is therefore a kernel obligation, not an unconditional hardware guarantee.
+
 **Context-switch sequence (Linux):**
 ```asm
         mov.l   new_asid_tag, r0    ! r0 = packed ASID_TAG (16 bits)
@@ -112,8 +114,15 @@ Inherited from SH-4, extended with PageMask. Accessed via `LDC` / `STC` or MMIO 
 [5]      X (Executable)
 [4]      R (Readable; usually implied by Valid)
 [3]      G (Global; ignore ASID_TAG in TLB match)
-[2]      STALE         Software-only bit, used by lazy TLB shootdown.
-                       Hardware ignores. Must be preserved by LDTLB.
+[2]      STALE         Soft-invalidate / lazy-shootdown bit. **Hardware ENFORCES
+                       it in the TLB match (§4.3): a STALE=1 entry never hits,
+                       so the access faults into the miss handler** (revocation
+                       primitive, design-spec §6.3). Preserved by LDTLB.
+                       NOTE: this table is the architectural (spec) PTEL bit
+                       layout; the J4 reference implementation uses a distinct
+                       flag layout (W7,X6,U5,D4,C3,G2,STALE1,V0) — reconciling
+                       the two layouts is a separate documentation item. The
+                       STALE *semantics* above hold in both.
 [1]      reserved
 [0]      V (Valid)
 ```
@@ -294,9 +303,9 @@ The choice between an in-core `LDC`/`STC` register and an uncached-MMIO register
 
 These are written once at boot, so MMIO costs nothing at runtime and keeps three encodings off the Fmax-critical decoder.
 
-### 3.2 LDTLB.R — Load TLB and Return
+### 3.2 LDTLB.RN — Load TLB and Return (No delay slot)
 
-New single-cycle instruction that fuses LDTLB and RTE. Equivalent to executing LDTLB followed immediately by RTE, but atomically (no observable state between).
+New single-cycle instruction that fuses LDTLB and RTE. Equivalent to executing LDTLB followed immediately by RTE, but atomically (no observable state between). **Implemented and named `LDTLB.RN`** in the decoder (`decode/gen-go/spec/sh4/mmu.toml`); "LDTLB.R" is the historical name used elsewhere in these docs — they are the same opcode `0x0068`.
 
 **Encoding:** `0000 0000 0110 1000` = `0x0068`
 
@@ -305,11 +314,11 @@ New single-cycle instruction that fuses LDTLB and RTE. Equivalent to executing L
 2. Restore PC ← SPC, SR ← SSR.
 3. Branch to the new PC.
 
-**Delay slot:** like RTE, LDTLB.R has a one-instruction delay slot. The instruction in the delay slot executes before the branch takes effect.
+**Delay slot:** **NONE.** Unlike RTE, `LDTLB.RN` has **no** delay slot — its return slots issue the fetch at the target PC directly (this is why it is named `…RN`). The miss-handler examples in §7 and [linux-spec.md §4.1](linux-spec.md) place a trailing `nop` after it; that `nop` is harmless padding, **not** an architectural delay slot, and **must not** carry a meaningful instruction (it would not execute). Handlers ported from the older "LDTLB.R has a delay slot" framing must drop any instruction placed in that slot.
 
 **Privilege:** Privileged. Causes illegal-instruction trap if executed with SR.MD=0.
 
-The existing LDTLB (encoding `0x0038`) is preserved for compatibility; the only difference is LDTLB.R also returns.
+The existing LDTLB (encoding `0x0038`) is preserved for compatibility; the only difference is LDTLB.RN also returns.
 
 ### 3.3 PTEU encoding (PAE only)
 
@@ -364,16 +373,18 @@ Total ~91 bits per entry on J32, ~131 bits on J64. For 32 entries: ~3 Kib of sta
 
 For each entry on a translation request:
 ```
-match = entry.VALID &&
+match = entry.VALID && (entry.STALE == 0) &&
         (entry.VPN[high : pagebits_for_PageMask] == VA[high : pagebits])
-match = match && (entry.GLOBAL || entry.ASID_TAG == PTEH.ASID_TAG)
+match = match && (entry.GLOBAL || entry.ASID_TAG == ASIDR)
 ```
+
+The context tag is compared against **ASIDR** (the live per-context register set at context switch, §2.1a), **not** PTEH — PTEH carries the VPN only and is overwritten by hardware on every miss. `STALE` (§2.2) is enforced in the match: a software-revoked entry never hits, so the access faults into the trusted miss handler (revocation primitive — see [design-spec.md §6.3](design-spec.md)).
 
 The bit range compared depends on the entry's PageMask: a 16 KB page compares VPN[35:14] (J64) or VPN[31:14] (J32); a 64 KB page compares VPN[35:16]; etc.
 
 If exactly one entry matches: it provides the translation.  
 If zero entries match: hardware initiates the miss sequence (see §5).  
-If more than one matches: behavior undefined — software must not write duplicate entries. (Same rule as SH-4 and UltraSPARC.)
+If more than one matches: behavior undefined — software must not write duplicate entries. (Same rule as SH-4 and UltraSPARC.) The J4 reference implementation resolves a multi-hit to the highest-index matching entry (no hardware multi-hit exception); a future hardening option may add a multi-hit detector. Permission enforcement (IPROT/DPROT) on a hit is normatively specified in [design-spec.md §6.1](design-spec.md).
 
 ## 5. TLB Miss Exception Sequence
 

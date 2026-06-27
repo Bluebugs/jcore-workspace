@@ -196,10 +196,43 @@ Linux's standard 4-level or 5-level page table walking handles this naturally.
 
 ## 6. Memory Isolation Guarantees
 
-- **Process isolation:** Each process has a unique ASID per CPU. TLB entries are tagged with ASID; access from the wrong context misses the TLB and falls into the trap handler, which consults the right page table.
-- **User/kernel isolation:** User-mode access to P1, P2, P3, or P4 raises a privilege fault unconditionally. The User bit in each PTE further restricts user access to kernel-owned P0 mappings.
-- **W^X (write-xor-execute):** Per-page Write and Execute permissions are independent in the PTE; the kernel can enforce non-writable code and non-executable data.
+### 6.0 Threat model
+
+- **Trust boundary / TCB:** the privileged kernel (running with `SR.MD=1`) is the trusted computing base. It owns the page tables, the TSB, ASID allocation, and the TLB-miss handler.
+- **Adversary:** an unprivileged tenant (`SR.MD=0`) executing arbitrary user code in its own address space, able to issue any user-mode instruction and to fault deliberately.
+- **Guaranteed properties:** (1) no user access to memory not mapped into its own live ASID with the required permission; (2) U/W/X enforced per the rules in §6.1; (3) confidentiality of all privileged MMU/exception state (no user-readable register exposes another context's VPN/PPN/ASID/fault address); (4) a software-revoked mapping (TLB-flushed or `STALE`-marked) cannot be used.
+- **Explicit non-guarantees:** timing and cache/TLB-occupancy side/covert channels between time-sliced tenants on the shared L1 caches and TLB (bounded by the single-hart, non-SMT, in-order design — see §6.5); DMA/IOMMU isolation (§8); DRAM-level effects (Rowhammer) — a function of the memory part and physical allocator, not the core. The in-order, non-speculative pipeline removes the entire transient-execution attack class (Meltdown/Spectre/MDS/L1TF/…) by construction, and the software TLB walk removes the hardware-page-table-walker cache-timing class (AnC); see [security-review.md](security-review.md).
+
+### 6.1 Permission check (normative)
+
+On every translated access the hardware first requires a **usable hit**: `VALID=1 AND STALE=0 AND VPN match AND (GLOBAL=1 OR ASID_TAG=ASIDR)`. A failed hit raises the access-type TLB-miss exception. On a hit, the permission predicate below is evaluated; if it holds, the access faults with the access-type protection exception (IPROT/DPROT_R/DPROT_W), and the memory effect is suppressed (faulting stores are demoted to a non-mutating read at the external bus):
+
+| Access type | Faults (protection) when |
+|---|---|
+| Instruction fetch | `X=0` **OR** (`U=0 AND MD=0`) |
+| Data load | `U=0 AND MD=0` |
+| Data store | (`U=0 AND MD=0`) **OR** `W=0` |
+
+There is no separate read-permission bit: readability is governed by `U` (for user) or unconditional kernel access. `W^X` is a consequence of the independent `W` and `X` bits (the kernel must not set both on a tenant page).
+
+### 6.2 Privileged-mode (MD=1) rules
+
+The kernel (`MD=1`) **honors `X` and `W`** — it cannot execute a non-executable (`X=0`) page nor write a read-only (`W=0`) page (the `MD` term gates only the `U` check, not `X`/`W`). The kernel does **not** enforce `U` against itself: it may read, write, and execute user (`U=1`) pages (no SMEP/SMAP-equivalent). Kernels that require SMEP/SMAP must add it as a future hardware option; until then the kernel must not be induced to fetch from or trust tenant-controlled user pages.
+
+### 6.3 Revocation and the STALE bit
+
+A mapping is revoked either by flushing the TLB (`MMUCR.TI`, which clears `VALID`) or by re-installing the entry with `STALE=1` (`PTEL[1]`). **`STALE=1` is enforced in hardware** (§6.1 hit condition): a stale entry never matches, so the access faults and re-enters the trusted miss handler. Software must ensure that before a physical page is reassigned to another tenant, every TLB entry mapping it is flushed or marked `STALE` — the hardware does not auto-invalidate on page-table edits. (Guard: `mmustale.S`, `mmuasid.S`.)
+
+### 6.4 Isolation mechanisms (summary)
+
+- **Process isolation:** Each process has a unique ASID per CPU. TLB entries are tagged with ASID; access from the wrong context misses the TLB and falls into the trap handler. (Guard: `mmuasid.S` proves a non-global entry tagged ASID A faults under ASID B.)
+- **User/kernel isolation:** User-mode access to P1, P2, P3, or P4 raises a privilege fault unconditionally. The `U` bit further restricts user access to kernel-owned P0/P3 mappings, per §6.1.
+- **W^X:** Per-page `W` and `X` are independent; the kernel enforces non-writable code and non-executable data. **Invariant:** the `GLOBAL` bit must be set **only** on kernel-owned mappings — a `G=1` tenant page is visible to every ASID and is a cross-tenant disclosure primitive with no hardware guard.
 - **Inter-process page sharing:** Pages may be mapped into multiple ASIDs with potentially different permissions; the TLB tracks the `(ASID, VPN)` pair, so shared-memory regions work transparently.
+
+### 6.5 Side-channel posture (residuals)
+
+Time-sliced tenants share the L1 I/D caches and the 32-entry TLB; conventional contention channels (Prime+Probe, Evict+Time, TLB-occupancy, deterministic-NRU eviction-set construction, and data-dependent software-miss-handler timing) remain. They are bounded by the single-hart, non-SMT design (no concurrent observation) and the low clock. Mitigations, if a deployment requires them: flush L1 + TLB on context switch, a constant-time/constant-memory miss handler, and mapping secret pages uncacheable (`C=0`). The move to PIPT L1 caches removes the VIPT virtual-synonym channel and the page-coloring correctness dependency.
 
 ## 7. Performance Characteristics
 
