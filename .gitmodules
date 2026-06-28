@@ -10,3 +10,9 @@
 [submodule "jcore-cpu"]
 	path = jcore-cpu
 	url = git@github.com:mountain-reverie/jcore-cpu.git
+[submodule "linux"]
+	path = linux
+	url = git@github.com:mountain-reverie/linux.git
+[submodule "llvm-project"]
+	path = llvm-project
+	url = git@github.com:mountain-reverie/llvm-project.git
