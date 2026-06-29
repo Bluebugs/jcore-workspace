@@ -17,10 +17,15 @@ check() { # asm  want-hex
   got=$("$OD" -s -j .text /tmp/rt.o 2>/dev/null | grep -E '^ [0-9a-f]{4} ' | awk '{print $2}' | head -1 | sed 's/\(..\)\(..\).*/\1 \2/')
   if [ "$got" = "$want" ]; then pass=$((pass+1)); else echo "FAIL[bytes]: $asm got[$got] want[$want]"; fail=$((fail+1)); fi
 }
-gate() { # asm that must NOT assemble without -isa
-  if printf '\t%s\n' "$1" | "$AS" -o /tmp/rt.o - 2>/dev/null; then echo "FAIL[gate]: $1 assembled without -isa=sh-jcore"; fail=$((fail+1)); else pass=$((pass+1)); fi
+coexist() { # asm that must assemble under -isa=sh-jcore (proves SH-2 base + J-core coexist)
+  if printf '\t%s\n' "$1" | "$AS" -isa=sh-jcore -o /tmp/rt.o - 2>/dev/null; then pass=$((pass+1)); else echo "FAIL[coexist]: $1 failed under -isa=sh-jcore"; fail=$((fail+1)); fi
 }
-check "cas.l r1,r2,@r0" "22 13"
-check "bgnd"            "00 3b"
-gate  "bgnd"
+gate() { # asm that must be REJECTED under the given real non-jcore arch
+  local asm="$1" arch="$2"
+  if printf '\t%s\n' "$asm" | "$AS" -isa="$arch" -o /tmp/rt.o - 2>/dev/null; then echo "FAIL[gate]: $asm assembled under -isa=$arch"; fail=$((fail+1)); else pass=$((pass+1)); fi
+}
+check   "cas.l r1,r2,@r0" "22 13"
+check   "bgnd"             "00 3b"
+coexist "mov r1,r2"
+gate    "cas.l r1,r2,@r0" "sh2"
 echo "----"; echo "GAS-RT pass $pass / fail $fail"; [ "$fail" -eq 0 ]
