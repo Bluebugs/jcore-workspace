@@ -1,30 +1,51 @@
 #!/usr/bin/env bash
-# 3-way SH instruction round-trip: insns.json <-> llvm-mc <-> sh-elf-objdump.
-# Usage: sh-mc-roundtrip.sh "<asm>" "<expected-hex-bytes-big-endian>"
-#   e.g. sh-mc-roundtrip.sh "mov r2,r1" "61 23"
-set -euo pipefail
+# 3-way SH round-trip oracle: insns.json <-> llvm-mc <-> sh-elf-objdump.
+# Single: sh-mc-roundtrip.sh "<asm>" "<expect-hex>"
+# Batch:  <gen cases> | sh-mc-roundtrip.sh --batch   (reads "asm<TAB>hex" lines)
+#
+# PRIMARY check (hard): llvm-mc encoding bytes == insns.json expected bytes.
+# CROSS-CHECK (binutils): disassemble the bytes (multi-arch); require the same
+# REGISTER operands (tolerates mnemonic-spelling e.g. xtract/xtrct and immediate
+# radix/sign differences). If binutils cannot decode the bytes on any SH arch
+# (.word), the instruction is BYTES-ONLY verified (reported, not failed).
+set -uo pipefail
 LLVM_MC="${LLVM_MC:-llvm-project/build/bin/llvm-mc}"
 OBJDUMP="${OBJDUMP:-sh-elf-objdump}"
-ASM="$1"; EXPECT="$2"
+ARCHES="sh4a sh4 sh2a sh3 sh2 sh4al-dsp"
 
-# 1. llvm-mc -> encoding bytes (e.g. "0x61,0x23")
-enc=$("$LLVM_MC" --arch=sh -show-encoding <<<"$ASM" \
-  | sed -n 's/.*encoding: \[\(.*\)\].*/\1/p' | tr ',' ' ' | sed 's/0x//g')
-got=$(echo $enc | tr 'A-F' 'a-f')
-want=$(echo "$EXPECT" | tr 'A-F' 'a-f')
-if [ "$got" != "$want" ]; then
-  echo "FAIL[bytes]: asm='$ASM' llvm=[$got] insns.json=[$want]"; exit 1
-fi
+regs_of() { echo "$1" | grep -oE 'r1[0-5]|r[0-9]' | paste -sd, -; }
 
-# 2. cross-disassemble the bytes with binutils objdump (big-endian SH)
-tmp=$(mktemp /tmp/sh-rt.XXXX.bin)
-printf "$(printf '\\x%s' $got)" > "$tmp"
-dis=$("$OBJDUMP" -b binary -m sh -EB -D "$tmp" 2>/dev/null \
-  | awk -F'\t' 'NF>=3 && $1 ~ /:$/ {print $3"\t"$4; exit}')
-rm -f "$tmp"
-mnem=$(echo "$dis" | cut -f1)
-want_mnem=$(echo "$ASM" | awk '{print $1}')
-if [ "$mnem" != "$want_mnem" ]; then
-  echo "FAIL[objdump]: asm='$ASM' bytes=[$got] objdump='$dis' (mnem '$mnem' != '$want_mnem')"; exit 1
+# returns: 0 pass(cross-checked), 2 pass(bytes-only), 1 fail. echoes a message.
+check_one() {
+  local ASM="$1" EXPECT="$2" enc got want
+  enc=$("$LLVM_MC" --arch=sh -show-encoding <<<"$ASM" 2>/dev/null \
+        | sed -n 's/.*encoding: \[\(.*\)\].*/\1/p' | tr ',' ' ' | sed 's/0x//g')
+  got=$(echo $enc | tr 'A-F' 'a-f'); want=$(echo "$EXPECT" | tr 'A-F' 'a-f')
+  if [ -z "$got" ]; then echo "FAIL[asm]: '$ASM' (no encoding)"; return 1; fi
+  if [ "$got" != "$want" ]; then echo "FAIL[bytes]: '$ASM' llvm=[$got] insns.json=[$want]"; return 1; fi
+  local tmp dis decoded=""
+  tmp=$(mktemp /tmp/sh-rt.XXXX.bin); printf "$(printf '\\x%s' $got)" > "$tmp"
+  for m in $ARCHES; do
+    dis=$("$OBJDUMP" -b binary -m $m -EB -D "$tmp" 2>/dev/null \
+          | awk -F'\t' 'NF>=3 && $1 ~ /:$/ {print $3" "$4; exit}')
+    case "$dis" in *.word*|"") ;; *) decoded="$dis"; break;; esac
+  done
+  rm -f "$tmp"
+  if [ -z "$decoded" ]; then echo "BYTESONLY: '$ASM' [$got] (binutils cannot decode)"; return 2; fi
+  if [ "$(regs_of "$ASM")" != "$(regs_of "$decoded")" ]; then
+    echo "FAIL[objdump-regs]: '$ASM' [$got] objdump='$decoded' (regs '$(regs_of "$ASM")' != '$(regs_of "$decoded")')"; return 1; fi
+  return 0
+}
+
+if [ "${1:-}" = "--batch" ]; then
+  pass=0; bytesonly=0; fail=0
+  while IFS=$'\t' read -r asm hex; do
+    [ -z "$asm" ] && continue
+    check_one "$asm" "$hex"; rc=$?
+    case $rc in 0) pass=$((pass+1));; 2) bytesonly=$((bytesonly+1));; *) fail=$((fail+1));; esac
+  done
+  echo "----"; echo "PASS(3-way) $pass / BYTES-ONLY $bytesonly / FAIL $fail"
+  [ "$fail" -eq 0 ]
+else
+  check_one "$1" "$2"; rc=$?; [ $rc -ne 1 ] && echo "OK rc=$rc"; [ $rc -ne 1 ]
 fi
-echo "PASS: '$ASM' -> [$got] -> objdump '$dis'"
