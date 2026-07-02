@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+import json, sys
+
+def main():
+    if len(sys.argv) < 4:
+        print(f"Usage: {sys.argv[0]} <json_file> <family1> <family2> [exclude_pattern ...]")
+        print(f"  Families: SH1, SH2, SH2E, SH3, SH3E, SH4, SH4A, SH2A, DSP, J2")
+        print(f"  Exclude patterns are case-insensitive substring matches against group name or instruction format")
+        sys.exit(1)
+
+    json_file = sys.argv[1]
+    fam1 = sys.argv[2]
+    fam2 = sys.argv[3]
+    exclude_pats = [p.lower() for p in sys.argv[4:]]
+
+    with open(json_file) as f:
+        data = json.load(f)
+
+    groups = {}
+    for insn in data['instructions']:
+        group = insn['group']
+        fmt = insn['format']
+
+        if any(p in group.lower() or p in fmt.lower() for p in exclude_pats):
+            continue
+
+        in1 = insn.get(fam1, False)
+        in2 = insn.get(fam2, False)
+
+        if in1 == in2:
+            continue
+
+        groups.setdefault(group, []).append((fmt, in1, in2))
+
+    if not groups:
+        print("No differences found.")
+        return
+
+    fmt_display = lambda f: f.replace('\t', ' ')
+    col_w = max(len(fmt_display(f)) for f, _, _ in sum(groups.values(), [])) + 3
+
+    for group in sorted(groups):
+        items = sorted(groups[group], key=lambda x: x[0])
+        print(f"\n\033[1m{group}\033[0m")
+        print(f"  {fam1:<{col_w}} {fam2}")
+        print(f"  {'-' * (col_w + len(fam2) + 1)}")
+        for fmt, in1, in2 in items:
+            c1 = "+" if in1 else "-"
+            c2 = "+" if in2 else "-"
+            d1 = fmt_display(fmt)
+            print(f"  {c1} {d1:<{col_w-3}} {c2} {d1}")
+
+if __name__ == '__main__':
+    main()
