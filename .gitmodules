@@ -19,3 +19,4 @@
 [submodule "binutils-gdb"]
 	path = binutils-gdb
 	url = git@github.com:mountain-reverie/binutils-gdb.git
+	branch = jcore
