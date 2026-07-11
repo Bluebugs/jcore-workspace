@@ -202,6 +202,7 @@ Linux's standard 4-level or 5-level page table walking handles this naturally.
 - **Adversary:** an unprivileged tenant (`SR.MD=0`) executing arbitrary user code in its own address space, able to issue any user-mode instruction and to fault deliberately.
 - **Guaranteed properties:** (1) no user access to memory not mapped into its own live ASID with the required permission; (2) U/W/X enforced per the rules in §6.1; (3) confidentiality of all privileged MMU/exception state (no user-readable register exposes another context's VPN/PPN/ASID/fault address); (4) a software-revoked mapping (TLB-flushed or `STALE`-marked) cannot be used.
 - **Explicit non-guarantees:** timing and cache/TLB-occupancy side/covert channels between time-sliced tenants on the shared L1 caches and TLB (bounded by the single-hart, non-SMT, in-order design — see §6.5); DMA/IOMMU isolation (§8); DRAM-level effects (Rowhammer) — a function of the memory part and physical allocator, not the core. The in-order, non-speculative pipeline removes the entire transient-execution attack class (Meltdown/Spectre/MDS/L1TF/…) by construction, and the software TLB walk removes the hardware-page-table-walker cache-timing class (AnC); see [security-review.md](security-review.md).
+- **Anchor:** the ASID-tagged software-walked-TLB isolation model here is architecturally the same idea as UltraSPARC's context-register-based per-process isolation (sun4u, 1995) — a small hardware context tag (ASID/context ID) partitions the TLB by address space, with all fault/refill policy left to trusted software.
 
 ### 6.1 Permission check (normative)
 
@@ -209,15 +210,19 @@ On every translated access the hardware first requires a **usable hit**: `VALID=
 
 | Access type | Faults (protection) when |
 |---|---|
-| Instruction fetch | `X=0` **OR** (`U=0 AND MD=0`) |
+| Instruction fetch | `X=0` **OR** (`U=0 AND MD=0`) **OR** (`U=1 AND MD=1`) *(SMEP, see §6.2)* |
 | Data load | `U=0 AND MD=0` |
 | Data store | (`U=0 AND MD=0`) **OR** `W=0` |
 
-There is no separate read-permission bit: readability is governed by `U` (for user) or unconditional kernel access. `W^X` is a consequence of the independent `W` and `X` bits (the kernel must not set both on a tenant page).
+There is no separate read-permission bit: readability is governed by `U` (for user) or unconditional kernel access. `W^X` is a consequence of the independent `W` and `X` bits (the kernel must not set both on a tenant page). On an instruction-fetch fault raise `IPROT`; on a data-load fault raise `DPROT_R`; on a data-store fault raise `DPROT_W`.
 
-### 6.2 Privileged-mode (MD=1) rules
+### 6.2 Privileged-mode (MD=1) rules — MD-mode policy (S-C2), DECIDED
 
-The kernel (`MD=1`) **honors `X` and `W`** — it cannot execute a non-executable (`X=0`) page nor write a read-only (`W=0`) page (the `MD` term gates only the `U` check, not `X`/`W`). The kernel does **not** enforce `U` against itself: it may read, write, and execute user (`U=1`) pages (no SMEP/SMAP-equivalent). Kernels that require SMEP/SMAP must add it as a future hardware option; until then the kernel must not be induced to fetch from or trust tenant-controlled user pages.
+The kernel (`MD=1`) **honors the page's own `W` and `X` bits** — it cannot execute a non-executable (`X=0`) page nor write a read-only (`W=0`) page (the `MD` term gates only the `U` check, not `X`/`W`).
+
+**SMEP-equivalent is the target, effective now.** A kernel instruction fetch of a `U=1` page raises `IPROT`, exactly like a user fetch of a `U=0` page (see the `Instruction fetch` row of the §6.1 table). This closes the "kernel can be induced to execute tenant-controlled code" hole. Anchor: SPARC V9's privileged-page distinction (1995), which draws the same MD/`U` line for supervisor execute permission. **RTL status:** this predicate is documented normatively here as the target; the SMEP enforcement in the J4 RTL and its `mmusmep.S` guard land in the jcore-cpu stream (see the SP0 companion item / Task 6 of this plan) — until that lands, current RTL lacks SMEP.
+
+**SMAP-equivalent is a documented FUTURE item, not built now.** The kernel does **not** enforce `U` against itself for data load/store: it may read and write `U=1` pages (no SMAP-equivalent). A future hardening option would fault ordinary kernel data access to `U=1` pages, with a deliberate uaccess mechanism to permit copy_from/to_user, modeled on UltraSPARC's `ASI_AIUP` ("access as if user, primary") uaccess windows (1995) — an explicit alternate address-space-identifier access mode rather than an implicit permission. This is not built in this program because it requires adding an ISA-level ASI-style access mechanism plus toolchain and kernel uaccess rework; until then the kernel must not be induced to trust tenant-controlled user data without validation.
 
 ### 6.3 Revocation and the STALE bit
 
