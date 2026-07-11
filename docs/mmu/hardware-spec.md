@@ -32,7 +32,7 @@ Conventions:
 
 ### 2.1 PTEH — Page Table Entry High
 
-Inherited from SH-4 in spirit, but **VPN-only** in this revision. Accessed via `LDC Rm, PTEH` / `STC PTEH, Rn` (existing SH-4 encodings) or as MMIO at P4 address `0xFF000000`. The 16-bit `ASID_TAG` lives in the separate **ASIDR** register (see §2.1a) — a deliberate alignment with UltraSPARC's `PRIMARY_CONTEXT` model (sun4u, 1995). This decoupling lets J-Core support the full SH-4-plus-PageMask page-size set down to **4 KB** without sacrificing ASID width.
+Inherited from SH-4 in spirit, but **VPN-only** in this revision. Accessed via `LDC Rm, PTEH` / `STC PTEH, Rn` (see §3.1) — LDC/STC only, no MMIO alias (`datapath.vhm:970`). The 16-bit `ASID_TAG` lives in the separate **ASIDR** register (see §2.1a) — a deliberate alignment with UltraSPARC's `PRIMARY_CONTEXT` model (sun4u, 1995). This decoupling lets J-Core support the full SH-4-plus-PageMask page-size set down to **4 KB** without sacrificing ASID width.
 
 **J32 layout (32 bits):**
 ```
@@ -57,7 +57,7 @@ The PTEH layout no longer carries ASID bits. SH-4 binary compatibility is preser
 
 ### 2.1a ASIDR — Address Space Identifier Register
 
-New in this revision. Holds the 16-bit `ASID_TAG` that hardware compares on every TLB lookup. Accessed via `LDC Rm, ASIDR` / `STC ASIDR, Rn` (new LDC/STC encoding — see §3) or as MMIO at P4 address `0xFF000024`.
+New in this revision. Holds the 16-bit `ASID_TAG` that hardware compares on every TLB lookup. Accessed via `LDC Rm, ASIDR` / `STC ASIDR, Rn` (new LDC/STC encoding — see §3) — LDC/STC only, no MMIO alias (`datapath.vhm:970`).
 
 **J32 layout (32 bits):**
 ```
@@ -84,7 +84,7 @@ Hardware does not interpret the split; only the kernel does. The Linux ASID allo
                                     ! SH-4's LDC Rn,PTEH for ASID update
 ```
 
-**LDTLB / LDTLB.R semantics:** the installed TLB entry's tag is built as
+**LDTLB / LDTLB.RN semantics:** the installed TLB entry's tag is built as
 `{ASIDR[15:0], PTEH.VPN[31:N], PTEL.PageMask[3:0]}`. LDTLB atomicity is
 unchanged — both PTEH and ASIDR are read at the start of LDTLB; software
 must arrange them before issuing the instruction.
@@ -97,34 +97,26 @@ must arrange them before issuing the instruction.
 
 ### 2.2 PTEL — Page Table Entry Low
 
-Inherited from SH-4, extended with PageMask. Accessed via `LDC` / `STC` or MMIO at `0xFF000004`.
+Inherited from SH-4, extended with PageMask. Accessed via `LDC Rm, PTEL` / `STC PTEL, Rn` (see §3.1).
 
-**J32 layout (32 bits):**
+**J32 layout (32 bits) — canonical, matches the J4 reference implementation (`tlb.vhd:190-202`):**
 ```
-[31:14]  PPN[31:14]    Physical page number, software-set
-[13:10]  PageMask      log4(page_size / 4 KB), 4 bits:
-                       0 = 4 KB,  1 = 16 KB,  2 = 64 KB,
-                       3 = 256 KB, 4 = 1 MB,   5 = 4 MB,
-                       6 = 16 MB,  7 = 64 MB,  8 = 256 MB,
-                       9 = 1 GB,  10–15 reserved
-[9]      D (Dirty)
-[8]      C (Cacheable)
-[7]      U (User accessible)
-[6]      W (Writable)
-[5]      X (Executable)
-[4]      R (Readable; usually implied by Valid)
-[3]      G (Global; ignore ASID_TAG in TLB match)
-[2]      STALE         Soft-invalidate / lazy-shootdown bit. **Hardware ENFORCES
-                       it in the TLB match (§4.3): a STALE=1 entry never hits,
-                       so the access faults into the miss handler** (revocation
-                       primitive, design-spec §6.3). Preserved by LDTLB.
-                       NOTE: this table is the architectural (spec) PTEL bit
-                       layout; the J4 reference implementation uses a distinct
-                       flag layout (W7,X6,U5,D4,C3,G2,STALE1,V0) — reconciling
-                       the two layouts is a separate documentation item. The
-                       STALE *semantics* above hold in both.
-[1]      reserved
-[0]      V (Valid)
+[31:10]  PPN           Physical page number (22-bit PFN, 4 KB granularity).
+                       NOTE: PPN[31:10] overlaps PageMask[11:8] bits 10-11;
+                       only PPN[27:13] drives relocation, so the overlap is
+                       harmless but real (tlb.vhd:194-195).
+[11:8]   PageMask      log-size selector (see §2.2a page-size table).
+[7]      W             Writable
+[6]      X             Executable
+[5]      U             User-accessible
+[4]      D             Dirty
+[3]      C             Cacheable
+[2]      G             Global (ignore ASID_TAG on match)
+[1]      STALE         Soft-invalidate marker (loaded; enforcement is an RTL
+                       decision, H-I1)
+[0]      V             Valid — NOTE: inert on install. LDTLB/LDTLB.RN force
+                       valid=1 unconditionally (tlb.vhd:190); invalidation is
+                       via STALE or MMUCR.TI, never by loading V=0.
 ```
 
 ### 2.3 MMUCR — MMU Control Register
@@ -236,7 +228,7 @@ Present only when the core is built for **wide physical addressing** (PAE; [desi
 [7:0]    PPNH          Physical address bits PA[39:32]. Combined with
                        PTEL.PPN (PA[31:14]) and the page offset, forms the
                        full 40-bit physical address. Software-set; latched
-                       into the TLB entry by LDTLB / LDTLB.R alongside PTEL.
+                       into the TLB entry by LDTLB / LDTLB.RN alongside PTEL.
 ```
 
 **LDTLB semantics.** The installed entry's physical frame is `{PTEU.PPNH, PTEL.PPN}`. `PTEU` is read at the same point as `PTEL` and `PTEH` at `LDTLB` time; software must arrange all three before issuing the instruction. On a non-PAE (`ADDR_WIDTH=32`) core, the high bits are implicitly zero and `PTEU` does not exist.
@@ -262,8 +254,8 @@ The new encodings in §3.1–§3.2 extend a family that **J2 does not currently 
 
 | Mnemonic | Encoding | Why the MMU needs it |
 | -------- | -------- | -------------------- |
-| `LDTLB` | `0000000000111000` (0x0038) | The TLB-fill primitive. Latches `{ASIDR, PTEH.VPN, PTEL}` into a TLB entry. §3.2's `LDTLB.R` is the fused-with-RTE variant; both are required. |
-| `LDC Rm,SSR` / `STC SSR,Rn` (+`.l`) | `0100mmmm00111110` / `0000nnnn00110010` | Saved-SR. Exception entry does `SR→SSR` (§5 step 4); the slow path and any nested fault must save/restore it. `LDTLB.R`/`RTE` restore it on the way out. |
+| `LDTLB` | `0000000000111000` (0x0038) | The TLB-fill primitive. Latches `{ASIDR, PTEH.VPN, PTEL}` into a TLB entry. §3.2's `LDTLB.RN` is the fused-with-RTE variant; both are required. |
+| `LDC Rm,SSR` / `STC SSR,Rn` (+`.l`) | `0100mmmm00111110` / `0000nnnn00110010` | Saved-SR. Exception entry does `SR→SSR` (§5 step 4); the slow path and any nested fault must save/restore it. `LDTLB.RN`/`RTE` restore it on the way out. |
 | `LDC Rm,SPC` / `STC SPC,Rn` (+`.l`) | `0100mmmm01001110` / `0000nnnn01000010` | Saved-PC. Exception entry does `PC→SPC`; the multi-word-fetch restart contract (§5.1) is defined in terms of what gets latched here. |
 | `LDC Rm,Rn_BANK` / `STC Rm_BANK,Rn` (+`.l`) | `0100mmmm1nnn1110` / `0000nnnn1mmm0010` | Alternate-bank register access. The zero-save/restore scratch the hot path relies on (design-spec §4.4, §6 here) is the banked R0–R7; explicit `BANK` moves ferry values across banks and save both banks at `switch_mm`. |
 
@@ -303,11 +295,13 @@ The choice between an in-core `LDC`/`STC` register and an uncached-MMIO register
 
 These are written once at boot, so MMIO costs nothing at runtime and keeps three encodings off the Fmax-critical decoder.
 
+> **Binutils gap.** `binutils` `sh-opc.h` implements four `STC` MMU forms (`stc pteh,Rn` / `stc ptel,Rn` / `stc asidr,Rn` / `stc tsbptr,Rn`) plus `ldtlb.rn`, but does **not** yet implement `ldc Rm,{pteh,ptel,asidr}` — dependency SP1 must resolve.
+
 ### 3.2 LDTLB.RN — Load TLB and Return (No delay slot)
 
-New single-cycle instruction that fuses LDTLB and RTE. Equivalent to executing LDTLB followed immediately by RTE, but atomically (no observable state between). **Implemented and named `LDTLB.RN`** in the decoder (`decode/gen-go/spec/sh4/mmu.toml`); "LDTLB.R" is the historical name used elsewhere in these docs — they are the same opcode `0x0068`.
+New single-cycle instruction that fuses LDTLB and RTE. Equivalent to executing LDTLB followed immediately by RTE, but atomically (no observable state between). **Implemented and named `LDTLB.RN`** in the decoder (`decode/gen-go/spec/sh4/mmu.toml:126`) and in binutils `sh-opc.h:791`; "LDTLB.R" is the historical name used elsewhere in these docs for the same instruction.
 
-**Encoding:** `0000 0000 0110 1000` = `0x0068`
+**Encoding:** `0000 0000 0111 1000` = `0x0078`
 
 **Semantics:**
 1. Latch the current values of PTEH and PTEL into a TLB entry, chosen by the LRU/replacement policy (same as existing LDTLB).
@@ -393,11 +387,26 @@ When a memory access misses the TLB and translation is enabled (MMUCR.AT=1):
 1. Compute hash and TSBPTR (see §2.8). Store result in TSBPTR register.
 2. Latch the faulting effective address into TEA.
 3. Latch the faulting VPN into PTEH. The page size is not yet known at miss time (it is decided by the PTE the handler eventually loads), so hardware captures the VPN at the **finest** supported granularity — 4 KB, i.e. `PTEH[31:12] = VA[31:12]`, low bits `[11:0]` zeroed — and the handler masks coarser as needed at `LDTLB` time. (Capturing only `VA[31:14]` would alias 4 KB pages that differ in `VA[13:12]`.) **ASIDR is not touched** — the kernel has set ASIDR at context switch and it remains valid for the miss handler to read.
-4. Save PC → SPC and SR → SSR. The exception is a **re-execute** type: SPC must be the faulting instruction's own PC so `LDTLB.R`/`RTE` re-runs the access (critical for stores — a faulting load's destination register is already written, but a dropped store write is lost). I-fetch faults capture the live PC (detected at the fetch pointer); **D-access faults are detected in the MA stage, where the live PC has run a variable distance ahead**, so hardware latches the faulting instruction's restart-PC and SR on the first fault cycle (alongside TEA/PTEH) and sources SPC/SSR from those latches.
+4. Save PC → SPC and SR → SSR. The exception is a **re-execute** type: SPC must be the faulting instruction's own PC so `LDTLB.RN`/`RTE` re-runs the access (critical for stores — a faulting load's destination register is already written, but a dropped store write is lost). I-fetch faults capture the live PC (detected at the fetch pointer); **D-access faults are detected in the MA stage, where the live PC has run a variable distance ahead**, so hardware latches the faulting instruction's restart-PC and SR on the first fault cycle (alongside TEA/PTEH) and sources SPC/SSR from those latches.
 5. Update SR: set MD=1, RB=1, BL=1, IMASK=0xF.
 6. Jump to `VBR + 0x400` (instruction-fetch miss) or `VBR + 0x420` (data-load miss) or `VBR + 0x440` (data-store miss) — same vector layout as SH-4.
 
 Exception priorities and ordering relative to other interrupts follow SH-4 conventions.
+
+**Concrete EXPEVT / vector / SPC facts (ground truth: `exceptions.toml`):**
+
+| Fault | VBR offset | EXPEVT | SPC source | SSR source |
+|-------|-----------|--------|-------------|-------------|
+| TLB IMISS (instruction-fetch miss) | `+0x400` | `0x040` | `TLBPC` (delay-slot-aware I-fetch restart PC) | live `SR` |
+| TLB DMISS_R (data-load miss) | `+0x420` | `0x060` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
+| TLB DMISS_W (data-store miss) | `+0x440` | `0x080` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
+| TLB IPROT (instruction protection violation) | `+0x400` | `0x0A0` | `TLBPC` (delay-slot-aware I-fetch restart PC) | live `SR` |
+| TLB DPROT_R (data-load protection violation) | `+0x420` | `0x0C0` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
+| TLB DPROT_W (data-store protection violation) | `+0x440` | `0x0C0` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
+
+**Note:** DPROT_R and DPROT_W share EXPEVT `0x0C0`; they are distinguished only by vector offset (`0x420` vs `0x440`).
+
+**SPC/SSR semantics.** I-fetch faults (IMISS/IPROT) save a delay-slot-aware restart PC (`TLBPC`) and take `SSR` from the live `SR`. D-access faults (DMISS_R/DMISS_W/DPROT_R/DPROT_W) save the faulting-instruction's own restart PC (`TLBPC-4`) so that `LDTLB.RN`/`RTE` re-executes the faulting instruction, and take `SSR` from the latched `TLBSR` (captured on the first fault cycle, alongside `TEA`/`PTEH`), because by the MA stage the live PC has already run ahead of the faulting instruction.
 
 **Implementation note (exception re-entry gate).** Architecturally, `SR.BL=1` blocks a second exception from overwriting `SPC`/`SSR` during entry. The reference core instead gates re-entry on **`SR.RB`** (the in-handler bank-select), because the single-level save model means the bare-metal/early-boot environment can leave `BL=1` from reset, which would make `BL` useless as the in-handler discriminator. Consequence: a context **legitimately** running with `RB=1` cannot itself take a TLB fault. This is acceptable for the kernel's miss-handler model (the handler runs entirely in P1/untranslated and is provably non-faulting — see [design-spec.md §4.3](design-spec.md)), but it is a deviation from stock SH-4 `BL` semantics worth noting for anyone porting a different handler model.
 
@@ -405,7 +414,7 @@ Exception priorities and ordering relative to other interrupts follow SH-4 conve
 
 This subsection applies when the implementation pairs this MMU with an extension that introduces a **multi-word instruction unit** — i.e. an architectural instruction whose fetch spans more than one 16-bit word. Two such extensions exist in the J-Core roadmap: the two-word density instructions `movi20`/`movi20s`/`lea`/disp12-`mov.l` ([../isa-density/spec.md](../isa-density/spec.md)) and the SIMD prefix block ([../simd/spec.md](../simd/spec.md)). It imposes one additional requirement on the instruction-fetch miss path (the `VBR + 0x400` vector of §5 step 6); cores with neither extension are unaffected.
 
-**The unifying rule.** When an instruction-fetch TLB miss (or any synchronous instruction-fetch fault) is taken while the CPU is partway through fetching a multi-word unit, the CPU **must save the PC of the unit's *first* word into SPC**, never the address of an interior word. The miss handler is then MMU-generic exactly as today; `LDTLB.R` + `RTE` returns to the unit's start and the whole unit re-executes (re-fetching all its words) against the now-mapped page. This is correct and idempotent because a multi-word unit commits no architectural state until it retires, so re-execution from the start reproduces it exactly. Returning to an interior word would instead resume *inside* an instruction — interpreting immediate data or a governed SIMD instruction as a fresh opcode — which is silent corruption, not a fault. (Prior art: Intel 386, 1985, validating page-split instructions against the instruction's start address.)
+**The unifying rule.** When an instruction-fetch TLB miss (or any synchronous instruction-fetch fault) is taken while the CPU is partway through fetching a multi-word unit, the CPU **must save the PC of the unit's *first* word into SPC**, never the address of an interior word. The miss handler is then MMU-generic exactly as today; `LDTLB.RN` + `RTE` returns to the unit's start and the whole unit re-executes (re-fetching all its words) against the now-mapped page. This is correct and idempotent because a multi-word unit commits no architectural state until it retires, so re-execution from the start reproduces it exactly. Returning to an interior word would instead resume *inside* an instruction — interpreting immediate data or a governed SIMD instruction as a fresh opcode — which is silent corruption, not a fault. (Prior art: Intel 386, 1985, validating page-split instructions against the instruction's start address.)
 
 **SIMD block.** A SIMD block is a run of consecutive halfwords — a prefix plus up to four governed instructions (≤ 10 bytes), or a `VLNS`+`VEXT`/`VINS` pair (4 bytes). The prefix establishes a *decode-stage shadow latch* (`SIMD_VAL`, lane width, block length) that is **not** architectural state and is cleared on every exception entry ([../simd/spec.md §6.5](../simd/spec.md)). The first-word PC the rule requires is the **prefix PC**; returning to a governed instruction with the shadow latch cleared would decode it as a plain scalar SH op.
 
@@ -425,7 +434,7 @@ Inherited from SH-3/SH-4 unchanged. On any exception (including TLB miss):
 - If already in MD=1 with RB=1, no bank change.
 - R8–R15 are not banked; software must save/restore them if used.
 
-The TLB-miss handler's hot path (described in §7) uses only R0–R3 of bank 1, requiring no register saves. The hot path is ~10 instructions (two CMP/EQ pairs for VPN and ASID_TAG plus the LDTLB.R) — slightly longer than the SH-4-style single-comparison handler because of the ASID split, but still well under the ~30–50 of a pure software walker.
+The TLB-miss handler's hot path (described in §7) uses only R0–R3 of bank 1, requiring no register saves. The hot path is ~10 instructions (two CMP/EQ pairs for VPN and ASID_TAG plus the LDTLB.RN) — slightly longer than the SH-4-style single-comparison handler because of the ASID split, but still well under the ~30–50 of a pure software walker.
 
 ## 7. Recommended TLB Miss Handler
 
@@ -455,20 +464,20 @@ tlb_miss:
         bf      tsb_miss_slow   ! No: slow path
         mov.l   @r0, r3         ! Load TTE data
         ldc     r3, ptel        ! Stage data into PTEL
-        ldtlb.r                 ! Install entry, return from exception
-         nop                    ! Delay slot of LDTLB.R
+        ldtlb.rn                 ! Install entry, return from exception (no delay slot)
+         nop                    ! Padding only — not an architectural slot (§3.2)
 ```
 
-Hot path: ~10 instructions (VPN compare + ASID compare + LDTLB.R). With the slow path inlined, the full handler fits in ~30 instructions.
+Hot path: ~10 instructions (VPN compare + ASID compare + LDTLB.RN). With the slow path inlined, the full handler fits in ~30 instructions.
 
-**PAE variant.** On a wide-physical build ([design-spec.md §3.8](design-spec.md)), the TTE `Data` is the full 64-bit TSB `Data` word (the non-PAE handler above uses only its low 32 bits). The handler stages both halves before `LDTLB.R`:
+**PAE variant.** On a wide-physical build ([design-spec.md §3.8](design-spec.md)), the TTE `Data` is the full 64-bit TSB `Data` word (the non-PAE handler above uses only its low 32 bits). The handler stages both halves before `LDTLB.RN`:
 
 ```asm
         mov.l   @r0+, r3        ! TTE data low  (PTEL image: PPN[31:14]+flags)
         ldc     r3, ptel
         mov.l   @r0, r3         ! TTE data high (PTEU image: PA[39:32] in [7:0])
         ldc     r3, pteu
-        ldtlb.r                 ! {PTEU,PTEL,PTEH,ASIDR} -> TLB entry, return
+        ldtlb.rn                 ! {PTEU,PTEL,PTEH,ASIDR} -> TLB entry, return
          nop
 ```
 
@@ -540,7 +549,7 @@ Critical points to verify in RTL:
 
 1. **TLB miss → TSBPTR computation:** hash, mask, and base concatenation produce a correctly aligned 16-byte address.
 2. **TLB match function:** exact-match-with-mask works for all PageMask values; ASID_TAG comparison correctly suppressed when GLOBAL=1.
-3. **LDTLB.R atomicity:** No observable interrupt window between TLB write and PC/SR restore.
+3. **LDTLB.RN atomicity:** No observable interrupt window between TLB write and PC/SR restore.
 4. **MMUCR.TI:** Single-cycle invalidation of all entries; self-clearing.
 5. **Register banking on TLB miss:** Bank 1 R0–R7 visible to handler, bank 0 preserved.
 6. **ASIDR preservation across miss:** ASIDR is not touched by miss-vector entry; hardware writes only PTEH.VPN. Handler can read ASIDR directly and trust it reflects the current context.
@@ -563,7 +572,7 @@ Beyond inheriting the SH-4 MMU structure:
 | Extended ASID_TAG (8 → 16 bits) | 8 bits per TLB entry |
 | PageMask (4 bits per TLB entry) | 4 bits per TLB entry |
 | STALE bit per TLB entry | 1 bit per entry |
-| LDTLB.R decode | ~10 LUTs |
+| LDTLB.RN decode | ~10 LUTs |
 | ASIDR LDC/STC decode | ~5 LUTs |
 | CPUINFO MMIO | ~32 bits flop per core + decoder |
 
