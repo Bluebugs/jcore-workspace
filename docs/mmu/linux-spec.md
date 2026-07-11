@@ -170,36 +170,38 @@ Each PGD and PTE table is 512 × 4 = 2 KB. PGD entries are physical addresses of
 
 ### 3.2 PTE bit layout (matches hardware PTEL)
 
+This layout is fixed by the RTL (`tlb.vhd:190-202`): `PPN[31:10], PageMask[11:8], W7 X6 U5 D4 C3 G2 STALE1 V0`. There is no distinct Read bit — read permission is implied by `_PAGE_VALID` (a valid, non-stale entry is always readable); it is not a separate bit position.
+
 ```c
-/* arch/sh/include/asm/pgtable-bits.h additions for J-Core */
-#define _PAGE_VALID     (1UL << 0)
-#define _PAGE_STALE     (1UL << 2)   /* software-only, for lazy shootdown */
-#define _PAGE_GLOBAL    (1UL << 3)
-#define _PAGE_READ      (1UL << 4)
-#define _PAGE_EXEC      (1UL << 5)
-#define _PAGE_WRITE     (1UL << 6)
-#define _PAGE_USER      (1UL << 7)
-#define _PAGE_CACHEABLE (1UL << 8)
-#define _PAGE_DIRTY     (1UL << 9)
-#define _PAGE_PAGEMASK_SHIFT  10
-#define _PAGE_PAGEMASK_MASK   (0xFUL << _PAGE_PAGEMASK_SHIFT)
-#define _PAGE_PFN_SHIFT       PAGE_SHIFT
+/* arch/sh/include/asm/pgtable-bits.h additions for J-Core (RTL layout) */
+#define _PAGE_VALID     (1UL << 0)   /* V — inert install (see §4.2 note) */
+#define _PAGE_STALE     (1UL << 1)   /* STALE — soft-invalidate, lazy shootdown */
+#define _PAGE_GLOBAL    (1UL << 2)   /* G */
+#define _PAGE_CACHEABLE (1UL << 3)   /* C */
+#define _PAGE_DIRTY     (1UL << 4)   /* D */
+#define _PAGE_USER      (1UL << 5)   /* U */
+#define _PAGE_EXEC      (1UL << 6)   /* X */
+#define _PAGE_WRITE     (1UL << 7)   /* W */
+/* No _PAGE_READ: read is implied by _PAGE_VALID, not a distinct RTL bit. */
+#define _PAGE_PAGEMASK_SHIFT  8
+#define _PAGE_PAGEMASK_MASK   (0xFUL << _PAGE_PAGEMASK_SHIFT)  /* [11:8] */
+#define _PAGE_PFN_SHIFT       10     /* PPN[31:10] */
 #define _PAGE_PFN_MASK        (~((1UL << _PAGE_PFN_SHIFT) - 1))
 
-/* Standard pgprot combinations */
+/* Standard pgprot combinations (re-derived from the RTL bit positions above) */
 #define PAGE_NONE       __pgprot(_PAGE_VALID | _PAGE_GLOBAL)
-#define PAGE_KERNEL     __pgprot(_PAGE_VALID | _PAGE_READ | _PAGE_WRITE | \
+#define PAGE_KERNEL     __pgprot(_PAGE_VALID | _PAGE_WRITE | \
                                  _PAGE_EXEC | _PAGE_CACHEABLE | _PAGE_GLOBAL | \
                                  _PAGE_DIRTY)
-#define PAGE_KERNEL_RO  __pgprot(_PAGE_VALID | _PAGE_READ | _PAGE_EXEC | \
+#define PAGE_KERNEL_RO  __pgprot(_PAGE_VALID | _PAGE_EXEC | \
                                  _PAGE_CACHEABLE | _PAGE_GLOBAL)
-#define PAGE_COPY       __pgprot(_PAGE_VALID | _PAGE_READ | _PAGE_USER | \
+#define PAGE_COPY       __pgprot(_PAGE_VALID | _PAGE_USER | \
                                  _PAGE_CACHEABLE)
-#define PAGE_SHARED     __pgprot(_PAGE_VALID | _PAGE_READ | _PAGE_WRITE | \
+#define PAGE_SHARED     __pgprot(_PAGE_VALID | _PAGE_WRITE | \
                                  _PAGE_USER | _PAGE_CACHEABLE | _PAGE_DIRTY)
-#define PAGE_READONLY   __pgprot(_PAGE_VALID | _PAGE_READ | _PAGE_USER | \
+#define PAGE_READONLY   __pgprot(_PAGE_VALID | _PAGE_USER | \
                                  _PAGE_CACHEABLE)
-#define PAGE_EXECUTABLE __pgprot(_PAGE_VALID | _PAGE_READ | _PAGE_EXEC | \
+#define PAGE_EXECUTABLE __pgprot(_PAGE_VALID | _PAGE_EXEC | \
                                  _PAGE_USER | _PAGE_CACHEABLE)
 ```
 
@@ -392,6 +394,8 @@ int __jcore_tlb_walk(pgd_t *pgd, unsigned long addr, unsigned long pteh_tag)
 ```
 
 For J64, the walker grows additional levels (P4D, PUD already). Compile-time level folding via the standard `pgtable.h` macros handles both widths from this one source.
+
+**OPEN DECISION (deferred to SP1): `_PAGE_ACCESSED` bit assignment.** The walker above sets `_PAGE_ACCESSED` on the software PTE, but this document does not assign it a bit position in §3.2. On J32 the 32-bit PTE is fully consumed by the RTL-mandated layout (`flags[7:0]` + `PageMask[11:8]` + `PPN[31:10]`) — there is no spare bit for a hardware-visible Accessed flag, and the hardware TLB does not implement one (it is ignored by the walker's `ldtlb.r`/TSB path either way). SP1 must pick one of: (a) steal/overload an existing software-only encoding (e.g. combine with `_PAGE_STALE` semantics), (b) track ACCESSED purely in a separate software structure outside the PTEL image, or (c) widen/relocate the PTE (the PAE §3.4 64-bit PTE has spare high bits available). This document does not make that call; it only records the constraint so SP1 starts from an accurate picture.
 
 ## 5. ASID Allocation and Context Switching
 
