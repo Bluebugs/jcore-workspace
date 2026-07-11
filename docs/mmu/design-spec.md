@@ -108,7 +108,7 @@ See [hardware-spec.md §2.10, §3.1, §4.2, §7](hardware-spec.md) for the hardw
 A user-mode (or P0/P3 kernel) memory access proceeds:
 
 1. Virtual address presented to MMU.
-2. MMU consults TLB. Match on `{ASID_TAG, VPN}` returns the PFN, page size, and permissions. (`ASID_TAG` is 16 bits = 12-bit ASID + 4-bit gen_low, per the kernel's encoding.)
+2. MMU consults TLB. Match on `{ASID_TAG, VPN}` returns the PFN, page size, and permissions. The ASID_TAG is compared against the dedicated ASIDR register; the VPN is compared against PTEH. (`ASID_TAG` is 16 bits = 12-bit ASID + 4-bit gen_low, per the kernel's encoding.) The ASID lives in the dedicated ASIDR register, not PTEH (RTL: `tlb.vhd:52,59`).
 3. On hit: physical address forms, access proceeds.
 4. On miss: hardware computes `TSBPTR = TSBBR | (hash(VPN) & mask) << 4`, stores it in the TSBPTR register, latches the faulting VPN into PTEH, stores the faulting effective address in TEA, and traps to the TLB-miss vector at `VBR + 0x400`.
 
@@ -117,7 +117,7 @@ A user-mode (or P0/P3 kernel) memory access proceeds:
 The handler runs in supervisor mode with `SR.RB=1` (bank 1 selected, providing 8 scratch registers without save/restore):
 
 1. Read TSBPTR. Load the TTE tag and data from that address.
-2. Compare tag against PTEH. If match: load the data into PTEL, execute LDTLB.R to install in the TLB and return atomically.
+2. Compare tag against PTEH (VPN) and ASIDR (ASID_TAG). If match: load the data into PTEL, execute LDTLB.RN to install in the TLB and return atomically (no delay slot).
 3. If mismatch: fall through to the slow-path page-table walker. Find the translation by walking the OS page table from `current_pgd`. Install in both the TSB (for next time) and the TLB.
 4. If the walker also fails: vector to the page-fault handler, which signals SIGSEGV or grows the stack or pages in the file, per standard Linux semantics.
 
@@ -145,7 +145,7 @@ SH-3 and SH-4 already provide R0–R7 register banking controlled by `SR.RB`. On
 
 J2 does not implement this banking machinery or the `SSR`/`SPC`/`R*_BANK`/`LDTLB` instructions it depends on; the baseline SH-4 (SH-4A) instructions the MMU must add — and the SH-4-only instructions it explicitly does *not* need — are enumerated in [hardware-spec.md §3.0](hardware-spec.md) and catalogued in [../sh4-nonfpu.json](../sh4-nonfpu.json). The cache-maintenance instructions that the shootdown path (§4.6) leans on are specified separately in [cache/l2-spec.md §17.5](../cache/l2-spec.md).
 
-**Prerequisite.** The supervisor/user mode, register banking, and `SPC`/`SSR` exception model this MMU assumes are not part of the MMU itself — they are the SH-4 *privileged architecture*, which J2 (an SH-2-class core) lacks entirely. They are specified, with their own implementation milestones, in [../priv-arch/design-spec.md](../priv-arch/design-spec.md). The MMU's `LDTLB`/`LDTLB.R` and miss-handler hot path are only meaningful once that work (its PM1 banking + PM2 exception model) is in place.
+**Prerequisite.** The supervisor/user mode, register banking, and `SPC`/`SSR` exception model this MMU assumes are not part of the MMU itself — they are the SH-4 *privileged architecture*, which J2 (an SH-2-class core) lacks entirely. They are specified, with their own implementation milestones, in [../priv-arch/design-spec.md](../priv-arch/design-spec.md). The MMU's `LDTLB`/`LDTLB.RN` and miss-handler hot path are only meaningful once that work (its PM1 banking + PM2 exception model) is in place.
 
 ### 4.5 SMP topology
 
