@@ -105,7 +105,7 @@ Inherited from SH-4, extended with PageMask. Accessed via `LDC Rm, PTEL` / `STC 
                        NOTE: PPN[31:10] overlaps PageMask[11:8] bits 10-11;
                        only PPN[27:13] drives relocation, so the overlap is
                        harmless but real (tlb.vhd:194-195).
-[11:8]   PageMask      log-size selector (see §2.2a page-size table).
+[11:8]   PageMask      log-size selector (see §2.1 PTEH VPN table).
 [7]      W             Writable
 [6]      X             Executable
 [5]      U             User-accessible
@@ -464,7 +464,7 @@ tlb_miss:
         bf      tsb_miss_slow   ! No: slow path
         mov.l   @r0, r3         ! Load TTE data
         ldc     r3, ptel        ! Stage data into PTEL
-        ldtlb.rn                 ! Install entry, return from exception (no delay slot)
+        ldtlb.rn                ! Install entry, return from exception (no delay slot)
          nop                    ! Padding only — not an architectural slot (§3.2)
 ```
 
@@ -477,7 +477,7 @@ Hot path: ~10 instructions (VPN compare + ASID compare + LDTLB.RN). With the slo
         ldc     r3, ptel
         mov.l   @r0, r3         ! TTE data high (PTEU image: PA[39:32] in [7:0])
         ldc     r3, pteu
-        ldtlb.rn                 ! {PTEU,PTEL,PTEH,ASIDR} -> TLB entry, return
+        ldtlb.rn                ! {PTEU,PTEL,PTEH,ASIDR} -> TLB entry, return
          nop
 ```
 
