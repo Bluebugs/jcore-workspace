@@ -283,8 +283,8 @@ jcore_tlb_miss:
         bf      jcore_tlb_miss_slow
         mov.l   @r0, r3             ! r3 = TTE data
         ldc     r3, ptel
-        ldtlb.r                     ! Install + return atomically
-         nop                        ! Delay slot of LDTLB.R
+        ldtlb.rn                    ! Install + return atomically
+         nop                        ! Padding only — not an architectural slot (§3.2)
 
 jcore_tlb_miss_slow:
         ! r0 points into the TSB slot; faulting VPN and ASID_TAG are
@@ -308,7 +308,7 @@ jcore_tlb_miss_slow:
         jsr     @r6
          nop
 
-        ! r0 returns 0 on success (PTEL set, do LDTLB.R), nonzero on fault
+        ! r0 returns 0 on success (PTEL set, do LDTLB.RN), nonzero on fault
         tst     r0, r0
         bf      jcore_tlb_real_fault
         ! restore PR and other saved registers
@@ -318,7 +318,7 @@ jcore_tlb_miss_slow:
         mov.l   @r15+, r6
         mov.l   @r15+, r5
         mov.l   @r15+, r4
-        ldtlb.r
+        ldtlb.rn
          nop
 
 jcore_tlb_real_fault:
@@ -335,7 +335,7 @@ jcore_tlb_real_fault:
 
 The hot path is 7 instructions. The slow path adds ~15 more plus the C walker.
 
-**PAE (`CONFIG_JCORE_PAE`) hot path.** The TTE `Data` becomes the full 64-bit TSB `Data` word: the final `mov.l @r0, r3 ; ldc r3, ptel` is replaced by a two-stage load of the low word into `PTEL` and the high word into `PTEU` before `ldtlb.r` (+2 instructions, no extra TSB traffic — both halves are in the already-loaded 16-byte entry). The exact sequence is in [hardware-spec.md §7 "PAE variant"](../mmu/hardware-spec.md); the file carries it under `#ifdef CONFIG_JCORE_PAE`.
+**PAE (`CONFIG_JCORE_PAE`) hot path.** The TTE `Data` becomes the full 64-bit TSB `Data` word: the final `mov.l @r0, r3 ; ldc r3, ptel` is replaced by a two-stage load of the low word into `PTEL` and the high word into `PTEU` before `ldtlb.rn` (+2 instructions, no extra TSB traffic — both halves are in the already-loaded 16-byte entry). The exact sequence is in [hardware-spec.md §7 "PAE variant"](../mmu/hardware-spec.md); the file carries it under `#ifdef CONFIG_JCORE_PAE`.
 
 ### 4.2 The C walker
 
@@ -381,7 +381,7 @@ int __jcore_tlb_walk(pgd_t *pgd, unsigned long addr, unsigned long pteh_tag)
         *pte = entry;
     }
 
-    /* Install into PTEL for LDTLB.R */
+    /* Install into PTEL for LDTLB.RN */
     __asm__ __volatile__ ("ldc %0, ptel" :: "r"(pte_val(entry)));
 
     /* Write to TSB for next time */
@@ -395,7 +395,7 @@ int __jcore_tlb_walk(pgd_t *pgd, unsigned long addr, unsigned long pteh_tag)
 
 For J64, the walker grows additional levels (P4D, PUD already). Compile-time level folding via the standard `pgtable.h` macros handles both widths from this one source.
 
-**OPEN DECISION (deferred to SP1): `_PAGE_ACCESSED` bit assignment.** The walker above sets `_PAGE_ACCESSED` on the software PTE, but this document does not assign it a bit position in §3.2. On J32 the 32-bit PTE is fully consumed by the RTL-mandated layout (`flags[7:0]` + `PageMask[11:8]` + `PPN[31:10]`) — there is no spare bit for a hardware-visible Accessed flag, and the hardware TLB does not implement one (it is ignored by the walker's `ldtlb.r`/TSB path either way). SP1 must pick one of: (a) steal/overload an existing software-only encoding (e.g. combine with `_PAGE_STALE` semantics), (b) track ACCESSED purely in a separate software structure outside the PTEL image, or (c) widen/relocate the PTE (the PAE §3.4 64-bit PTE has spare high bits available). This document does not make that call; it only records the constraint so SP1 starts from an accurate picture.
+**OPEN DECISION (deferred to SP1): `_PAGE_ACCESSED` bit assignment.** The walker above sets `_PAGE_ACCESSED` on the software PTE, but this document does not assign it a bit position in §3.2. On J32 the 32-bit PTE is fully consumed by the RTL-mandated layout (`flags[7:0]` + `PageMask[11:8]` + `PPN[31:10]`) — there is no spare bit for a hardware-visible Accessed flag, and the hardware TLB does not implement one (it is ignored by the walker's `ldtlb.rn`/TSB path either way). SP1 must pick one of: (a) steal/overload an existing software-only encoding (e.g. combine with `_PAGE_STALE` semantics), (b) track ACCESSED purely in a separate software structure outside the PTEL image, or (c) widen/relocate the PTE (the PAE §3.4 64-bit PTE has spare high bits available). This document does not make that call; it only records the constraint so SP1 starts from an accurate picture.
 
 ## 5. ASID Allocation and Context Switching
 
