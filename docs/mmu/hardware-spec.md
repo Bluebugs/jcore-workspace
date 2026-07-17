@@ -75,7 +75,7 @@ ASID_TAG[15:0] = (ASID[11:0] | (gen_low[3:0] << 12))
 
 Hardware does not interpret the split; only the kernel does. The Linux ASID allocator in [linux-spec.md §5](linux-spec.md) produces this 16-bit value directly.
 
-> **Security obligation (generation wrap):** only **4 bits** of `ASID_TAG` are the generation discriminator. The TLB is flushed at every rollover, so stale **TLB** entries are always rejected. **TSB** entries are not flushed and are rejected only by the tag compare — so after the generation field wraps (every 16 rollovers), a stale TSB slot with a matching `ASID[11:0]` and matching `gen_low[3:0]` is a **false hit** that the handler would install as a live, possibly cross-tenant, translation. The kernel **MUST** rebuild or zero the TSB on `gen_low` wrap (not merely bump the counter). Stale-TSB rejection is therefore a kernel obligation, not an unconditional hardware guarantee.
+> **Security obligation (generation wrap) — RESOLVED:** only **4 bits** of `ASID_TAG` are the generation discriminator. The TLB is flushed at every rollover, so stale **TLB** entries are always rejected. **TSB** entries are not flushed and are rejected only by the tag compare — so after the generation field wraps (every 16 rollovers), a stale TSB slot with a matching `ASID[11:0]` and matching `gen_low[3:0]` can be a **false hit**. The Linux port (mmu/asid-generation branch) satisfies this obligation: the kernel threads generation into `ASID_TAG` at `set_asid()` and rebuilds the TSB on `gen_low` wrap via `jcore_tsb_flush_on_generation()`, ensuring stale-TSB rejection is an unconditional generation-tagged guarantee. Resolved 2026-07-17 (linux@jcore mmu/asid-generation).
 
 **Context-switch sequence (Linux):**
 ```asm
