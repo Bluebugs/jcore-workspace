@@ -21,8 +21,8 @@ This guide describes how to use J-Core SIMD from software. Architectural definit
 
 | Concept | Where |
 |---|---|
-| V0..V15 dedicated 128-bit register file | [spec.md §2.1](spec.md) |
-| P0 16-bit predicate mask | [spec.md §2.5, §5.1](spec.md) |
+| V0..V15 dedicated VLEN-wide register file (256-bit J32 / 512-bit J64) | [spec.md §2.1](spec.md) |
+| P0 predicate mask (XLEN-bit: 32 on J32, 64 on J64) | [spec.md §2.5, §5.1](spec.md) |
 | VCSR.MKE (mask enable), VCSR.IEE (IEEE-strict FP) | [spec.md §2.4](spec.md) |
 | SIMDV / SIMDH prefix and the four lane widths (B/W/L/Q = 8/16/32/64) | [spec.md §3.2](spec.md) |
 | Eight reduction operators (add, OR, AND, XOR, min, max, min-u, max-u) | [spec.md §3.2 table](spec.md) |
@@ -33,7 +33,7 @@ This guide describes how to use J-Core SIMD from software. Architectural definit
 
 ### 2.2 Calling convention impact
 
-V0..V15 are caller-saved by default (matching the SH-4 FR0..FR15 convention). OS context-switch code adds 256 bytes per thread for V0..V15 plus 4 bytes for P0 and 4 bytes for VCSR. The Tier 0-aware kernel must save these immediately after FPSCR in the saved-context layout. Existing scalar SH-2 / SH-4 conventions for R0..R15 / FR0..FR15 / FPSCR are unchanged.
+V0..V15 are caller-saved by default (matching the SH-4 FR0..FR15 convention). OS context-switch code adds the V file (VLEN/8 × 16 = **512 bytes on J32, 1024 on J64**) plus P0 (XLEN/8 = 4 B J32 / 8 B J64) and VCSR (4 B) per thread — total 520 B (J32) / 1036 B (J64), matching [spec.md §2.6](spec.md). FP scalar results (reductions, VFIPR/VFTRV) land in the FR/DR file, which the OS already saves as FPU context — there is no separate SIMD-side FP scalar register. The Tier 0-aware kernel must save the SIMD state immediately after FPSCR in the saved-context layout. Existing scalar SH-2 / SH-4 conventions for R0..R15 / FR0..FR15 / FPSCR are unchanged.
 
 CRC accumulators and other long-lived SIMD state in flight across function calls follow whatever convention applies to the V register holding them.
 
@@ -47,7 +47,7 @@ Software is responsible for issuing the correct prefix before each governed inst
 
 ### 3.1 The chosen syntax family
 
-This project standardises on the **`SIMDV.w` / `SIMDH<op>.w` mnemonic family** for prefixes and the **`Vn`** register-name convention for the 128-bit V file. The alternative `vprefix.v.d` / `vclmul.d` skin that appeared in the original VCLMUL design draft is **not used**; all examples in this document and in [spec.md](spec.md) use the chosen family. See [spec.md §3.1](spec.md) for the decision and rationale.
+This project standardises on the **`SIMDV.w` / `SIMDH<op>.w` mnemonic family** for prefixes and the **`Vn`** register-name convention for the VLEN-wide V file (256-bit J32 / 512-bit J64). The alternative `vprefix.v.d` / `vclmul.d` skin that appeared in the original VCLMUL design draft is **not used**; all examples in this document and in [spec.md](spec.md) use the chosen family. See [spec.md §3.1](spec.md) for the decision and rationale.
 
 Practical consequences:
 
@@ -90,7 +90,7 @@ Practical consequences:
 ### 3.3 Mnemonic conventions
 
 - `.B` / `.W` / `.L` / `.Q` width suffixes: 8 / 16 / 32 / 64 bits.
-- `Vn` for n = 0..15 names a 128-bit SIMD register.
+- `Vn` for n = 0..15 names a VLEN-wide SIMD register (256-bit J32 / 512-bit J64).
 - Governed instructions inside a SIMD block use ordinary SH-2/SH-4 mnemonics with `FRn` or `Rn` operands; the assembler reinterprets the operand field as a V-register index in SIMD context.
 - `Vn.lane` in extract/insert syntax (e.g., `VEXTF.L V5.2, FR3`) is a single-mnemonic shorthand that the assembler expands to the two-instruction `VLNS + VEXT/VINS` sequence ([spec.md §5.7](spec.md)).
 - Lower-case mnemonics (`simdv.b`, `vclmul.d`) are also accepted by the assembler.
@@ -102,48 +102,53 @@ C intrinsics follow `__jcore_<op>_<typetag>` (lane width and signedness):
 ```c
 #include <jcore/simd.h>
 
-/* 128-bit SIMD register, union view */
-typedef union {
-    uint8_t   u8 [16];  int8_t   i8 [16];
-    uint16_t  u16[8];   int16_t  i16[8];
-    uint32_t  u32[4];   int32_t  i32[4];
-    uint64_t  u64[2];   int64_t  i64[2];
-    float     f32[4];   double   f64[2];
-} jcore_v128_t;
+/* VLEN-wide SIMD register, union view. VLEN = 8 * XLEN (spec.md §1.2):
+ * 256-bit on J32 (shown below), 512-bit on J64. The array bounds are
+ * VLEN/w and are sized to the target at compile time via __JCORE_VLEN_BYTES__;
+ * the J32 (32-byte) layout is written out here for concreteness. */
+typedef union {              /* J32: VLEN=256 (32 bytes); J64: VLEN=512 (64 bytes) */
+    uint8_t   u8 [32];  int8_t   i8 [32];   /* VLEN/8  int8  lanes */
+    uint16_t  u16[16];  int16_t  i16[16];   /* VLEN/16 int16 lanes */
+    uint32_t  u32[8];   int32_t  i32[8];    /* VLEN/32 int32 lanes */
+    uint64_t  u64[4];   int64_t  i64[4];    /* VLEN/64 int64 lanes */
+    float     f32[8];   double   f64[4];    /* 8 FP32 / 4 FP64 on J32 */
+} jcore_vec_t;
 
-typedef uint16_t jcore_mask16_t;   /* one bit per byte lane */
+/* Predicate = one bit per byte lane, so its width is XLEN (spec.md §1.2):
+ * uint32_t on J32, uint64_t on J64. */
+typedef uint32_t jcore_mask_t;   /* J32: 32 byte-lanes; J64 uses uint64_t */
 
 /* Tier 0 — vertical compute (lane-parallel) */
-jcore_v128_t __jcore_vadd_i8 (jcore_v128_t a, jcore_v128_t b);
-jcore_v128_t __jcore_vadd_i16(jcore_v128_t a, jcore_v128_t b);
-jcore_v128_t __jcore_vsub_i32(jcore_v128_t a, jcore_v128_t b);
-jcore_v128_t __jcore_vand    (jcore_v128_t a, jcore_v128_t b);
-jcore_v128_t __jcore_vxor    (jcore_v128_t a, jcore_v128_t b);
-jcore_v128_t __jcore_vfmul_f32(jcore_v128_t a, jcore_v128_t b);
+jcore_vec_t __jcore_vadd_i8 (jcore_vec_t a, jcore_vec_t b);
+jcore_vec_t __jcore_vadd_i16(jcore_vec_t a, jcore_vec_t b);
+jcore_vec_t __jcore_vsub_i32(jcore_vec_t a, jcore_vec_t b);
+jcore_vec_t __jcore_vand    (jcore_vec_t a, jcore_vec_t b);
+jcore_vec_t __jcore_vxor    (jcore_vec_t a, jcore_vec_t b);
+jcore_vec_t __jcore_vfmul_f32(jcore_vec_t a, jcore_vec_t b);
 /* ... etc. ... */
 
 /* Tier 0 — horizontal reduction */
-int32_t      __jcore_vhadd_i16(jcore_v128_t a);                  /* SIMDHA.W + ADD/MULS */
-double       __jcore_vhfmul_f32(jcore_v128_t a, jcore_v128_t b); /* dot product, → DR0 */
-int32_t      __jcore_vhmin_i16(jcore_v128_t a);                  /* SIMDHMN */
+int32_t      __jcore_vhadd_i16(jcore_vec_t a);                  /* SIMDHA.W + ADD/MULS */
+double       __jcore_vhfmul_f32(jcore_vec_t a, jcore_vec_t b); /* dot product, → DR0 */
+int32_t      __jcore_vhmin_i16(jcore_vec_t a);                  /* SIMDHMN */
 
 /* Tier 0 — vector memory and lane bridges */
-jcore_v128_t __jcore_vld_q (const void *p);                      /* VLD.Q */
-void         __jcore_vst_q (void *p, jcore_v128_t v);
-jcore_v128_t __jcore_vgather_q_i32(const void *base, jcore_v128_t indices);
-int32_t      __jcore_vext_l(jcore_v128_t v, unsigned lane);      /* VLNS+VEXT.L */
-jcore_v128_t __jcore_vins_l(jcore_v128_t v, unsigned lane, int32_t val);
+jcore_vec_t __jcore_vld_q (const void *p);                      /* VLD.Q */
+void         __jcore_vst_q (void *p, jcore_vec_t v);
+jcore_vec_t __jcore_vgather_q_i32(const void *base, jcore_vec_t indices);
+int32_t      __jcore_vext_l(jcore_vec_t v, unsigned lane);      /* VLNS+VEXT.L */
+jcore_vec_t __jcore_vins_l(jcore_vec_t v, unsigned lane, int32_t val);
 
 /* Tier 1 — saturating arithmetic and integer SIMD primitives */
-jcore_v128_t __jcore_vadd_sat_i8 (jcore_v128_t a, jcore_v128_t b); /* SIMDVS.B + ADD */
-jcore_v128_t __jcore_vadd_sat_u8 (jcore_v128_t a, jcore_v128_t b); /* SIMDVU.B + ADD */
-jcore_v128_t __jcore_vabs_i16    (jcore_v128_t a);                 /* VABS */
-jcore_v128_t __jcore_vpopcnt_u8  (jcore_v128_t a);                 /* VPOPCNT */
-jcore_v128_t __jcore_vunpk4lu    (jcore_v128_t a);                 /* VUNPK4LU */
-jcore_v128_t __jcore_vunpk4hs    (jcore_v128_t a);                 /* VUNPK4HS */
-jcore_v128_t __jcore_vabsdiff_u8 (jcore_v128_t a, jcore_v128_t b); /* VABSDIFF */
-jcore_v128_t __jcore_vpack_ss    (jcore_v128_t hi, jcore_v128_t lo);/* VPACK.SS */
-int32_t      __jcore_vdot_su_i8  (jcore_v128_t s, jcore_v128_t u); /* SIMDH.B+VMULSU */
+jcore_vec_t __jcore_vadd_sat_i8 (jcore_vec_t a, jcore_vec_t b); /* SIMDVS.B + ADD */
+jcore_vec_t __jcore_vadd_sat_u8 (jcore_vec_t a, jcore_vec_t b); /* SIMDVU.B + ADD */
+jcore_vec_t __jcore_vabs_i16    (jcore_vec_t a);                 /* VABS */
+jcore_vec_t __jcore_vpopcnt_u8  (jcore_vec_t a);                 /* VPOPCNT */
+jcore_vec_t __jcore_vunpk4lu    (jcore_vec_t a);                 /* VUNPK4LU */
+jcore_vec_t __jcore_vunpk4hs    (jcore_vec_t a);                 /* VUNPK4HS */
+jcore_vec_t __jcore_vabsdiff_u8 (jcore_vec_t a, jcore_vec_t b); /* VABSDIFF */
+jcore_vec_t __jcore_vpack_ss    (jcore_vec_t hi, jcore_vec_t lo);/* VPACK.SS */
+int32_t      __jcore_vdot_su_i8  (jcore_vec_t s, jcore_vec_t u); /* SIMDH.B+VMULSU */
 ```
 
 The corresponding GCC / Clang builtins follow `__builtin_jcore_<op>_<typetag>`; both names are exposed by `<jcore/simd.h>` when the compiler is invoked with `-mjcore-simd` (Tier 0), `-mjcore-simd-int` (Tier 1, implies Tier 0), or `-mjcore-simd-gf2` (Tier 2, implies Tier 0; does not imply Tier 1).
@@ -152,14 +157,14 @@ The corresponding GCC / Clang builtins follow `__builtin_jcore_<op>_<typetag>`; 
 
 ```c
 /* Build a predicate mask from a lane-wise comparison */
-jcore_mask16_t __jcore_vcmpgt_i16(jcore_v128_t a, jcore_v128_t b);
+jcore_mask_t __jcore_vcmpgt_i16(jcore_vec_t a, jcore_vec_t b);
 
 /* Apply the mask: subsequent SIMD ops see VCSR.MKE = 1 until __jcore_vmkchg() */
 void __jcore_vmkchg(void);
 
 /* Explicit P0 access for save/restore */
-jcore_mask16_t __jcore_get_p0(void);
-void           __jcore_set_p0(jcore_mask16_t m);
+jcore_mask_t __jcore_get_p0(void);
+void           __jcore_set_p0(jcore_mask_t m);
 
 /* Full VCSR access */
 uint32_t __jcore_get_vcsr(void);
@@ -229,22 +234,28 @@ bool has_jcore_simd_relaxed_mem(void) {   /* N>1 memory blocks; orthogonal to ti
 jcore-simd = "0.1"
 ```
 
+The lane-count suffixes below are the **J32 (VLEN 256)** widths — u8x32, i16x16,
+f32x8 — one full V register. On J64 (VLEN 512) they double (u8x64, i16x32, f32x16)
+and the predicate/mask type widens u32→u64.
+
 ```rust
-use core::simd::{u8x16, i8x16, i16x8, u16x8, i32x4, u32x4, f32x4};
+use core::simd::{u8x32, i8x32, i16x16, u16x16, i32x8, u32x8, f32x8};   /* J32: VLEN=256 */
 
 #[target_feature(enable = "jcore-simd")]
-pub unsafe fn vadd_i16(a: i16x8, b: i16x8) -> i16x8 { /* … */ }
+pub unsafe fn vadd_i16(a: i16x16, b: i16x16) -> i16x16 { /* … */ }
 
 #[target_feature(enable = "jcore-simd-int")]
-pub unsafe fn vmulsu_dot(s: i8x16, u: u8x16) -> i32 {
+pub unsafe fn vmulsu_dot(s: i8x32, u: u8x32) -> i32 {
     /* horizontal mixed-sign dot product, → MACL */
 }
 
 #[target_feature(enable = "jcore-simd-gf2")]
-pub unsafe fn vclmul_d(a: u8x16, b: u8x16) -> u8x16 { /* … */ }
+pub unsafe fn vclmul_d(a: u8x32, b: u8x32) -> u8x32 {
+    /* low 64×64→128-bit CLMUL; upper VLEN−128 bits preserved */
+}
 
 #[target_feature(enable = "jcore-simd-gf2")]
-pub unsafe fn vcrc32c_b(crc: u32, data: u8x16, mask: u16) -> u32 { /* … */ }
+pub unsafe fn vcrc32c_b(crc: u32, data: u8x32, mask: u32) -> u32 { /* mask: XLEN-bit */ }
 ```
 
 Safe wrappers (example for CRC-32C):
@@ -256,7 +267,7 @@ impl Crc32C {
     pub fn new() -> Self { Crc32C(0xFFFFFFFF) }
     pub fn update(&mut self, data: &[u8]) {
         if !has_gf2_feature() { return self.update_software(data); }
-        /* Process 16-byte chunks via vcrc32c_b, tail with predicate. */
+        /* Process VLEN/8-byte chunks via vcrc32c_b, tail with predicate. */
     }
     pub fn finalize(self) -> u32 { !self.0 }
 }
@@ -277,27 +288,31 @@ The Tier 2 intrinsic surface, beyond the type definitions in §3.4, is:
  *
  * Issues SIMDV.Q #1 followed by VCLMUL.D.
  */
-jcore_v128_t __jcore_vclmul_d(jcore_v128_t a, jcore_v128_t b);
+jcore_vec_t __jcore_vclmul_d(jcore_vec_t a, jcore_vec_t b);
 
 /**
- * Fold up to 16 bytes of data into a running CRC-32C accumulator.
+ * Fold up to sizeof(jcore_vec_t) bytes (VLEN/8; 32 on J32, 64 on J64) into a
+ * running CRC-32C accumulator.
  *
  * @param crc   Current CRC-32C accumulator (pre-XOR with 0xFFFFFFFF).
- * @param data  Up to 16 bytes of input data.
- * @param mask  Bit i selects byte i of data; 0xFFFF = all 16.
+ * @param data  Up to VLEN/8 bytes of input data.
+ * @param mask  Bit i selects byte i of data; all-ones = every lane.
  * @return      Updated accumulator.
  *
  * Issues an LDS-to-P0, VMKCHG, SIMDH.B #1, VCRC32C.B sequence;
  * GPR<->SIMD movement is handled transparently.
  */
-uint32_t __jcore_vcrc32c_b(uint32_t crc, jcore_v128_t data, jcore_mask16_t mask);
+uint32_t __jcore_vcrc32c_b(uint32_t crc, jcore_vec_t data, jcore_mask_t mask);
 ```
 
-For non-low-half VCLMUL inputs the programmer applies a swizzle intrinsic first:
+For non-low-half VCLMUL inputs the programmer applies a swizzle intrinsic first
+(the intrinsic emits the `SWIZZLE.I` as an in-block governed slot — SWIZZLE has no
+standalone form, [spec.md §3.3](spec.md) — so the compiler folds it into the same
+SIMD block as the VCLMUL, e.g. `SIMDV.Q #2` : `SWIZZLE.I`; `VCLMUL.D`):
 
 ```c
-jcore_v128_t a_hi = __jcore_vswizzle_d(a, 1);  /* high 64 bits to low position */
-jcore_v128_t product_hi_lo = __jcore_vclmul_d(a_hi, b);
+jcore_vec_t a_hi = __jcore_vswizzle_d(a, 1);  /* high 64 bits to low position */
+jcore_vec_t product_hi_lo = __jcore_vclmul_d(a_hi, b);
 ```
 
 ### 6.1 CRC-32C tight loop
@@ -308,21 +323,22 @@ jcore_v128_t product_hi_lo = __jcore_vclmul_d(a_hi, b);
 uint32_t crc32c(const uint8_t *buf, size_t len) {
     uint32_t crc = 0xFFFFFFFF;
 
-    /* 16-byte chunks */
-    while (len >= 16) {
-        jcore_v128_t chunk;
-        memcpy(&chunk, buf, 16);
-        crc = __jcore_vcrc32c_b(crc, chunk, 0xFFFF);
-        buf += 16;
-        len -= 16;
+    /* Full-vector chunks: VLEN/8 bytes each (32 on J32, 64 on J64) */
+    const size_t VB = sizeof(jcore_vec_t);
+    while (len >= VB) {
+        jcore_vec_t chunk;
+        memcpy(&chunk, buf, VB);
+        crc = __jcore_vcrc32c_b(crc, chunk, (jcore_mask_t)~0);   /* all lanes */
+        buf += VB;
+        len -= VB;
     }
 
-    /* Tail: 0..15 bytes, single predicated instruction */
+    /* Tail: 0..VB-1 bytes, single predicated instruction */
     if (len > 0) {
-        jcore_v128_t tail;
+        jcore_vec_t tail;
         memset(&tail, 0, sizeof(tail));
         memcpy(&tail, buf, len);
-        jcore_mask16_t mask = (uint16_t)((1u << len) - 1);
+        jcore_mask_t mask = ((jcore_mask_t)1 << len) - 1;
         crc = __jcore_vcrc32c_b(crc, tail, mask);
     }
 
@@ -337,27 +353,27 @@ uint32_t crc32c(const uint8_t *buf, size_t len) {
 GHASH operates in GF(2^128) modulo p(x) = x^128 + x^7 + x^2 + x + 1. Karatsuba decomposition of the 128×128 multiply:
 
 ```c
-jcore_v128_t ghash_mul(jcore_v128_t a, jcore_v128_t b) {
+jcore_vec_t ghash_mul(jcore_vec_t a, jcore_vec_t b) {
     /* Split into 64-bit halves */
-    jcore_v128_t a_lo = __jcore_vswizzle_d(a, 0);  /* a[63:0]   in low */
-    jcore_v128_t a_hi = __jcore_vswizzle_d(a, 1);  /* a[127:64] in low */
-    jcore_v128_t b_lo = __jcore_vswizzle_d(b, 0);
-    jcore_v128_t b_hi = __jcore_vswizzle_d(b, 1);
+    jcore_vec_t a_lo = __jcore_vswizzle_d(a, 0);  /* a[63:0]   in low */
+    jcore_vec_t a_hi = __jcore_vswizzle_d(a, 1);  /* a[127:64] in low */
+    jcore_vec_t b_lo = __jcore_vswizzle_d(b, 0);
+    jcore_vec_t b_hi = __jcore_vswizzle_d(b, 1);
 
     /* Karatsuba: three CLMULs instead of four */
-    jcore_v128_t P0 = __jcore_vclmul_d(a_lo, b_lo);
-    jcore_v128_t P1 = __jcore_vclmul_d(a_hi, b_hi);
-    jcore_v128_t a_xor = __jcore_vxor(a_lo, a_hi);
-    jcore_v128_t b_xor = __jcore_vxor(b_lo, b_hi);
-    jcore_v128_t P2 = __jcore_vclmul_d(a_xor, b_xor);
+    jcore_vec_t P0 = __jcore_vclmul_d(a_lo, b_lo);
+    jcore_vec_t P1 = __jcore_vclmul_d(a_hi, b_hi);
+    jcore_vec_t a_xor = __jcore_vxor(a_lo, a_hi);
+    jcore_vec_t b_xor = __jcore_vxor(b_lo, b_hi);
+    jcore_vec_t P2 = __jcore_vclmul_d(a_xor, b_xor);
 
     /* Combine: result_256 = (P1 << 128) ^ (mid << 64) ^ P0
        where mid = P2 ^ P0 ^ P1                                 */
-    jcore_v128_t mid = __jcore_vxor(P2, __jcore_vxor(P0, P1));
+    jcore_vec_t mid = __jcore_vxor(P2, __jcore_vxor(P0, P1));
 
     /* Montgomery-style reduction modulo p(x) via two more CLMULs
        against the well-known reduction constants K1, K2.        */
-    extern const jcore_v128_t GHASH_REDUCTION_K1, GHASH_REDUCTION_K2;
+    extern const jcore_vec_t GHASH_REDUCTION_K1, GHASH_REDUCTION_K2;
     return ghash_reduce(P0, mid, P1);
 }
 ```
@@ -373,24 +389,25 @@ void raid6_syndromes(const uint8_t **strips, size_t nstrips, size_t len,
                      uint8_t *P, uint8_t *Q) {
     extern const uint64_t RAID6_G_POWERS[];   /* GF(2^8) generator powers */
 
-    for (size_t i = 0; i < len; i += 16) {
-        jcore_v128_t p = __jcore_vzero();
-        jcore_v128_t q = __jcore_vzero();
+    const size_t VB = sizeof(jcore_vec_t);   /* VLEN/8 bytes per step */
+    for (size_t i = 0; i < len; i += VB) {
+        jcore_vec_t p = __jcore_vzero();
+        jcore_vec_t q = __jcore_vzero();
 
         for (size_t k = 0; k < nstrips; k++) {
-            jcore_v128_t s;
-            memcpy(&s, strips[k] + i, 16);
+            jcore_vec_t s;
+            memcpy(&s, strips[k] + i, VB);
 
             /* P syndrome: simple XOR */
             p = __jcore_vxor(p, s);
 
             /* Q syndrome: GF(2^8) multiply by g^k, accumulate */
-            jcore_v128_t g = __jcore_vbroadcast_b(RAID6_G_POWERS[k]);
-            jcore_v128_t gq = gf256_mul_simd(s, g);    /* uses VCLMUL.D */
+            jcore_vec_t g = __jcore_vbroadcast_b(RAID6_G_POWERS[k]);
+            jcore_vec_t gq = gf256_mul_simd(s, g);    /* uses VCLMUL.D */
             q = __jcore_vxor(q, gq);
         }
-        memcpy(P + i, &p, 16);
-        memcpy(Q + i, &q, 16);
+        memcpy(P + i, &p, VB);
+        memcpy(Q + i, &q, VB);
     }
 }
 ```
@@ -406,10 +423,10 @@ void hqc_poly_mul(const uint64_t *a, const uint64_t *b, uint64_t *result,
                   size_t n_words) {
     memset(result, 0, 2 * n_words * sizeof(uint64_t));
     for (size_t i = 0; i < n_words; i++) {
-        jcore_v128_t a_i = __jcore_vload_u64_to_low(a[i]);
+        jcore_vec_t a_i = __jcore_vload_u64_to_low(a[i]);
         for (size_t j = 0; j < n_words; j++) {
-            jcore_v128_t b_j = __jcore_vload_u64_to_low(b[j]);
-            jcore_v128_t prod = __jcore_vclmul_d(a_i, b_j);
+            jcore_vec_t b_j = __jcore_vload_u64_to_low(b[j]);
+            jcore_vec_t prod = __jcore_vclmul_d(a_i, b_j);
             xor_into_result(result + i + j, prod);
         }
     }
@@ -426,9 +443,9 @@ Same VCLMUL.D-based GF(2^8) primitive as RAID-6 with different field generators:
 #define DVB_S2_REDUCTION_POLY  0x11D
 
 uint8_t gf256_mul_dvb_s2(uint8_t a, uint8_t b) {
-    jcore_v128_t va = __jcore_vsetlo_u64(a);
-    jcore_v128_t vb = __jcore_vsetlo_u64(b);
-    jcore_v128_t prod = __jcore_vclmul_d(va, vb);
+    jcore_vec_t va = __jcore_vsetlo_u64(a);
+    jcore_vec_t vb = __jcore_vsetlo_u64(b);
+    jcore_vec_t prod = __jcore_vclmul_d(va, vb);
     return gf256_reduce(prod, DVB_S2_REDUCTION_POLY);
 }
 ```
@@ -601,7 +618,7 @@ The performance counter exposes total cycles, VCLMUL.D count, VCRC32C.B count, a
 
 For buffers larger than L1, performance is bounded by memory bandwidth, not CLMUL throughput. The standard prefetch-and-process pattern applies — and the Tier 0 NT hint ([spec.md §5.6.2](spec.md)) is the architectural lever for streaming workloads that should not pollute the cache.
 
-For small buffers (typical of network-packet CRC), the entire buffer fits in registers and CLMUL throughput is the bottleneck. The 16-byte tail handler is critical here — predicated VCRC32C.B saves ~10 cycles vs scalar loop epilogue.
+For small buffers (typical of network-packet CRC), the entire buffer fits in registers and CLMUL throughput is the bottleneck. The sub-vector tail handler (0..VLEN/8−1 bytes) is critical here — predicated VCRC32C.B saves ~10 cycles vs scalar loop epilogue.
 
 ---
 
@@ -643,17 +660,18 @@ In heterogeneous systems (some cores with extension, some without), pin crypto-h
 
 static uint32_t crc32c_hw(const uint8_t *buf, size_t len) {
     uint32_t crc = 0xFFFFFFFF;
-    while (len >= 16) {
-        jcore_v128_t chunk;
-        memcpy(&chunk, buf, 16);
-        crc = __jcore_vcrc32c_b(crc, chunk, 0xFFFF);
-        buf += 16; len -= 16;
+    const size_t VB = sizeof(jcore_vec_t);   /* VLEN/8: 32 on J32, 64 on J64 */
+    while (len >= VB) {
+        jcore_vec_t chunk;
+        memcpy(&chunk, buf, VB);
+        crc = __jcore_vcrc32c_b(crc, chunk, (jcore_mask_t)~0);
+        buf += VB; len -= VB;
     }
     if (len > 0) {
-        jcore_v128_t tail;
+        jcore_vec_t tail;
         memset(&tail, 0, sizeof(tail));
         memcpy(&tail, buf, len);
-        crc = __jcore_vcrc32c_b(crc, tail, (1u << len) - 1);
+        crc = __jcore_vcrc32c_b(crc, tail, ((jcore_mask_t)1 << len) - 1);
     }
     return ~crc;
 }
