@@ -10,7 +10,7 @@ This guide describes implementation tactics for the SIMD architecture. The archi
 
 ## 1. Scope and organisation
 
-- **Tier 0 / Tier 1 (§2–§5):** the 128-bit SIMD execution unit. Decode-stage shadow latch, 4-beat sequencing, coprocessor port sharing, J32-OOO dual-issue considerations, non-temporal memory handling, the additional ~4k-gate Tier 1 datapath (saturation, VABS, VPOPCNT, VUNPK4, VABSDIFF, VPACK, VMULSU).
+- **Tier 0 / Tier 1 (§2–§5):** the VLEN-wide SIMD execution unit (256-bit on J32, 512-bit on J64; spec.md §1.2). Decode-stage shadow latch, VLEN/32-beat sequencing, coprocessor port sharing, J32-OOO dual-issue considerations, non-temporal memory handling, the additional ~4k-gate Tier 1 datapath (saturation, VABS, VPOPCNT, VUNPK4, VABSDIFF, VPACK, VMULSU).
 - **Tier 2 (§6–§12):** the GF(2) crypto unit (VCLMUL.D, VCRC32C.B). Three implementation tiers (A combinational, B Karatsuba pipelined, C iterative); reuse strategy for the existing widening multiplier; VCRC32C.B as decode-stage fusion onto VCLMUL.D; pipeline integration; verification; synthesis targets; timing; power; test/debug; bring-up.
 
 The Tier 3 (256-bit J64) wide-vector extension has no architectural specification yet and therefore no hardware implementation guidance.
@@ -41,20 +41,22 @@ None of these are architecturally visible (see [spec.md §2.5, §6.1](spec.md)).
 
 ---
 
-## 3. Tier 0/1: Four-beat ALU sequencing and the restart-from-prefix mechanism
+## 3. Tier 0/1: Beat-serial ALU sequencing and the restart-from-prefix mechanism
 
 ### 3.1 Beat schedule
 
-For each governed instruction, the EX stage is extended into 4 (or 8, for w = 64) sequential beats:
+For each governed instruction, the EX stage is extended into **VLEN/32 sequential beats** (spec.md §1.2: VLEN = 256 on J32 → **8 beats**, 512 on J64 → 16 beats) on a 32-bit ALU. A 32-bit ALU consumes 32 bits of lanes per beat, so the beat count is VLEN/32 independent of lane width *w*:
 
-| Lane width | Lanes per beat (32-bit ALU) | Beats per governed instruction |
-|---|---|---|
-| 8  | 4   | 4 |
-| 16 | 2   | 4 |
-| 32 | 1   | 4 |
-| 64 | 0.5 | 8 |
+| Lane width | Lanes per beat (32-bit ALU) | Beats (J32, VLEN 256) | Beats (J64, VLEN 512) |
+|---|---|---|---|
+| 8  | 4   | 8 | 16 |
+| 16 | 2   | 8 | 16 |
+| 32 | 1   | 8 | 16 |
+| 64 | 0.5 | 8 | 16 |
 
-Carry chains are broken at lane boundaries within each beat using AND gates on the carry-out of each *w*-bit segment. The horizontal-mode reduction sums into an internal 64-bit accumulator that is written back to MACL/MACH (or FPUL, or DR0) at WB.
+A wider ALU (e.g. a 64-bit or 128-bit SIMD datapath) reduces the beat count proportionally (VLEN/64, VLEN/128).
+
+Carry chains are broken at lane boundaries within each beat using AND gates on the carry-out of each *w*-bit segment. The horizontal-mode reduction sums into an internal 64-bit accumulator that is written back to MACL/MACH (integer) or FR0/DR0 (FP) at WB — the FP writeback reuses the FPU's existing FR/DR write ports (spec.md §2.3; VFPUL retired).
 
 Adjacent governed instructions may interleave their beats provided source/destination conflicts are honoured. On a single-ALU J32 implementation, beats are sequential. On a dual-issue J32-OOO ([../ooo/j32ooo-spec.md](../ooo/j32ooo-spec.md)), a second ALU may consume beats in parallel for distinct lane subsets, halving the per-instruction beat count.
 
@@ -71,7 +73,7 @@ The architectural N=1 memory-access rule ([spec.md §5.6.1, §6.4](spec.md)) let
 
 The implementation contract: the exception entry logic must clear `SIMD_VAL`, `SIMD_CNT`, `SIMD_W`, `SIMD_H`, `SIMD_RED`, `SIMD_SAT`, `V_LANE_VALID`. Address registers used in post-increment / pre-decrement modes must commit only after the access succeeds — this is the standard SH-4 convention and applies unchanged. Gather/scatter writes commit in lane-index order so that previously-completed lanes act as idempotent no-ops on retry.
 
-This mechanism is the architectural answer to the software-MMU problem and avoids the cost of microarchitectural write-buffering of all governed-instruction results (which would be ~4 × 128 bits per N=4 block plus scatter-destination buffers — a significant area cost the N=1 rule sidesteps entirely).
+This mechanism is the architectural answer to the software-MMU problem and avoids the cost of microarchitectural write-buffering of all governed-instruction results (which would be ~N × VLEN bits per block — ~4 × 256 = 1024 b on J32, 4 × 512 = 2048 b on J64 — plus scatter-destination buffers, a significant area cost the N=1 rule sidesteps entirely).
 
 ---
 
@@ -80,20 +82,22 @@ This mechanism is the architectural answer to the software-MMU problem and avoid
 The j-core coprocessor port (already used by the SH-4 FPU and the MMU in J3) is the natural attachment point for the SIMD execution unit. The unit shares:
 
 - The FPU multiplier and adder for FP governed instructions.
-- The FPU register file ports for SIMD reduction destination writes (FPUL, DR0).
+- The FPU register file ports for SIMD FP reduction destination writes (FR0/DR0, and the 4-wide FTRV port for VFTRV).
 - The integer ALU for integer governed instructions (the SIMD unit muxes lane width into the ALU's carry-break controls).
 - The integer widening multiplier for MULS.W / MULU.W governed instructions and (Tier 1) for VMULSU.
 
 The swizzle crossbar is a new structure attached to the V register file's read ports. Area cost:
 
-| Lane width | Crossbar size | Approximate gate count |
-|---|---|---|
-| 32 (4 lanes) | 4×4 of 32-bit buses | ≈500 gates |
-| 16 (8 lanes) | 8×8 of 16-bit buses | ≈1000 gates |
-| 8 (16 lanes) | 16×16 of 8-bit buses | ≈2000 gates |
-| 64 (2 lanes) | trivial swap | ≈50 gates |
+Lane count is VLEN/w; the table below is the **J32 (VLEN 256)** worst case (J64 doubles each lane count and roughly quadruples the crossbar):
 
-A single physical crossbar is sized for the worst case (16×16 at 8-bit width) and serves all widths.
+| Lane width | Lanes = VLEN/w (J32) | Crossbar size | Approximate gate count |
+|---|---|---|---|
+| 32 | 8  | 8×8 of 32-bit buses   | ≈1000 gates |
+| 16 | 16 | 16×16 of 16-bit buses | ≈4000 gates |
+| 8  | 32 | 32×32 of 8-bit buses  | ≈8000 gates |
+| 64 | 4  | 4×4 of 64-bit buses   | ≈200 gates  |
+
+A single physical crossbar is sized for the worst case (32×32 at 8-bit width on J32; 64×64 on J64) and serves all widths.
 
 ---
 
@@ -129,12 +133,12 @@ Cumulative Tier 1 cost atop a Tier 0 J32 implementation:
 |---|---|---|---|
 | Saturation in SIMDV (SIMDVS/SIMDVU) | ~500 | none | Saturation muxes parallel to ALU; reuses existing ADD/SUB datapath |
 | VABS | ~200 | none | Negate + select, lane-parallel |
-| VPOPCNT | ~2k–3k | adds one cycle on widest lanes if naive | Wallace-tree popcount per byte ~30 gates; 16 byte units = ~500 gates; 32/64-bit per-lane trees dominate |
+| VPOPCNT | ~3k–5k | adds one cycle on widest lanes if naive | Wallace-tree popcount per byte ~30 gates; VLEN/8 byte units (32 on J32, 64 on J64) = ~1k–2k gates; 32/64-bit per-lane trees dominate |
 | VUNPK4 | ~300 | none | AND-masks + sign-extend muxes |
 | VABSDIFF | ~600 | none | SUB result + per-lane two's-complement-and-select |
 | VPACK family | ~400 | none | Saturating clamp comparators per output lane |
 | VMULSU | ~0 | none | Existing MULS datapath; single sign-control mux on multiplier's second operand |
-| **Total Tier 1** | **≈ 4k gates** | conditional one extra cycle for VPOPCNT | Modest compared to Tier 0's V-register file (~2k flip-flops) |
+| **Total Tier 1** | **≈ 5k gates** | conditional one extra cycle for VPOPCNT | Modest compared to Tier 0's V-register file (~4k flip-flops on J32 = 16 × 256; ~8k on J64) |
 
 Estimated 2–3% area increase over a Tier 0 J32 SIMD block.
 
@@ -143,12 +147,12 @@ Estimated 2–3% area increase over a Tier 0 J32 SIMD block.
 ### 5.4 Pipeline-stage placement summary (Tier 0/1)
 
 ```
-Stage:    IF    ID         EX (beats 0..3)         MA            WB
-Prefix:   ──── ID*  ────── (no compute)         ──────         ──────
-Gov:      ──── ID** ────── 4-beat ALU/multiplier ── MA(memops) ── writeback
+Stage:    IF    ID       EX (beats 0..VLEN/32-1)     MA            WB
+Prefix:   ──── ID*  ────── (no compute)            ──────         ──────
+Gov:      ──── ID** ────── VLEN/32-beat ALU/mult ── MA(memops) ── writeback
                                                                    to V<n> /
                                                                    MACL+MACH /
-                                                                   FPUL / DR0
+                                                                   FR0 / DR0
 ```
 
 ID* updates shadow latches; ID** reads them. Memops use the existing MA stage and the standard SH-4 memory-fault path with restart-from-prefix (§3.2).
@@ -369,16 +373,16 @@ For each byte (predicated by P0):
     crc   = (crc >> 8) ⊕ TABLE_C[index]
 ```
 
-A 256-entry × 32-bit ROM (8 kbits) provides TABLE_C lookups. With 16 bytes per instruction, options are:
-- 16 parallel ROM ports (impractical).
-- 16 sequential lookups (slow, 16+ cycles per instruction).
-- Multi-banked ROM with 2–4 ports (moderate area, 4–8 cycles per instruction).
+A 256-entry × 32-bit ROM (8 kbits) provides TABLE_C lookups. With VLEN/8 bytes per instruction (32 on J32, 64 on J64), options are:
+- VLEN/8 parallel ROM ports (impractical).
+- VLEN/8 sequential lookups (slow, VLEN/8+ cycles per instruction).
+- Multi-banked ROM with 2–4 ports (moderate area, VLEN/32–VLEN/16 cycles per instruction).
 
 The CLMUL-fused approach is strongly preferred; the LFSR path is documented as a fallback for "VCLMUL absent" variants only.
 
 ### 8.3 Predicate routing
 
-The P0 mask register is read concurrently with Vm. Each of the 16 byte-mask bits AND-gates the corresponding byte position in Vm before it enters the CLMUL fold. Masked-off bytes contribute zero to the polynomial, leaving the accumulator unchanged for those positions.
+The P0 mask register is read concurrently with Vm. Each of the VLEN/8 byte-mask bits (32 on J32, 64 on J64) AND-gates the corresponding byte position in Vm before it enters the CLMUL fold. Masked-off bytes contribute zero to the polynomial, leaving the accumulator unchanged for those positions.
 
 ```
    Vm   ─────┐                ┌────┐
@@ -387,7 +391,7 @@ The P0 mask register is read concurrently with Vm. Each of the 16 byte-mask bits
                               └────┘
 ```
 
-Implementation: 16 × 8 = 128 AND gates at the SIMD ALU input. Negligible silicon.
+Implementation: VLEN/8 × 8 = VLEN AND gates at the SIMD ALU input (256 on J32, 512 on J64). Negligible silicon.
 
 ---
 
@@ -617,7 +621,7 @@ For new J-core variants adding Tier 2:
 3. **CRC-32-IEEE acceleration.** Currently software-only via CLMUL folding. If profile data shows it dominates, consider a `VCRC32.B` variant sharing the same datapath.
 4. **GF(2^8) S-box / S-substitution acceleration.** Bitsliced AES suffices today; if Curve448 or similar workloads emerge, evaluate.
 5. **Tier 1 partial implementations and feature-register bits.** Per [spec.md §10](spec.md), partial Tier 1 deployments are permitted but the feature-register encoding still needs to be specified (one bit per partial subset, or a single Tier 1 capability bit with an architectural manifest).
-6. **Tier 3 (256-bit) hardware path.** No specification yet; the principal question is whether the same Tier 0/1/2 datapath widens transparently (a 256-bit ALU + a 256-bit V register file) or whether Tier 3 introduces new opcodes (parallel 128-bit lanes, AVX-style).
+6. **Tier 3 (width beyond VLEN) hardware path.** No specification yet. Note VLEN is now 256 on J32 / 512 on J64 natively (spec.md §1.2), so Tier 3 no longer means "256-bit" — it means growth *beyond* the predicate-driven VLEN. The principal question is whether such a facility widens the existing datapath transparently (a wider ALU + register file with a widened/multi-register predicate) or introduces new AVX-style multi-VLEN opcodes.
 
 ---
 
