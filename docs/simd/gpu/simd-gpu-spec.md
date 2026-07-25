@@ -305,7 +305,7 @@ These bridge FP16 storage (memory/textures) to the FP32 accumulate path and back
 conversions.** A third `FPSCR.PR` "half" arithmetic mode would be high-cost and
 low-value — scalar FP16 math is rare, and the right move is always "convert to
 FP32, compute, convert back." What *is* worth adding to the SH-4 FPU
-([../fpu/spec.md](../fpu/spec.md)) is a pair of scalar conversions, exactly
+([../fpu/spec.md](../../fpu/spec.md)) is a pair of scalar conversions, exactly
 analogous to SH-4's existing `FCNVSD`/`FCNVDS` (single↔double):
 
 - **`FCNVSH FRm, FRn`** — single → half (result in the low 16 bits of FRn).
@@ -705,7 +705,7 @@ art; no post-2006 GPU-vendor ISA (AMD, NVIDIA, SPIR-V, Vulkan) is a design sourc
    one J32 register (§8.6). Remaining sub-question: whether to add a native FP16
    result-narrowing writeback mode to VFTRV or leave it to a following `VCVT.SH`.
 4. **Scalar FP16 conversions in the FPU.** §8.5 proposes `FCNVSH`/`FCNVHS` for
-   [../fpu/spec.md](../fpu/spec.md); the encoding and whether to also add `FMOV.H`
+   [../fpu/spec.md](../../fpu/spec.md); the encoding and whether to also add `FMOV.H`
    (16-bit FP load/store) are open, tracked against the FPU spec.
 5. **Texture coordinate encoding (§9.2).** SoA (`Vu`,`Vv`) vs FP16 AoS `(u,v)` per
    lane — settle in the opcode-map audit against how the shader backend emits coords.
