@@ -295,6 +295,10 @@ The OoO spec is internally inconsistent (its narrative and its §15 gate-budget 
 4. **De-feature OoO:** smaller ROB (20→12 entries), single ALU. Saves ~20% LUT.
 5. **Reconcile the OoO spec §15** with its own narrative, presumably by re-counting gates per LUT4 with empirical data — the spec may simply be over-counted.
 
+**J32-LT does not solve this.** [ooo/j32lt-spec.md §12.1](ooo/j32lt-spec.md) estimates the light 4-way-FGMT core at ~220k gates against J32-OOO's ~222k — deleting the issue queue, the rename machinery, the store-set predictor, and two predictor tables is almost exactly cancelled by quadrupling the thread contexts. J32-LT is an **energy** design point, not an area one, and substituting it for J32-OOO leaves the Phase 6.5 fit problem untouched. Do not treat "light OoO" as a LUT-budget mitigation.
+
+It does, however, change *what a core is worth* on this board: 4 hardware threads at ~1.55 aggregate IPC serve roughly four tenant VMs per core, against two for J32-OOO. For a service whose Tier 1.5 value is concurrent tenants rather than single-tenant latency, one J32-LT core may be preferable to two J32-OOO cores at half the area — which is option 3 (single-core on the 85F) reframed as a feature rather than a concession. That is the Phase 6.5 decision worth taking seriously if the pessimistic LUT numbers hold.
+
 ### BRAM budget — corrected
 
 The plan's prior "~50% BRAM at Phase 7.5" was an under-estimate. Per [cache/l2-spec.md §20.1](cache/l2-spec.md): two cores × (32 KB I + 32 KB D) = 72 EBRs plus the 128 KB L2 at 71 EBRs = **141 EBRs (~67%) for the cache subsystem alone**. Add FPU FSCA/FSRRA tables (+2), SIMD register file (+1.5–2), AIC2 + PMU shadow + hypervisor scratch (+5–10) → **~150–155 EBRs (~73–75%)** at Phase 7.5.
@@ -750,6 +754,8 @@ Scope: promote `cpus_two_fpga.vhd` to coherent SMP with the dual-issue OoO core 
 Per-thread interrupt routing via [aic/aic2-spec.md §4 (Tier 1)](aic/aic2-spec.md): each interrupt source carries a `(core_id, thread_id)` target, and the `per_tc_pending` sideband wakes SLEEP-parked threads directly into the OoO ready-thread arbiter.
 
 Hypervisor scheduler updated to assign vCPUs to hardware threads. Realistic concurrent-VM count nudges from 2–3 to 3–4 (RAM still binding constraint, but more CPU to spread across guests).
+
+**Alternative core for this phase: J32-LT** ([ooo/j32lt-spec.md](ooo/j32lt-spec.md)) — a single core with 4-way barrel FGMT instead of two cores with 2-way FGMT each. Same 4 logical CPUs, roughly half the LUT and EBR, no L1-D MSI directory needed (threads on one core are coherent by construction), and the per-thread `ASIDR` of [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md) covers the address-space isolation the hypervisor needs. What is given up: no real SMP to validate, no cross-core coherence exercise, and single-thread performance ~0.94 IPC rather than the OoO core's higher figure. If the Phase 6 decision gate says dual-core does not fit the 85F, this is the path that still delivers "4 CPUs in `/proc/cpuinfo`" on schedule. Requires AIC2 at `n_tc = 4` ([aic/aic2-spec.md §4](aic/aic2-spec.md)).
 
 Dependencies: Phase 6.
 
