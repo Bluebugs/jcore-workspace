@@ -14,7 +14,7 @@
 
 1. **Energy efficiency first.** Minimise dynamic activity per committed instruction. Every structure in [j32ooo-spec](j32ooo-spec.md) that performs an associative search, a multi-way array read, or a speculative table lookup on every cycle or every memory op is either deleted or reduced to a single direct-mapped access.
 2. **Aggregate IPC ≥ 1.5** architectural instructions retired per core cycle with 4 runnable threads (§2.4 derives the expected ~1.55).
-3. **Single-thread floor:** with one thread runnable, IPC must be no worse than the in-order J32 baseline. Latency-sensitive workloads must not pay for the thread count. **This goal is presently in conflict with §3.1 + §3.3 — see §2.5. It is the one unresolved design question in this document.**
+3. **Single-thread floor:** with one thread runnable, IPC must be no worse than the in-order J32 baseline (~0.7–0.85). Latency-sensitive workloads must not pay for the thread count. Met by the barrel period floor of §2.5, which yields ~0.94.
 4. Preserve precise exceptions per thread, the J32 MMU model, and CAS.L semantics with no architecturally visible changes.
 5. Present to Linux as 4 logical CPUs per core.
 
@@ -83,7 +83,7 @@ Nothing in this document requires a post-2005 citation.
 | RAS   | +pred |       | steer | FU    | read | MUL  | MSHR  |      | ret  |
 +-------+-------+-------+-------+-------+------+------+-------+------+------+
    \_________ barrel front end __________/  \_____ shared back end ______/
-        4 threads, 4 stages, 1:1
+      4 threads, 4 stages, 1:1 at k=4
 ```
 
 Ten stages. The four stages IF1–PAIR form the **barrel** (§3). ISS onward is shared and thread-tagged.
@@ -129,26 +129,39 @@ Expected `E[width] ≈ 1.55`, giving **aggregate IPC ≈ 1.55**, against a hard 
 
 **This is a projection, not a measurement.** §12.2 makes it a gate, and §14 records the fallback if it does not hold.
 
-### 2.5 Single-thread behaviour — an unresolved conflict
+### 2.5 Single-thread behaviour — the barrel period floor
 
-The arithmetic of §2.4 runs the other way when threads are idle. With **one** runnable thread under a strict barrel (§3.1) and one bundle in flight per thread (§3.3):
+The arithmetic of §2.4 runs the other way when threads are idle. With **one** runnable thread under an unmodified barrel and one bundle in flight, the thread reaches ISS once every 4 cycles and cannot refetch until that bundle drains, retiring 2 architectural instructions per 4–5 cycles: **~0.47 IPC**, against a ~0.7–0.85 in-order J32 baseline. Goal §1.1(3) would be violated by roughly a factor of two.
 
-- the thread reaches ISS once every 4 cycles, and
-- its next fetch cannot launch until the current bundle drains,
+The binding constraint is **fetch rate, not issue width**. Even at a perfect `E[width]` of 2.0, a bundle arriving every 4 cycles caps throughput at 0.5. Fusion, pairing rules, and the second ALU cannot move this number. The only lever is bundle period.
 
-so it retires 2 architectural instructions per 4–5 cycles: **~0.4–0.5 IPC**. The in-order J32 baseline is ~0.7–0.85. **Goal §1.1(3) is therefore violated by roughly a factor of two, and gate G2 fails by construction rather than by tuning.**
+**Mechanism.** With *k* ready threads, thread selection uses a period of `max(k, 2)` rather than `k`. A thread may hold up to `⌈4 / max(k,2)⌉` bundles in flight, so the standby queue (§3.2) is **2 deep**.
 
-This is not a defect in the barrel; it is the direct cost of the two properties that make the front end cheap. A barrel with idle threads leaves their stages empty by definition, and the single-bundle rule prevents the remaining thread from filling them. The three ways out:
+Modelling as in §2.4 — ~13% of instructions are taken branches, so ~26% of 2-instruction bundles are entered mid-bundle at 0.5 dead slots each, giving **1.87 effective instructions per bundle**:
 
-| Option | Single-thread IPC | Cost |
-|---|---|---|
-| **A. Accept it.** Restate §1.1(3): J32-LT is a throughput part, single-thread latency work belongs on J32-OOO. | ~0.45 | none |
-| **B. Barrel compaction.** The counter cycles `mod k` over the *k* ready threads; a thread may hold up to `⌈4/k⌉` bundles in flight, so the standby register (§3.2) becomes a `⌈4/k⌉`-deep queue (4-deep at `k=1`). At `k=1` this degenerates to an ordinary in-order dual-issue pipeline with a 4-deep fetch queue. | ~1.3–1.5 | standby register → 4-deep queue per thread (~1.1k FFs), per-stage thread tags return, barrel invariant of §3.1 and §8.2 is lost |
-| **C. Compaction only at `k=1`.** A single-thread mode bit; the barrel is strict for `k≥2`. | ~1.3–1.5 at `k=1`, ~0.45 at `k=2–3` | a mode transition to verify, and the `k=2`/`k=3` cases stay bad |
+| *k* | Period | Aggregate IPC | Single-thread IPC |
+|---|---|---|---|
+| 4 | 4 (floor inactive) | 1.55 | — |
+| 3 | 3 (floor inactive) | 1.55 | — |
+| 2 | 2 | 1.55 (port still saturated) | — |
+| **1** | **2** | — | **0.94** |
 
-**No option is selected.** Option B is the only one that satisfies §1.1(3) as written, and it gives back a meaningful part of what §3.1 bought — including the tag-free front end, which is one of the larger energy items in §12.1. Option A keeps the design honest and cheap but requires amending §1.1(3) and dropping gate G2.
+The floor never binds at *k* = 3 or 4, so **the primary aggregate target of §2.4 is unaffected**. Only the idle-thread cases change, which is exactly the intent.
 
-This must be decided before P1 (§15). It does not affect P0, which measures aggregate IPC.
+**Cost.**
+
+| Item | Cost |
+|---|---|
+| Standby buffer 1-deep → 2-deep queue | 71 b × 2 × 4 threads ≈ **568 FFs** (up from 284) |
+| Per-stage `valid` + TC_ID | 4 stages × 3 b = **12 FFs** |
+| Selection: mod-4 counter → ready-mask priority encoder with period floor | **~150 gates** |
+| Squash: clear up to 2 in-flight bundles per thread instead of 1 | wider valid-clear, no new structure |
+
+≈ 300 additional flip-flops and ~150 gates against ~220,000. What made the strict barrel cheap was eliminating *arbitration*, not tags; the tags themselves are 12 flip-flops.
+
+**What is given up.** The clean invariant "stage occupant = `(cycle − depth) mod 4`" of §3.1 no longer holds unconditionally — it holds only while *k* = 4. Below that, stage identity is explicit. This is a real loss for reasoning about the design and for the verification argument in §12.3(2), but it is not a material area or energy cost.
+
+**Alternative considered and rejected: a 4-instruction (64-bit aligned) bundle.** Period stays 4, positional identity survives, single-bundle-in-flight survives, and I-cache reads per instruction halve — a genuine energy win. But a 4-instruction bundle entered mid-bundle wastes 1.5 slots on average instead of 0.5, and at that size ~half of all bundles are branch targets, landing single-thread IPC at **~0.81**. It also costs two more decoders (~+18,000 gates, an order of magnitude more than the period floor). Better energy story, worse answer. Revisit only if G4 fails and I-cache fetch energy is identified as the dominant term.
 
 ---
 
@@ -156,7 +169,7 @@ This must be decided before P1 (§15). It does not affect P0, which measures agg
 
 ### 3.1 The barrel
 
-Four thread contexts, four front-end stages ahead of ISS. Thread *T* launches a fetch at IF1 on cycles where `cycle mod 4 == T`; its bundle advances one stage per cycle and arrives at ISS exactly four cycles later — precisely when it is *T*'s turn again.
+Four thread contexts, four front-end stages ahead of ISS. At *k* = 4, thread *T* launches a fetch at IF1 on cycles where `cycle mod 4 == T`; its bundle advances one stage per cycle and arrives at ISS exactly four cycles later — precisely when it is *T*'s turn again.
 
 ```
 cycle:      0     1     2     3     4     5     6     7
@@ -169,17 +182,22 @@ ISS:        –     –     –     –    T0    T1    T2    T3
 
 Consequences, all of them savings:
 
-- **No IF1 arbiter.** Thread selection is a 2-bit counter. The ready-thread arbitration logic of [j32ooo-spec §13.2](j32ooo-spec.md) disappears; readiness becomes a *mask* on the counter, not a priority computation.
-- **No per-stage thread tags in the front end.** A stage's occupant is `(cycle - stage_depth) mod 4`. Tags reappear only at ISS, where the back end is shared.
-- **No cross-thread structural hazard in IF1–PAIR.** Each stage holds exactly one thread's bundle each cycle, by construction.
+- **No IF1 arbiter in the J32-OOO sense.** Thread selection is a small ready-mask priority encoder with a period floor (§2.5), not the ready-thread priority computation of [j32ooo-spec §13.2](j32ooo-spec.md). At *k* = 4 it degenerates to a free-running 2-bit counter.
+- **Near-free thread identity.** While *k* = 4, a stage's occupant is exactly `(cycle − stage_depth) mod 4` and needs no storage. Below *k* = 4 the period floor breaks that identity and each stage carries an explicit `valid` + 2-bit TC_ID — 12 flip-flops total (§2.5).
+- **No cross-thread structural hazard in IF1–PAIR.** Each stage holds at most one thread's bundle each cycle, by construction, at every value of *k*.
 
-Prior art: CDC 6600 peripheral processors (Thornton 1964) are exactly this structure — 10 threads, 10-deep barrel, one stage per thread. Denelcor HEP (1978) and Tera MTA (1990) generalise it.
+**Selection rule.** Thread *T* is granted an IF1 slot no more often than once every `max(k, 2)` cycles, where *k* is the number of unmasked threads (§9.3). At *k* ≥ 2 this is plain round-robin over the ready set; at *k* = 1 the floor holds the single thread to alternate cycles, which is what bounds the standby queue at 2 deep.
 
-### 3.2 Standby overflow register
+Prior art: CDC 6600 peripheral processors (Thornton 1964) are this structure — 10 threads, 10-deep barrel, one stage per thread. Denelcor HEP (1978) and Tera MTA (1990) generalise it; the period floor is the Alewife-style departure from a pure barrel for the low-thread case (Agarwal et al. 1993).
 
-A pure barrel assumes a bundle at ISS always drains. When it does not — an operand is not ready, an FU is busy, or the bundle splits across two cycles (§3.4) — the follower arriving from PAIR has nowhere to go.
+### 3.2 Standby queue
 
-J32-LT adds a **one-deep standby register per thread**, placed after IF2 and holding **raw** bundle state:
+Two mechanisms need a landing pad between IF2 and ISS:
+
+1. A pure barrel assumes a bundle at ISS always drains. When it does not — an operand is not ready, an FU is busy, or the bundle splits across two cycles (§3.4) — the follower arriving from PAIR has nowhere to go.
+2. The period floor of §2.5 lets a thread hold up to `⌈4 / max(k,2)⌉` = **2** bundles in flight at *k* = 1.
+
+J32-LT therefore places a **2-deep standby queue per thread** after IF2, holding **raw** bundle state:
 
 | Field | Width |
 |---|---|
@@ -189,9 +207,11 @@ J32-LT adds a **one-deep standby register per thread**, placed after IF2 and hol
 | prediction outcome + BTB/RAS sideband | ~5 b |
 | valid | 1 b |
 
-≈ 71 bits × 4 threads ≈ **284 flip-flops**. Holding raw (undecoded) bundles rather than decoded control fields is what keeps this narrow; the cost is that a promoted standby bundle re-traverses DEC and PAIR, which is free because those stages would otherwise be idle in that thread's barrel slot.
+≈ 71 bits × 2 entries × 4 threads ≈ **568 flip-flops**. Holding raw (undecoded) bundles rather than decoded control fields is what keeps this narrow; the cost is that a promoted standby bundle re-traverses DEC and PAIR, which is free because those stages would otherwise be idle in that thread's barrel slot.
 
-When a thread's ISS bundle fails to drain, its follower parks in the standby register and the barrel keeps turning for the other three threads. When a thread's standby register is occupied *and* its ISS bundle is still stuck, that thread's next barrel slot goes unused — the degradation is confined to the stalling thread.
+When a thread's ISS bundle fails to drain, its follower parks in the queue and the barrel keeps turning for the other threads. When a thread's queue is full *and* its ISS bundle is still stuck, that thread's next barrel slot goes unused — the degradation is confined to the stalling thread.
+
+The queue depth is set by the period floor, not by the stall case: 2 is exactly what *k* = 1 requires, and it happens to give the stall case one entry of slack at every *k*. There is no separate sizing argument.
 
 ### 3.3 Bundle model
 
@@ -231,7 +251,9 @@ SH delayed branches (`BRA`, `BSR`, `JMP`, `JSR`, `RTS`, `BT/S`, `BF/S`, `BRAF`, 
 
 ### 3.7 Misprediction penalty
 
-7 cycles raw (redirect at EX, refill IF1→ISS through the barrel). Under the barrel this is **1.75 of the mispredicting thread's own issue opportunities** — the other three threads occupy the intervening cycles and lose nothing. The throughput cost of a mispredict is therefore roughly a quarter of its latency cost, which is the main reason a single gshare table is sufficient here where a tournament predictor was specified for J32-OOO.
+7 cycles raw (redirect at EX, refill IF1→ISS through the barrel). At *k* = 4 this is **1.75 of the mispredicting thread's own issue opportunities** — the other three threads occupy the intervening cycles and lose nothing, so the throughput cost is roughly a quarter of the latency cost. This is the main reason a single gshare table suffices here where a tournament predictor was specified for J32-OOO.
+
+The relief shrinks as *k* falls. At *k* = 1 with the period floor, 7 raw cycles are ~3.5 issue opportunities and there is no other thread to absorb them, so single-thread performance is materially more predictor-sensitive than aggregate performance. If G2 (§12.2) comes in below expectation, predictor accuracy — not the period floor — is the first thing to examine.
 
 ---
 
@@ -396,11 +418,11 @@ Atomic groups (§8) do not commit until every uop in the group is valid.
 
 Precise per thread. On exception at commit:
 
-1. Flush that thread's ROB partition, LQ, SQ, standby register, and barrel-resident bundles.
+1. Flush that thread's ROB partition, LQ, SQ, standby queue, and barrel-resident bundles.
 2. Restore that thread's RAT via the §5.4 history walk.
 3. Set `SR.BL`, save `SPC`/`SSR`, vector through `VBR`.
 
-The other three threads are entirely unaffected — they share no front-end stage state with the excepting thread beyond the barrel counter, which is not thread-specific.
+The other three threads are entirely unaffected — they share no front-end stage state with the excepting thread beyond the selection logic, which holds no per-thread architectural state.
 
 ---
 
@@ -482,7 +504,9 @@ The worst case is four threads on one core contending the same line, which the L
 
 ### 8.2 Barrel interaction
 
-A parked or lock-spinning thread is masked out of the barrel counter rather than removed from it: the barrel continues to turn at 4 and that thread's slot goes unused. This keeps the "stage occupant = `(cycle - depth) mod 4`" invariant intact, which is what makes the front end tag-free (§3.1). The alternative — compacting the barrel to the ready-thread count — would reintroduce per-stage thread tags and an arbiter, for a gain confined to the case where threads are idle anyway.
+A parked or lock-spinning thread is removed from the ready set, so *k* drops and the remaining threads are selected more often, subject to the period floor of §2.5. A thread spinning on a contended CAS.L therefore hands its barrel slots to the lock holder rather than burning them on failed retries — which is the whole point of the auto-priority mechanism, and it composes with the floor at no extra cost.
+
+The floor is what stops this from degenerating: without it, four threads collapsing to one would leave the survivor at 0.47 IPC.
 
 ---
 
@@ -500,11 +524,11 @@ A parked or lock-spinning thread is masked out of the barrel counter rather than
 | MSHR × 2 | — |
 | GHR (10 b) | 2 B |
 | RAS (8 × 32 b) | 32 B |
-| Standby bundle register | 9 B |
+| Standby queue (2 × 71 b) | 18 B |
 | `ASIDR` (16 b `ASID_TAG`) | 2 B |
 | Auto-priority state (`last_cas_pc`, `cas_fail_count`, `prio_dropped`, `parked`) | 5 B |
-| **Per thread** | **~162 B** |
-| **Four threads** | **~648 B** |
+| **Per thread** | **~171 B** |
+| **Four threads** | **~684 B** |
 
 Fits in distributed RAM and flip-flops.
 
@@ -514,8 +538,8 @@ Note the absence of rename-map checkpoints, which at [j32ooo-spec §13.1](j32ooo
 
 | Resource | Model |
 |---|---|
-| IF1–PAIR (barrel) | one thread per stage per cycle, positional, **no arbiter** |
-| Standby register | per thread |
+| IF1–PAIR (barrel) | one thread per stage per cycle; positional at *k*=4, explicit 3-bit tag below (§2.5) |
+| Standby queue | per thread, 2 deep |
 | RAT | per thread |
 | ROB | **partitioned**, 8/thread |
 | LQ / SQ | **partitioned**, 4+4/thread |
@@ -602,12 +626,12 @@ Everything else in the MMU spec — `PTEH` VPN-only, generation-tagged `ASID_TAG
 | Shift + Mul + Div | 18,000 | 18,000 | — |
 | LSU + LQ/SQ ×4 + MSHR (no store-sets) | 24,000 | 26,000 | −2,000 |
 | Commit + retire | 8,000 | 10,000 | −2,000 |
-| FGMT machinery (barrel, standby, per-thread state) | 16,000 | 13,450 | +2,550 |
+| FGMT machinery (barrel + period floor, standby queues, per-thread state) | 17,000 | 13,450 | +3,550 |
 | PMU ×4 threads | 14,000 | 9,500 | +4,500 |
 | Misc (bypass, control, debug) | 17,000 | 17,000 | — |
-| **Subtotal (core)** | **~219,000** | **221,950** | **−3,000** |
+| **Subtotal (core)** | **~220,000** | **221,950** | **−2,000** |
 | Cache subsystem | 18,500 | 18,500 | — |
-| **Total core + caches** | **~237,500** | **~240,450** | — |
+| **Total core + caches** | **~238,500** | **~240,450** | — |
 
 **J32-LT is not smaller than J32-OOO.** This is the single most important number in this document and it should not be buried: the design trades scheduler area for thread-context area, and the two roughly cancel. Doubling the thread count consumes essentially everything that deleting the issue queue, the rename machinery, the store-set predictor, and two predictor tables gives back.
 
@@ -621,8 +645,8 @@ Everything else in the MMU spec — `PTEH` VPN-only, generation-tagged `ASID_TAG
 | Register file read ports | PRF + ARF | **ARF only** |
 | Memory-dependence lookups per memory op | SSIT + LFST | **0** |
 | Rename checkpoint copies per branch | 23 × 6 b | **0** |
-| Front-end arbitration per cycle | ready-thread priority computation | **2-bit counter** |
-| Front-end thread tags per stage | yes | **none (positional)** |
+| Front-end arbitration per cycle | ready-thread priority computation | **ready-mask encoder; 2-bit counter at *k*=4** |
+| Front-end thread tags per stage | yes | **12 FFs (positional at *k*=4)** |
 | Wasted I$ reads | speculative fetch | speculative fetch (same) |
 
 The claim this design makes is **throughput per joule at comparable area**, and §12.2 must test that claim directly, not merely test IPC.
@@ -634,7 +658,8 @@ Every number in §12.1 and §2.4 is an a-priori estimate. [j32ooo-spec §15.1](j
 | # | Gate | Measured how | Threshold |
 |---|---|---|---|
 | G1 | Aggregate IPC ≥ 1.5, 4 threads | CoreMark ×4 + PMU `PMINS`/`PMCYC` | ≥1.5; **stop and reconsider §14 if <1.4** |
-| G2 | Single-thread IPC ≥ in-order J32 | CoreMark, 1 thread, others parked | ≥ baseline — **conditional on the §2.5 decision; unreachable as specified** |
+| G2 | Single-thread IPC ≥ in-order J32 | CoreMark, 1 thread, others parked | ≥ baseline (~0.75); §2.5 projects 0.94 |
+| G2b | Period floor active at *k*≤2 | PMU 0x18 `BARREL_SLOT_IDLE` vs *k* | idle slots ≈ 0 at *k*=1 |
 | G3 | `E[width]` decomposition matches §2.4 | PMU 0x15/0x16/0x17 | model within ±0.1 |
 | G4 | Energy per instruction < J32-OOO | post-synthesis power estimate, same workload | strictly lower — **this is the design's whole claim** |
 | G5 | L1-D miss rate under 4-thread load | PMU 0x06/0x07 | within 1.5× of 1-thread rate |
@@ -648,7 +673,7 @@ G1 and G3 should be run in simulation against `sim/sh2instr.c` traces well befor
 ### 12.3 Verification
 
 1. **FU level**: reuse `tests/arith_tap.vhd` and the existing FU testbenches.
-2. **Structural**: directed tests for the barrel (slot ownership invariant under masking, standby promotion, mid-bundle target kill), PAIR (every cell of the §4.3 FU table, every fusion pattern in §4.2, intra-pair RAW on each implicit operand), RAT/ROB (squash restore across all 8 partition depths).
+2. **Structural**: directed tests for the barrel — slot ownership at every *k* ∈ {1,2,3,4}, the period floor engaging as *k* drops through 2, transitions in both directions as threads park and unpark mid-stream, standby-queue promotion at both depths, mid-bundle target kill. The *k* transition is the highest-risk piece: it changes both the selection period and the number of a thread's in-flight bundles, and §2.5 trades away the positional invariant that would otherwise make it self-checking. Also PAIR (every cell of the §4.3 FU table, every fusion pattern in §4.2, intra-pair RAW on each implicit operand), RAT/ROB (squash restore across all 8 partition depths).
 3. **Architectural**: `testrom/tests/*.s` against the core with 1, 2, and 4 threads active. CAS.L atomicity (`testmov.s:580–635`) is the atomic-group regression.
 4. **Differential**: `sim/sh2instr.c` as the retirement oracle; mismatch at commit halts the simulation. This is the same methodology that found the four precise-exception defect classes during MMU M8, and it is the right tool for a machine whose whole correctness argument rests on in-order commit.
 5. **Thread isolation**: four independent test programs concurrently; verify no cross-thread state corruption, particularly RAS, GHR, ASIDR, and LSQ forwarding.
@@ -674,7 +699,7 @@ G1 and G3 should be run in simulation against `sim/sh2instr.c` traces well befor
 
 ## 14. Open decisions and fallbacks
 
-0. **Single-thread IPC (§2.5) — decide before P1.** Options A (accept ~0.45 and amend §1.1(3)), B (barrel compaction, `⌈4/k⌉`-deep standby queue), C (`k=1` mode bit). Unresolved; this is the highest-priority open item in the document.
+0. **Period floor value (§2.5) — resolved at 2, revisit only on measurement.** A floor of 2 buys ~0.94 single-thread for ~300 FFs. A floor of 1 (full compaction) would buy ~1.5 for a 4-deep standby queue (~1.1k FFs) and is the escalation if G2 proves single-thread performance matters more than projected. The floor is a parameter, not a structural choice — nothing else in the design depends on its value.
 1. **If G1 misses (aggregate IPC < 1.5)** — the documented lever is **hybrid slot fill**: when the selected thread's second slot would go empty, fill it from the next ready thread. Operands are then guaranteed independent (different register namespaces), so no cross-slot dependency check is needed at all — it is the cheapest possible route to a higher `E[width]`. **This is SMT by [glossary §4/§9](../glossary.md) and adopting it requires amending the glossary and extending the prior-art set** (Tullsen, Eggers & Levy 1995 is the citation and is pre-2006, so the policy in [glossary §2](../glossary.md) is satisfied; the naming policy is the obstacle, not patent freedom). Recorded here deliberately rather than adopted, so that the measurement decides.
 2. **`BT/S`/`BF/S` fusion** — deferred (§4.2). Requires the fused uop to carry delay-slot state. Worth revisiting if `FUSION_HITS` shows the non-delayed forms are a small fraction of dynamic conditional branches.
 3. **ROB partition depth** — 8 is a projection from the in-order in-flight window. `ROB_FULL_STALL_CYCLES` per partition is the tuning signal; a long-latency L2 miss with non-blocking loads is the case that wants more.
@@ -697,7 +722,7 @@ G1 and G3 should be run in simulation against `sim/sh2instr.c` traces well befor
 | P3 | gshare + BTFNT seeding, BTB, RAS, delayed-branch handling, squash restore | 2 mo |
 | P4 | Fusion (§4.2) | 1 mo |
 | P5 | Per-thread LSQ, MSHRs, non-blocking loads | 2 mo |
-| P6 | Barrel FGMT ×4: contexts, standby registers, barrel counter + masking, per-thread ASIDR | 3 mo |
+| P6 | Barrel FGMT ×4: contexts, 2-deep standby queues, ready-mask selection with period floor (§2.5), per-thread ASIDR | 3 mo |
 | P7 | Atomic groups (CAS.L), L2 line lock, 4-thread qualification | 1.5 mo |
 | P8 | Cache hierarchy ×4-thread tuning, prefetchers | 1.5 mo |
 | P9 | PMU ×4 + Linux driver, incl. the four new events | 1.5 mo |
@@ -722,15 +747,16 @@ G1 and G3 should be run in simulation against `sim/sh2instr.c` traces well befor
 | LFST | 64 entries | §7.3 |
 | Bimodal PHT | 1024 × 2 b | gshare alone (§3.5) |
 | Chooser PHT | 1024 × 2 b | gshare alone (§3.5) |
-| Ready-thread arbiter | priority computation/cycle | barrel counter (§3.1) |
-| Front-end thread tags | per stage | positional (§3.1) |
+| Ready-thread arbiter | priority computation/cycle | ready-mask encoder; free-running counter at *k*=4 (§3.1) |
+| Front-end thread tags | per stage, full | 12 FFs; positional at *k*=4 (§2.5) |
 | Cross-thread LSQ ID compare | per forward | partitioned LSQ (§7.1) |
 | Fetch alignment rotator | — | 32-bit aligned bundles (§3.3) |
 | Decode-buffer compaction | — | non-collapsing bundles (§3.3) |
 
 ## Appendix B: Glossary additions
 
-- **Barrel** — front end in which thread count equals stage depth, so each stage holds a different thread each cycle and thread identity is positional rather than tagged. CDC 6600 PPU (1964).
+- **Barrel** — front end in which thread count equals stage depth, so each stage holds a different thread each cycle and thread identity is positional rather than tagged. CDC 6600 PPU (1964). J32-LT departs from the pure form via the period floor (§2.5).
+- **Period floor** — lower bound of 2 cycles on how often a thread may be granted an IF1 slot, regardless of how few threads are ready. Prevents single-thread throughput collapsing to the barrel's `1/depth`.
 - **Bundle** — the two 16-bit instructions at a 32-bit-aligned address, fetched, decoded, paired, and issued as a unit. Does not collapse.
 - **BTFNT** — Backward-Taken / Forward-Not-Taken. Static branch direction heuristic, here used to seed gshare counters at BTB allocation rather than as a standalone predictor.
 - **`E[width]`** — average architectural instructions retired per issuing cycle. The quantity §2.4's IPC projection turns on.
