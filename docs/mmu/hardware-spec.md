@@ -75,6 +75,22 @@ ASID_TAG[15:0] = (ASID[11:0] | (gen_low[3:0] << 12))
 
 Hardware does not interpret the split; only the kernel does. The Linux ASID allocator in [linux-spec.md §5](linux-spec.md) produces this 16-bit value directly.
 
+**ASIDR is per-thread-context on FGMT implementations.** On a single-threaded core there is one ASIDR per CPU, as described above. On a core with `n_tc` hardware thread contexts ([glossary §4](../glossary.md)) each thread runs an independent address space, so the core holds **`n_tc` copies of ASIDR**:
+
+- `LDC Rm, ASIDR` / `STC ASIDR, Rn` write and read **the issuing thread's copy**. No encoding change, no new instruction, no software-visible difference from the single-threaded case — a kernel running on logical CPU *t* simply sees its own register.
+- The TLB compare of §4 selects by the issuing thread's TC_ID:
+
+  ```
+  match = ... && (entry.GLOBAL || entry.ASID_TAG == ASIDR[tid])
+  ```
+
+- `LDTLB` latches `{ASIDR[tid], PTEH.VPN, PTEL}` — the fill uses the ASIDR of the thread executing the instruction.
+- The **TLB itself stays shared and unpartitioned.** Entries are already `ASID_TAG`-tagged, so multiple contexts coexist correctly with no further change; a thread simply misses on another thread's entries. Partitioning the TLB per thread is explicitly rejected — it would convert a shared-capacity advantage into a fixed one, and the tag compare already provides isolation.
+
+Cost on a 4-way implementation: 3 additional 16-bit registers and a 4:1 mux on the TLB compare input. Everything else in this specification — PTEH being VPN-only, the generation-tagged `ASID_TAG`, `STALE` enforcement, the TSB miss path, `LDTLB.RN` — is unaffected.
+
+Consumers: [ooo/j32lt-spec.md §11](../ooo/j32lt-spec.md) (`n_tc = 4`), [ooo/j32ooo-spec.md §13.1](../ooo/j32ooo-spec.md) (`n_tc = 2`).
+
 > **Security obligation (generation wrap) — RESOLVED:** only **4 bits** of `ASID_TAG` are the generation discriminator. The TLB is flushed at every rollover, so stale **TLB** entries are always rejected. **TSB** entries are not flushed and are rejected only by the tag compare — so after the generation field wraps (every 16 rollovers), a stale TSB slot with a matching `ASID[11:0]` and matching `gen_low[3:0]` can be a **false hit**. The Linux port (mmu/asid-generation branch) satisfies this obligation: the kernel threads generation into `ASID_TAG` at `set_asid()` and rebuilds the TSB on `gen_low` wrap via `jcore_tsb_flush_on_generation()`, ensuring stale-TSB rejection is an unconditional generation-tagged guarantee (exact for single-core; on SMP the TSB-zero-on-wrap follows `local_flush_tlb_all`'s local-only scope, revisited when jcore MMU-SMP lands). Resolved 2026-07-17 (linux@jcore mmu/asid-generation).
 
 **Context-switch sequence (Linux):**
@@ -369,7 +385,7 @@ For each entry on a translation request:
 ```
 match = entry.VALID && (entry.STALE == 0) &&
         (entry.VPN[high : pagebits_for_PageMask] == VA[high : pagebits])
-match = match && (entry.GLOBAL || entry.ASID_TAG == ASIDR)
+match = match && (entry.GLOBAL || entry.ASID_TAG == ASIDR[tid])   ! tid = issuing thread context; constant 0 on non-FGMT cores (§2.1a)
 ```
 
 The context tag is compared against **ASIDR** (the live per-context register set at context switch, §2.1a), **not** PTEH — PTEH carries the VPN only and is overwritten by hardware on every miss. `STALE` (§2.2) is enforced in the match: a software-revoked entry never hits, so the access faults into the trusted miss handler (revocation primitive — see [design-spec.md §6.3](design-spec.md)).
@@ -568,7 +584,7 @@ Beyond inheriting the SH-4 MMU structure:
 | TSBBR, TSBCFG registers | ~96 bits flop (J32), 160 bits (J64) |
 | TSBPTR register | ~32 bits (J32), 64 bits (J64) |
 | TSBPTR computation (hash, XOR, mask, OR) | ~50 LUTs |
-| ASIDR register | 16 bits flop per CPU |
+| ASIDR register | 16 bits flop per CPU, ×`n_tc` on FGMT cores (§2.1a) |
 | Extended ASID_TAG (8 → 16 bits) | 8 bits per TLB entry |
 | PageMask (4 bits per TLB entry) | 4 bits per TLB entry |
 | STALE bit per TLB entry | 1 bit per entry |

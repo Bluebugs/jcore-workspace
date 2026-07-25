@@ -2,6 +2,9 @@
 
 **Working title:** J2-MT2x2 — two J2 cores, each with two hardware thread contexts (4 hardware threads total).
 
+> **Scope note.** This document is part of the **J2 line**: `N_TC = 2` on the existing 5-stage in-order J2 pipeline, paired with dual-core MSI coherence. It is not superseded. The J32/OoO line's threading targets are specified separately — [ooo/j32ooo-spec.md §13](../ooo/j32ooo-spec.md) for 2-way FGMT on the out-of-order core, and [ooo/j32lt-spec.md](../ooo/j32lt-spec.md) for 4-way barrel FGMT on the light core. Threading vocabulary for all three is in [glossary §4](../glossary.md).
+
+
 ## 1. Executive summary
 
 J-core is already a clean, BSD-licensed VHDL implementation of the SH-2 ISA with upstream Linux support (`CPU_J2`), an in-tree dual-core configuration (`cpus_two_fpga.vhd`), a CAS.L atomic added specifically for futexes and SMP, a snoop port on the data cache, and an interrupt controller (AIC2) that already takes a `cpuid` generic and exposes an inter-AIC communication bus. The pieces needed for SMP are present but only partially wired; nothing today implements per-core hardware multithreading.

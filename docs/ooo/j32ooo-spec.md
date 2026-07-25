@@ -4,7 +4,9 @@
 **Compatible ISA:** SH-Compact (SH-2 + J-core extensions: SHAD, SHLD, CAS.L)
 **Scope:** CPU core, cache hierarchy, and performance monitoring. FPU (see [../fpu/spec.md](../fpu/spec.md), Tier 1 required for the J32-OOO product point), MMU, IOMMU/DMA, SIMD, and crypto coprocessor blocks are specified separately.
 
-**J32OOO** is a 2-wide fetch, 2-wide commit OOO core with 2-way FGMT, 32-bit datapath. Targets the "J32-FM" roadmap slot (~250k ASIC gates including caches and PMU). See [glossary §3–§4](../glossary.md) for product-point and threading naming.
+**J32OOO** is a 2-wide fetch, 2-wide commit OOO core with 2-way FGMT, 32-bit datapath.
+
+> **Sibling design point.** [J32-LT](j32lt-spec.md) covers the same ISA and MMU with in-order issue, no register renaming, no issue queue, and 4-way barrel FGMT. It targets throughput per joule where this document targets single-thread latency, at comparable area (~220k vs ~222k gates). Neither supersedes the other. Several mechanisms deferred here (§18) are specified there. Targets the "J32-FM" roadmap slot (~250k ASIC gates including caches and PMU). See [glossary §3–§4](../glossary.md) for product-point and threading naming.
 
 ## Changelog
 
@@ -826,10 +828,10 @@ Plenty of headroom for SoC peripherals (Ethernet, UART, GPIO, SDRAM controller).
 
 ## 18. Open Decisions and Future Work
 
-1. **Way prediction in I-cache and D-cache**: 5–10% energy win, 1–2% IPC win. Defer.
-2. **Macro-op fusion beyond CAS.L**: cmp+branch fusion (K7 1999), test+branch. Worth ~5% IPC. Defer.
+1. **Way prediction in I-cache and D-cache**: 5–10% energy win, 1–2% IPC win. Defer. Also deferred in [j32lt-spec.md §14.6](j32lt-spec.md), though the trade is more attractive there given its energy-first goal.
+2. **Macro-op fusion beyond CAS.L**: cmp+branch fusion (K7 1999), test+branch. Worth ~5% IPC. Defer. **Specified in full in [j32lt-spec.md §4.2](j32lt-spec.md)** (`CMP`/`TST`/`DT` + `BT`/`BF`), where it is load-bearing rather than optional because in-order dual issue cannot otherwise fill the second slot; the mechanism transfers to this core unchanged if the deferral is revisited.
 3. **Software-exposed priority hints**: deferred. If experience with hardware-only auto-priority shows benefit gaps, add POWER5-style `HMT_*` macros in a future revision.
-4. **TAGE-class branch predictor**: TAGE is 2006 (just at the cutoff); a tournament predictor today, possible upgrade later.
+4. **TAGE-class branch predictor**: TAGE is 2006 (just at the cutoff); a tournament predictor today, possible upgrade later. Note the opposite move in [j32lt-spec.md §3.5](j32lt-spec.md): a *single* gshare table with BTFNT-seeded counters, dropping the bimodal and chooser arrays entirely. That is affordable there because 4-way FGMT absorbs most of a mispredict's cost (other threads occupy the refill cycles), which is not true at 2-way — so the predictor choice does not transfer in this direction.
 5. **Hardware stride detector tuning**: 8-entry table sizing may be wrong for some workloads; revisit after benchmarking.
 
 ---

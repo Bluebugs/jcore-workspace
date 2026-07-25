@@ -268,10 +268,19 @@ Software visibility: only via the PMU. There is no architectural exception. This
 
 ### 6.6 Per-thread qualification under FGMT `[T1/T2]`
 
-The lock is qualified with `{core_id, thread_id}`. FGMT context switches between threads on the same core (every cycle, per [j32ooo-spec.md §13](../ooo/j32ooo-spec.md)) do **not** release a lock held by a sibling thread:
+The lock is qualified with `{core_id, thread_id}`, where `thread_id` is `log2(n_tc)` bits wide — **1 bit at `n_tc = 2` (J32-OOO, J32-FM), 2 bits at `n_tc = 4` (J32-LT, [ooo/j32lt-spec.md §8](../ooo/j32lt-spec.md))**. FGMT context switches between threads on the same core (every cycle) do **not** release a lock held by a sibling thread:
 
-- Thread A on core 0 holds the line lock. Cycle later, FGMT scheduler picks thread B on core 0; B issues a memory op to the same line. Since B's `{core_id=0, thread_id=1}` ≠ A's `{core_id=0, thread_id=0}`, B's GetM (or GetS) is treated like a foreign request: L2 NACKs / stalls until A's Unlock arrives.
-- L1-D within a single core must track *which* thread issued the locked load so its uop3 produces an Unlock with the matching owner field. The LSQ's existing per-thread tagging ([j32ooo-spec.md §8.3](../ooo/j32ooo-spec.md)) supplies this.
+- Thread A on core 0 holds the line lock. A cycle later the front end picks thread B on core 0; B issues a memory op to the same line. Since B's `{core_id=0, thread_id=1}` ≠ A's `{core_id=0, thread_id=0}`, B's GetM (or GetS) is treated like a foreign request: L2 NACKs / stalls until A's Unlock arrives.
+- L1-D within a single core must track *which* thread issued the locked load so its uop3 produces an Unlock with the matching owner field. Per-thread LSQ tagging supplies this — shared-and-tagged on J32-OOO ([j32ooo-spec.md §8.3](../ooo/j32ooo-spec.md)), structurally partitioned on J32-LT ([j32lt-spec.md §7.1](../ooo/j32lt-spec.md)).
+
+**Contention scaling.** The number of same-core threads that can contend one line rises from 2 to 4 on J32-LT, and a dual-core J32-LT puts 8 threads on one L2. Two consequences:
+
+1. The owner field must be sized `log2(NUM_CPUS) + log2(n_tc)` — 3 bits for dual-core 2-way, **4 bits for dual-core 4-way**. Sizing it from `NUM_CPUS` alone is a latent bug at `n_tc > 2`.
+2. Fairness matters more. With 8 possible contenders, a NACK-and-retry policy with no ordering guarantee makes starvation observable rather than theoretical. The per-thread auto-priority of [j32lt-spec.md §9.3](../ooo/j32lt-spec.md) mitigates it from the core side — a spinning thread yields its barrel slots to the holder — but that is a throughput optimisation, not a forward-progress guarantee. **Forward progress under ≥4-way same-line contention needs an explicit argument that this spec does not currently make**; see §6.9.
+
+### 6.9 Forward progress under high contention `[open]`
+
+Not resolved. The v2 line lock relies on the requester retrying after a NACK, with no queueing or ticket ordering, which was defensible at 2 contenders and is not obviously so at 8. Options, in increasing cost: bounded retry with escalation to a fair queue; a per-line FIFO of waiting `{core, thread}` owners; falling back to the v1 bus lock after N failed retries. This must be settled before a dual-core J32-LT is built, and it is testable ahead of RTL with the existing `stress-ng --futex` and CAS-bouncer workloads.
 
 ### 6.7 Cross-line atomicity (not provided)
 

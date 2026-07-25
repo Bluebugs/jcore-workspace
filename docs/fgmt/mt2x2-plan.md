@@ -1,5 +1,8 @@
 # Plan: J2-MT2x2 + Pipeline Deepening
 
+> **Scope note.** This document is part of the **J2 line**: `N_TC = 2` on the existing 5-stage in-order J2 pipeline, paired with dual-core MSI coherence. It is not superseded. The J32/OoO line's threading targets are specified separately — [ooo/j32ooo-spec.md §13](../ooo/j32ooo-spec.md) for 2-way FGMT on the out-of-order core, and [ooo/j32lt-spec.md](../ooo/j32lt-spec.md) for 4-way barrel FGMT on the light core. Threading vocabulary for all three is in [glossary §4](../glossary.md).
+
+
 **Companion document to:** `dual-fgmt-proposal.md`
 **Status:** draft for review
 

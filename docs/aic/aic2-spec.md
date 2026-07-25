@@ -21,13 +21,13 @@ The AIC2 is specified in **three tiers**, following the project convention used 
 | Tier | Name                              | Per-CPU instance | Per-TC delivery | Hyp virtualization | Product points          | Status        |
 |------|-----------------------------------|------------------|-----------------|--------------------|-------------------------|---------------|
 | T0   | Baseline AIC2                     | yes (`cpuid`)    | no (per-core)   | no                 | J2, J3, J32             | shipping (`jcore-soc/components/misc/aic2.vhm`) |
-| T1   | FGMT-aware delivery               | yes (`cpuid`, `n_tc`) | yes (per `(core, thread)`) | no | J2-MT2x2, J32-OOO, J32-FM | new (this spec) |
+| T1   | FGMT-aware delivery               | yes (`cpuid`, `n_tc`) | yes (per `(core, thread)`) | no | J2-MT2x2, J32-OOO, J32-LT, J32-FM | new (this spec) |
 | T2   | Hypervisor virtualization         | yes              | yes             | yes (`GUEST_OWNED`, vCPU target, injection) | J32-FM | new (this spec, normative for `jcore_vintc`) |
 
 Per-tier rules:
 
 - **T0** is functionally equivalent to the existing `aic2.vhm`: per-CPU instance, flat source vector, per-source enable / pending / priority / target-CPU, IRL output to the CPU's `cpu_event_i_t`, inter-AIC `aic_com` bus for IPIs. Required for any J-Core SoC with more than two interrupt sources.
-- **T1** adds per-(core, thread-context) targeting. A T1 implementation with `n_tc = 1` is behaviourally identical to T0 and exposes the same MMIO ABI; with `n_tc = 2` each source's target field widens by one bit, IPIs may target a specific TC, and a new per-TC pending bundle wires to the OoO front-end's ready-thread arbiter ([../ooo/j32ooo-spec.md §13.2](../ooo/j32ooo-spec.md)).
+- **T1** adds per-(core, thread-context) targeting. A T1 implementation with `n_tc = 1` is behaviourally identical to T0 and exposes the same MMIO ABI; with `n_tc > 1` each source's target field widens by `log2(n_tc)` bits, IPIs may target a specific TC, and a new per-TC pending bundle wires to the core's thread-selection logic — the ready-thread arbiter on J32-OOO ([../ooo/j32ooo-spec.md §13.2](../ooo/j32ooo-spec.md)), or the barrel ready-mask on J32-LT ([../ooo/j32lt-spec.md §3.1](../ooo/j32lt-spec.md)). **Supported `n_tc` values are 1, 2, and 4** (J32-LT is the 4-way case).
 - **T2** adds hyperprivileged-only registers — per-source `GUEST_OWNED` flag, per-source guest-vCPU target, virtual-interrupt injection MMIO, delivery-pending event to the hypervisor — and a delivery layer that routes guest-owned interrupts directly to a running guest vCPU when safe, or traps to HS-mode otherwise. Built on top of [HEDR](../hypervisor/hardware-spec.md) (`hypervisor/hardware-spec.md §2.3`) and the SR.HPRIV mode bit (§2.1).
 
 T2 is a strict superset of T1; T1 is a strict superset of T0. A given SoC instantiation picks one tier.
@@ -280,7 +280,15 @@ This block does not introduce a novel mechanism. T0 is the on-disk `aic2.vhm` as
 
 ### 4.1 Generics widen to `(cpuid, n_tc)`
 
-Per [fgmt/dual-fgmt-proposal.md §5.3](../fgmt/dual-fgmt-proposal.md), the AIC2 instance's `cpuid` generic gains a companion `n_tc : natural := 2`. With `n_tc = 1`, T1 behaves identically to T0 (the per-TC fields are present but degenerate). With `n_tc = 2`, the J2-MT2x2 / J32-OOO / J32-FM case, each per-source target widens.
+Per [fgmt/dual-fgmt-proposal.md §5.3](../fgmt/dual-fgmt-proposal.md), the AIC2 instance's `cpuid` generic gains a companion `n_tc : natural := 2`. With `n_tc = 1`, T1 behaves identically to T0 (the per-TC fields are present but degenerate).
+
+**Supported values are `n_tc ∈ {1, 2, 4}`:**
+
+| `n_tc` | Product points | `TC_TARGET` width |
+|---|---|---|
+| 1 | any T1 instance on a non-FGMT core | 0 (degenerate) |
+| 2 | J2-MT2x2, J32-OOO, J32-FM, J64 | 1 bit |
+| 4 | **J32-LT** ([ooo/j32lt-spec.md](../ooo/j32lt-spec.md)) | 2 bits |
 
 ### 4.2 Per-source `TC_TARGET`
 
@@ -290,11 +298,26 @@ Each source gains a field:
 | ------------ | ---------- | --- | --------------------------------------------------------------------------- |
 | `TC_TARGET`  | log2(`n_tc`) | R/W | Target thread context within the source's affinity core. Defaults to TC0. |
 
-On `n_tc=2` this is a single bit, packed alongside `TARGET[s]` (e.g. into bit 7 of the per-source `TARGET` byte at offset `0x0600+s`).
+**Packing (corrected).** `TARGET[s]` is one byte at `0x0600 + s*4` whose bits `[3:0]` hold the target CPU (§3.2, ≤15 cores), leaving bits `[7:4]` free. `TC_TARGET[s]` occupies **bits `[7:4]`**, of which only the low `log2(n_tc)` bits are significant; the remainder read as zero and ignore writes.
+
+| `n_tc` | Significant bits | Ignored |
+|---|---|---|
+| 1 | none | `[7:4]` |
+| 2 | `[4]` | `[7:5]` |
+| 4 | `[5:4]` | `[7:6]` |
+
+An earlier draft of this section placed the `n_tc=2` bit at **bit 7**. That choice does not generalise — a second bit would have to grow downward into bit 6, making the field's position depend on `n_tc` and breaking any software that computes the shift from `NUM_TC_LOG2`. The field is therefore anchored at bit 4 and grows upward. **T1 has no shipping implementation** (`aic2.vhm` is T0), so this is a specification correction with no compatibility cost; the only consumer is the Linux `irq-jcore-aic` affinity path, which derives the shift from `AIC2_CAPS.NUM_TC_LOG2` (§3.3) rather than hard-coding it.
+
+Reserving all four bits caps `n_tc` at 16 without a further ABI change, which is ample: the barrel argument in [ooo/j32lt-spec.md §3.1](../ooo/j32lt-spec.md) ties thread count to front-end depth, and no J-Core design point contemplates a front end deeper than a handful of stages.
 
 ### 4.3 Per-TC pending bundle `per_tc_pending[N_TC]`
 
-A new sideband signal exposed by AIC2 to the CPU's front end (NOT through `cpu_event_i_t`, which is a single-thread signal). It is a small bitmask, one bit per local TC, asserted when **any** enabled+pending source targets that TC. The OoO front-end's ready-thread arbiter ([ooo/j32ooo-spec.md §13.2](../ooo/j32ooo-spec.md)) treats `per_tc_pending[t] = 1` as one of the unparking conditions for thread `t`.
+A new sideband signal exposed by AIC2 to the CPU's front end (NOT through `cpu_event_i_t`, which is a single-thread signal). It is a small bitmask, `n_tc` bits wide, one bit per local TC, asserted when **any** enabled+pending source targets that TC.
+
+The consumer is core-specific:
+
+- **J32-OOO / J32-FM**: the ready-thread arbiter ([ooo/j32ooo-spec.md §13.2](../ooo/j32ooo-spec.md)) treats `per_tc_pending[t] = 1` as one of the unparking conditions for thread `t`.
+- **J32-LT**: the bit feeds the barrel **ready mask** ([ooo/j32lt-spec.md §3.1, §9.3](../ooo/j32lt-spec.md)). Unparking thread `t` raises *k*, which shortens the selection period for every thread — so an interrupt arriving at a parked thread perturbs the other threads' fetch cadence. This is intended and bounded (the period floor of `max(k,2)` caps the swing), but it is a behavioural difference from the 2-way case worth knowing when debugging timing-sensitive interrupt latency.
 
 When a parked SLEEPing thread receives an interrupt:
 
@@ -309,13 +332,23 @@ This is the contractual interface between AIC2 and the OoO front-end that §13.4
 
 The IPI mechanism (§3.5) extends:
 
-- `IPI_SEND[N]` is replaced by a 2-D MMIO offset: `IPI_SEND[cpu_id][tc_id]`, packed as one word per `(cpu, tc)`. With `N=2` cores and `n_tc=2`, that's a 4-word region replacing the T0 2-word region. The high bit of the offset distinguishes TC1 from TC0.
+- `IPI_SEND[N]` is replaced by a 2-D MMIO offset: `IPI_SEND[cpu_id][tc_id]`, packed as one word per `(cpu, tc)`, at `IPI_BASE + (cpu_id * n_tc + tc_id) * 4`. The region is `N * n_tc` words, replacing the T0 `N`-word region:
+
+| Cores | `n_tc` | Region |
+|---|---|---|
+| 2 | 1 | 2 words (= T0) |
+| 2 | 2 | 4 words |
+| 2 | 4 | **8 words** (dual-core J32-LT, 8 logical CPUs) |
+
+  Software computes the offset from `NUM_CPUS` and `NUM_TC_LOG2` in `AIC2_CAPS` (§3.3); it must not assume a fixed stride. An earlier draft described the TC index as "the high bit of the offset", which is only true at `n_tc = 2`.
 - The `aic_com` message gains a `tc_id` field (already shown in §3.5's recommended layout).
 - The receiving AIC2 sets `PEND[V]` for the vector — but the `TC_TARGET[V]` field for that vector slot, by convention, has been pre-programmed by software to match the IPI's target TC. (Alternative: each IPI explicitly carries a TC; the AIC2 ignores the static `TC_TARGET` for IPI vectors. The shipping AIC2 takes the static approach for ordinary vectors; for IPIs the dynamic-TC approach is recommended for T1, since IPIs are typically broadcast to a specific TC at runtime.)
 
 ### 4.5 Linux topology
 
-Each `(core, tc)` pair maps to a logical CPU in `hard_smp_processor_id()`. With 2 cores × 2 TCs that's 4 logical CPUs, indexed `0..3`. Linux's `irq_set_affinity()` programs the AIC2's `TARGET[s]` and `TC_TARGET[s]` for the source. No new userspace ABI is required — `irq_set_affinity()`'s cpumask is already per logical CPU.
+Each `(core, tc)` pair maps to a logical CPU in `hard_smp_processor_id()`: 2 cores × 2 TCs gives 4 logical CPUs indexed `0..3`; **2 cores × 4 TCs (dual-core J32-LT) gives 8, indexed `0..7`**. Linux's `irq_set_affinity()` programs the AIC2's `TARGET[s]` and `TC_TARGET[s]` for the source. No new userspace ABI is required — `irq_set_affinity()`'s cpumask is already per logical CPU.
+
+Scheduler topology should mark same-core TCs as siblings so the scheduler fills distinct cores before doubling up on a core, per [fgmt/dual-fgmt-proposal.md §7](../fgmt/dual-fgmt-proposal.md). This matters more at `n_tc = 4` than at 2: co-scheduling four threads on one J32-LT core shares one 32 KB L1-D four ways and, per [ooo/j32lt-spec.md §2.5](../ooo/j32lt-spec.md), *raises* aggregate throughput while *lowering* each thread's individual rate. The kernel must be able to tell those cases apart to schedule latency-sensitive work sensibly.
 
 ### 4.6 Backward compatibility `[T1]`
 
@@ -324,6 +357,8 @@ A T1 implementation with `n_tc = 1`:
 - Returns `HAS_FGMT = 1` and `NUM_TC_LOG2 = 0` in `AIC2_CAPS`.
 - Honours `TC_TARGET[s] = 0` only; writes of non-zero `TC_TARGET` values are silently dropped (the field is degenerate).
 - Exposes `per_tc_pending[0]` only (a single-bit bundle).
+
+At any `n_tc`, writes to `TC_TARGET[s]` bits above `log2(n_tc)-1` are ignored and read back as zero, so software that programs a 4-bit TC index against a 2-TC instance targets TC0 or TC1 rather than failing. `NUM_TC_LOG2` is the authoritative width; `AIC2_CAPS` must be read before programming affinity.
 
 A T0 implementation returns `HAS_FGMT = 0` and no `TC_TARGET` fields; Linux falls back to per-core affinity.
 
