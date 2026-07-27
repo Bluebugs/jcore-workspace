@@ -194,14 +194,16 @@ Used by the hypervisor to return to supervisor or user mode. The HSSR's HPRIV bi
 
 If HSSR has HPRIV=1, HRTE returns to nested hyperprivileged execution; useful for hypervisor internal trap chains.
 
-### 3.3 LDTLB and LDTLB.R in supervisor mode
+### 3.3 LDTLB and LDTLB.RN in supervisor mode
 
-**Behavior change:** When `SR.HPRIV = 0` and `SR.MD = 1` (supervisor mode), executing LDTLB or LDTLB.R **traps to the hyperprivileged trap vector** at `VBR_HYP + 0x300`.
+**Behavior change:** When `SR.HPRIV = 0` and `SR.MD = 1` (supervisor mode), executing LDTLB or LDTLB.RN (formerly LDTLB.R) **traps to the hyperprivileged trap vector** at `VBR_HYP + 0x190`.
 
 The trap saves:
-- PC of the LDTLB/LDTLB.R → HSPC
+- PC of the LDTLB/LDTLB.RN → HSPC
 - SR → HSSR
 - EXPEVT = 0x190 (new: guest TLB write trap)
+
+**Reconciliation note.** Earlier drafts of this spec gave the guest LDTLB trap as `VBR_HYP + 0x300`, inconsistent with §4.2 (vector table), §4.3 (EXPEVT 0x190), and §9 (verification point 2). The correct vector is `VBR_HYP + 0x190`. Corroborating evidence: [linux-spec.md §3.3](linux-spec.md) already names the hypervisor entry symbol `jcore_hyp_entry_0x190`. The instruction name was also standardized: `LDTLB.R` was a working name; the implemented name is `LDTLB.RN`.
 
 The hypervisor's handler reads PTEH (the guest's intended VPN), ASIDR (the guest's current ASID_TAG, set at guest context switch), and PTEL (the guest's intended RFN + flags), performs RA-to-HPA translation, executes its own LDTLB (which doesn't trap because HPRIV=1), and HRTE's back to the guest.
 
@@ -209,9 +211,11 @@ The hypervisor's handler reads PTEH (the guest's intended VPN), ASIDR (the guest
 
 ### 3.4 Privileged register access from supervisor mode
 
-When `SR.HPRIV = 0`, attempting to access hyperprivileged registers (HSPC, HSSR, VBR_HYP, HEDR) raises an illegal-instruction trap (EXPEVT = 0x180 — but routed via the HEDR rules; by default, this trap goes to the hypervisor).
+When `SR.HPRIV = 0`, attempting to access hyperprivileged registers (HSPC, HSSR, VBR_HYP, HEDR) raises an illegal-instruction trap (EXPEVT = 0x1A0 — but routed via the HEDR rules; by default, this trap goes to the hypervisor).
 
 This is the mechanism by which the hypervisor catches a guest that tries to manipulate its own hyperprivileged state.
+
+**Reconciliation note.** An earlier draft gave the hyp-register-access trap as `EXPEVT = 0x180`, conflicting with §2.3.1 (bit 2: 0x1A0) and §4.3. The correct code is `0x1A0`. Note that `0x180` legitimately appears elsewhere: as the HCALL trap code (§2.3.1 bit 0, §4.3) and as the SH-4 supervisor general-illegal-instruction code (§2.3.1 bit 12). Hardware distinguishes these by context, as explained in §2.3.1.
 
 ## 4. Trap Delivery
 
