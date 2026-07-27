@@ -120,7 +120,7 @@ HEDR has 32 bits, each corresponding to an exception cause. The cause-to-bit map
 
 **Default after reset:** all bits 0 (all exceptions go to hyperprivileged). The hypervisor explicitly sets bits to delegate to the guest. A non-virtualized kernel never sets HPRIV, so HEDR is never consulted — backward compatibility is preserved.
 
-**Always-to-hypervisor causes** (§4.2): bits 0 (HCALL) and 1 (guest LDTLB trap) are hard-wired to read-as-zero; software writes to these bits have no effect. These traps cannot be delegated to a guest because they exist solely to communicate with the hypervisor.
+**Always-to-hypervisor causes** (§4.2): bits 0 (HCALL), 1 (guest LDTLB trap), 2 (hyperprivileged-register access from non-HS mode), and 25 (guest emulated-MMIO access, §4.5) are hard-wired to read-as-zero; software writes to these bits have no effect. These traps cannot be delegated to a guest because they exist solely to communicate with the hypervisor — bit 25 specifically exists only to reach the hypervisor's device model, and delegating it to a guest would be meaningless: there is no guest-side handler for a physical aperture the guest does not know exists.
 
 #### 2.3.1 EXPEVT-to-HEDR-bit mapping (normative)
 
@@ -153,7 +153,8 @@ The mapping is dense from the low bits up so a typical hypervisor configuration 
 |   22     | `0x720`    | L2 ECC / parity error (where instrumented)               | yes          |
 |   23     | `0x740`    | IOMMU fault forwarded as exception                       | yes          |
 |   24     | `0x1C0`    | `EXC_SIMD_DISABLED` — SR.VD trap (Tier 2 SIMD, new)      | yes          |
-|   25–31  | —          | reserved (future causes)                                 | yes          |
+|   25     | `0x1E0`    | Guest emulated-MMIO access (aperture, P4)                | **no**       |
+|   26–31  | —          | reserved (future causes)                                 | yes          |
 
 Notes:
 - "Delegatable?" = whether the bit accepts software writes. Hardware ignores writes to non-delegatable bits, which always read 0.
@@ -361,6 +362,7 @@ on exception(cause):
 - HCALL (EXPEVT 0x180)
 - Guest LDTLB trap (EXPEVT 0x190)
 - Hyperprivileged register access from non-HS mode
+- Guest emulated-MMIO access (EXPEVT 0x1E0, §4.5)
 
 These are the exceptions where delegation makes no sense.
 
@@ -373,6 +375,7 @@ Offset    Handler
 ------    --------------------------------------------------------
 0x100     HCALL handler (HCALL from any mode)
 0x190     Guest LDTLB trap handler
+0x200     Guest emulated-MMIO trap (aperture access, §4.5)
 0x300     Privileged-instruction trap (for sensitive instructions)
 0x400     Hyperprivileged TLB miss (HS-mode address translation fault)
 0x500     External interrupt (when virtualization is active)
@@ -383,7 +386,7 @@ Offset    Handler
 
 ### 4.3 EXPEVT values
 
-The hyperprivileged-mode extension adds four new EXPEVT codes on top of the existing SH-4 set. The full per-cause delegation routing — including which bit of HEDR controls each cause — is specified normatively in [§2.3.1](#231-expevt-to-hedr-bit-mapping-normative). Summary of the new codes:
+The hyperprivileged-mode extension adds five new EXPEVT codes on top of the existing SH-4 set. The full per-cause delegation routing — including which bit of HEDR controls each cause — is specified normatively in [§2.3.1](#231-expevt-to-hedr-bit-mapping-normative). Summary of the new codes:
 
 | Code  | Cause                                                          | HEDR bit | Delegatable? |
 |-------|----------------------------------------------------------------|---------:|:------------:|
@@ -392,12 +395,15 @@ The hyperprivileged-mode extension adds four new EXPEVT codes on top of the exis
 | 0x1A0 | Hyperprivileged register access from non-HS mode (new)         | 2        | no           |
 | 0x1B0 | `EXC_FPU_DISABLED` — SR.FD trap (Tier 2 FPU, new)              | 3        | yes          |
 | 0x1C0 | `EXC_SIMD_DISABLED` — SR.VD trap (Tier 2 SIMD, new)            | 24       | yes          |
+| 0x1E0 | Guest emulated-MMIO access (aperture, new, §4.5)               | 25       | no           |
 
 Existing SH-4 EXPEVT codes (`0x040`–`0x130`, `0x500`–`0x740`) retain their meanings; their HEDR-bit assignments are in §2.3.1.
 
 **`EXC_FPU_DISABLED` (0x1B0).** Raised when an FPU instruction is decoded with `SR.FD = 1` on a CPU that ships a Tier 2 (hypervisor-aware) FPU. The cause is subject to HEDR delegation: when `HEDR[bit-for-0x1B0] = 0` (the default) the trap is taken by the hypervisor, which uses it to implement the lazy FPU context-switch ABI (per-vCPU FPU-ownership flag, save/restore of the 132-byte FPU image, re-enable of `SR.FD = 0` in the guest's `HSSR` shadow before `HRTE`). When the bit is set, the trap is delegated to the guest's own supervisor handler (a guest OS that wants to manage its own lazy-FPU model for user threads sets the bit). The full trap-handler ABI, save/restore sequence, and migration corner cases are specified in [../fpu/spec.md §7](../fpu/spec.md).
 
 **`EXC_SIMD_DISABLED` (0x1C0).** The exact analogue of `EXC_FPU_DISABLED` for the SIMD facility. Raised when any SIMD-touching instruction or register access (governed SIMD instruction, SIMDV/SIMDH prefix, VLD.Q/VST.Q, VEXT/VINS, VMKCHG, LDS/STS to P0 / VCSR / VFPUL, or the §5.8 boundary instructions FMOV.VS / FMOV.VD) is decoded with `SR.VD = 1` on a CPU that ships a Tier 2 (hypervisor-aware) SIMD implementation. HEDR-delegation rules are identical: bit 24 = 0 → trap to hypervisor (which implements lazy SIMD context-switch ABI: per-vCPU SIMD-ownership flag, save/restore of the **272-byte SIMD image** — V0..V15 + P0 + VCSR + VFPUL — and re-enable of `SR.VD = 0` in `HSSR` before `HRTE`); bit 24 = 1 → trap delegated to guest's supervisor handler for guest-managed lazy SIMD across guest user threads. Full trap-handler ABI in [../simd/spec.md §2.6](../simd/spec.md). Note: the §5.8 boundary instructions also trap under SR.FD because they touch the scalar FPU register file; SR.VD wins when both are set.
+
+**Guest emulated-MMIO access (0x1E0).** Raised when a guest (`SR.HPRIV = 0`) memory access translates to a physical address matching the emulation aperture defined by HEMUB/HEMUM (§2.5): `(PA & HEMUM) == HEMUB`. Not subject to HEDR delegation — bit 25 is hard-wired non-delegatable for the same reason as HCALL and the guest LDTLB trap (§2.3): the aperture exists to reach the hypervisor's device model, and a guest has no handler for a physical region it does not know is virtualized. Full delivery mechanics, register capture, and the complete-on-resume contract are specified in §4.5.
 
 ## 4.4 Guest-Mode Address Translation
 
@@ -500,6 +506,73 @@ nothing — no fast-path instruction changes meaning, no extra branch is added t
 `jcore_tlb_miss`, and the trap-on-`LDTLB` behavior for supervisor mode was already specified in
 §3.3 for exactly this purpose.
 
+### 4.5 Emulated-MMIO trap delivery and complete-on-resume
+
+**Trap entry.** When a guest (`SR.HPRIV = 0`) access's translated physical address matches the
+emulation aperture (`(PA & HEMUM) == HEMUB`, §2.5), hardware delivers the trap unconditionally to
+the hypervisor — this is the bit-25 always-to-hypervisor case already listed in §4.1 and §2.3. The
+sequence, following the same style as §4.1's general trap entry:
+
+```
+on emulated-MMIO trap (guest access matches (PA & HEMUM) == HEMUB):
+    HMAR  <- faulting virtual address
+    HMCR  <- {SQ, DIR, SIZE, BANK, REGN}   # captured from the faulting access
+    HMDR  <- store data                     # only if DIR = 1 and SQ = 0
+    HSPC  <- PC of instruction AFTER the faulting access
+    HSSR  <- SR
+    SR.HPRIV <- 1 ; SR.MD <- 1 ; SR.BL <- 1 ; SR.RB <- 1
+    EXPEVT   <- 0x1E0
+    PC       <- VBR_HYP + 0x200
+```
+
+**Complete-on-resume contract.** The trapped access is architecturally complete except for its
+register writeback (loads) or its bus effect (stores); the hypervisor supplies the missing half and
+resumes with `HRTE`. Normative rules:
+
+1. `HSPC` points **past** the faulting access, not at it. The instruction is architecturally
+   complete in every respect except the one effect the aperture intercepted: a load's register
+   writeback, or a store's effect on the target device. There is no instruction left to re-decode
+   or re-execute on resume.
+2. On `HRTE`, if `HMCR.DIR = 0` (load) and `HMCR.SQ = 0`, hardware writes `HMDR` into the register
+   named by `HMCR.REGN`/`HMCR.BANK`, sign- or zero-extending per `HMCR.SIZE` exactly as the original
+   load would have.
+3. For `HMCR.DIR = 1` (store) and `HMCR.SQ = 0`, hardware performs no writeback on resume — the
+   store's architectural effect on the emulated device is entirely the hypervisor's to produce (by
+   updating its device model); there is no guest-visible register state to restore.
+4. For `HMCR.SQ = 1` (a 32-byte store-queue burst targeting the aperture), hardware performs no
+   writeback and does **not** clear the queue's `HSQCR.VALID`/`DIRTY` bits for the affected queue on
+   trap entry. The data remains in the SQ buffers ([../sq/spec.md §6](../sq/spec.md)), not in
+   `HMDR`. The hypervisor alone decides, after inspecting the buffer, whether the burst is
+   considered consumed and clears `HSQCR` accordingly on resume.
+5. If the faulting access was in a branch delay slot, `HSPC` points past the delay slot, and the
+   branch has already been resolved before the trap was taken. The hypervisor needs no delay-slot
+   handling: it never sees the branch instruction, only the already-decided post-branch PC.
+
+**Rationale:** Complete-on-resume means the hypervisor never decodes an SH-4 instruction to
+determine which register to fill or how many bytes a store touched — HMCR already carries REGN,
+BANK, SIZE, DIR, and SQ, decoded once by hardware at trap time. It also means the hypervisor never
+writes a guest GPR directly through an ad hoc register-file backdoor, because a trapped load's
+destination may be `R8`–`R15`, which are **unbanked** and shared with the hypervisor's own register
+file (§2.2's banking model covers only R0–R7). If the hypervisor wrote R8–R15 itself to deliver an
+emulated load's result, it would have no scratch registers of its own left across the trap boundary
+without spilling to memory on every single MMIO access. The `HRTE`-armed writeback port sidesteps
+this: hardware performs the write, once, atomically with the mode transition back to guest context.
+
+An alternative re-execute design — trap before the access, let the hypervisor synthesize the
+correct instruction semantics in software, and single-step or emulate the access itself — would
+solve the same two problems (no register corruption, no decode-once guarantee) but would cost
+40–80 cycles of software instruction decode on every trapped MMIO access, since the hypervisor
+would need to fetch and decode the guest instruction from scratch on each entry. Given a Dreamcast
+workload dominated by device access (AICA sound registers, GD-ROM control, PVR2 tile-accelerator
+registers), that per-access cost is unacceptable; complete-on-resume trades a fixed hardware cost
+(§10) for a constant, small per-trap software path instead.
+
+Prior art, pre-2006: IBM System/370 SIE (Start Interpretive Execution) interception controls
+(1980, generally available 1983) delivered essentially this same contract for LPAR virtualization —
+an intercepted instruction reports enough decoded state (opcode class, operand registers, access
+type) for the host to complete or reject the operation and resume the guest without the host
+re-fetching and re-decoding the original instruction stream.
+
 ## 5. Hyperprivileged-Only Instructions and Operations
 
 Operations that are valid only when SR.HPRIV=1:
@@ -565,6 +638,12 @@ Critical RTL verification:
 7. **Hyperprivileged register protection:** Access to HSPC/HSSR/VBR_HYP/HEDR from S or U mode raises illegal-instruction trap.
 8. **Backward compatibility:** With HPRIV never set (Phase 1 binary), all behavior matches Phase 1 exactly.
 9. **Vector dispatch:** Correct offset selected based on EXPEVT and delivery destination.
+10. **Emulated-MMIO trap on aperture match:** A guest access (`MMUCR.AT = 0` bare-metal or `MMUCR.AT = 1`) whose translated PA satisfies `(PA & HEMUM) == HEMUB` traps to `VBR_HYP + 0x200` with `EXPEVT = 0x1E0`, `HMAR` holding the faulting virtual address, and `HMCR` correctly capturing `{SQ, DIR, SIZE, BANK, REGN}` for every addressing mode and access width. A translated PA one byte outside the aperture on either boundary does not trap and reaches the bus normally.
+11. **HSPC past-the-access invariant:** For both loads and stores, `HSPC` on trap entry equals the address of the instruction *after* the faulting access, never the faulting instruction itself, including when the faulting access is the last instruction before a taken branch.
+12. **Complete-on-resume register writeback:** A trapped **load** targeting each of `R8`–`R15` resumes with the correct value delivered into the correct register and no corruption of any hypervisor register, tested **per-register, not once** — R8–R15 are the **unbanked** case (§2.2), shared directly between guest and hypervisor context, and this is precisely the case complete-on-resume exists to handle without the hypervisor ever writing a guest GPR itself.
+13. **Store and burst-store no-writeback:** A trapped store (`HMCR.DIR = 1`, `HMCR.SQ = 0`) performs no register writeback on `HRTE`. A trapped store-queue burst (`HMCR.SQ = 1`) additionally leaves `HSQCR.VALID`/`DIRTY` for the affected queue unchanged across the trap — hardware neither sets nor clears them — until the hypervisor's own `HRTE`-path write to `HSQCR`.
+14. **SQ burst aperture routing:** An SQ burst whose translated target lies outside the aperture reaches memory with no trap; one whose translated target lies inside the aperture raises exactly one trap with `HMCR.SQ = 1`, regardless of how many of the eight word-stores preceding the `PREF` fell inside or outside the aperture.
+15. **SQ context save/restore across VM exit:** A VM exit taken with `HSQCR.VALID` set for a partially-filled queue, followed by another vCPU running and bursting its own store queues, followed by re-entry to the first vCPU, leaves the first vCPU's queue's 32 bytes byte-identical to their state at exit.
 
 ## 10. Cost Estimation
 
@@ -583,9 +662,44 @@ Phase 3 hardware additions beyond Phase 1 baseline:
 | Vector dispatch (VBR vs VBR_HYP selection) | ~30 LUTs |
 | HEDR consultation logic | ~50 LUTs |
 | HYP_AT_RESET fuse / mode | ~5 LUTs |
-| Total | **~150 LUTs, ~200 flops per core** |
+| Subtotal (Phase 3 pre-MMIO-trap) | ~150 LUTs, ~200 flops |
+| Aperture comparator (`(PA & HEMUM) == HEMUB`, per access) | ~15 LUTs |
+| `HEMUB`, `HEMUM` storage | 2 × word_size flops |
+| `HMAR`, `HMDR` storage | 2 × word_size flops |
+| `HMCR` storage (9 bits captured: SQ, DIR, SIZE, BANK, REGN) | 9 flops |
+| `HSQCR` storage | 4 flops |
+| Destination-register latch (REGN/BANK decode feeding writeback mux) | ~20 LUTs |
+| `HRTE`-armed writeback port (complete-on-resume register write, §4.5) | ~60 LUTs |
+| Two 32-byte SQ buffers with valid/dirty tracking | attributed to [../sq/spec.md](../sq/spec.md), not counted here (§10 note below) |
+| `QACR` address-formation path reuse for aperture routing | ~15 LUTs |
+| MMIO-trap control/sequencing (entry mux, EXPEVT/vector selection) | ~25 LUTs |
+| **Emulated-MMIO trap subtotal** | **~120–180 LUTs, ~15 flops** |
+| **Total (per core)** | **approximately 300 LUTs, ~215 flops** |
 
-For comparison, Phase 1 added ~600 LUTs to the baseline J-Core CPU. Phase 3 is a 25% addition to Phase 1's footprint. The entire CPU with MMU and hypervisor support is still well within the gate budget of mid-range FPGAs.
+Arithmetic: 150 LUTs (existing Phase 3 baseline, row above) + 120–180 LUTs (emulated-MMIO trap,
+this task) = 270–330 LUTs, stated conservatively as **approximately 300 LUTs** per core. This is a
+doubling of the pre-existing Phase 3 hypervisor footprint, and it is not hidden: the single largest
+contributor is the `HRTE`-armed complete-on-resume writeback path (§4.5), because it must decode
+`HMCR.REGN`/`BANK`/`SIZE` into a register-file write port that can target any of R0–R15 including
+the unbanked R8–R15, sign/zero-extend per size, and gate on `HMCR.DIR`/`SQ` — logic an ordinary
+exception path does not need, since ordinary exceptions do not resume mid-instruction. The
+alternative — a re-execute design that traps before the access and lets the hypervisor synthesize
+the semantics in software — would remove this writeback port and most of the destination-register
+latch, but was explicitly rejected (§4.5) because it would trade this fixed hardware cost for
+40–80 cycles of software instruction decode on every trapped MMIO access, unacceptable for a
+workload dominated by device access.
+
+**Store-queue buffer attribution.** The two 32-byte SQ buffers and their valid/dirty tracking
+listed above are **not** part of the hypervisor's gate cost: the store queue exists independently
+of virtualization and is specified in [../sq/spec.md](../sq/spec.md) (§1–§5), whose own cost
+accounting covers that storage. The hypervisor extension's only SQ-related cost is `HSQCR` itself
+(4 flops, listed above) and the save/restore control path that persists `HSQCR` across VM exit/entry
+(folded into the MMIO-trap control/sequencing row above) — it adds no additional queue storage.
+
+For comparison, Phase 1 added ~600 LUTs to the baseline J-Core CPU. Phase 3, including the
+emulated-MMIO trap specified in this section, is now roughly a 50% addition to Phase 1's footprint.
+The entire CPU with MMU and hypervisor support is still well within the gate budget of mid-range
+FPGAs.
 
 ## 11. What Phase 3 Does NOT Add
 
