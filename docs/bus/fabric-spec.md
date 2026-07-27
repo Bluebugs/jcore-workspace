@@ -108,7 +108,8 @@ The baseline J-Core SoC exposes the following slave ports. Addresses are the P1/
 | On-chip SRAM              | implementation-defined         | Per-CPU SRAM today via `cpumreg`; remains in T1 with BMID tagging. |
 | AIC2 MMIO                 | `0xFF020000` – `0xFF02FFFF`    | See [aic/aic2-spec.md](../aic/aic2-spec.md).                       |
 | IOMMU MMIO                | `0xFF010000` – `0xFF010FFF`    | See [iommu/hardware-spec.md §3](../iommu/hardware-spec.md).        |
-| MMU per-CPU MMIO          | inside P4                      | See [mmu/hardware-spec.md](../mmu/hardware-spec.md).               |
+| MMU per-CPU MMIO          | `0xFF000000` – `0xFF000FFF`    | See [mmu/hardware-spec.md](../mmu/hardware-spec.md). Includes the store-queue area registers `QACR0` (`0xFF00003C`) and `QACR1` (`0xFF000040`), per [sq/spec.md §3](../sq/spec.md). |
+| Store-queue region        | `0xE0000000` – `0xE3FFFFFF`    | Not a fabric slave: queue-data stores are absorbed CPU-locally. A `PREF`-triggered burst appears on the fabric as one ordinary 32-byte write to the `QACR`-formed target, routed by that target's PA like any other master transaction. `0xE4000000` – `0xEFFFFFFF` is reserved and decoded by no slave. See [sq/spec.md §2](../sq/spec.md), [sq/spec.md §4](../sq/spec.md). |
 | SMP release register      | `0xFF00FF00` (single word)     | See [mmu/hardware-spec.md §8.2](../mmu/hardware-spec.md).          |
 | Peripheral register banks | inside P4 (Ethernet, SD, USB, UART, GPIO, …) | Per-peripheral; allocation in the P4 map.                |
 

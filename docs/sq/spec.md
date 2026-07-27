@@ -13,9 +13,9 @@ This document specifies the J-Core store queue (SQ): a write-combining bulk-stor
 turns eight sequential 32-bit stores plus a `PREF` instruction into a single 32-byte bus burst.
 This is the SH-4 store-queue facility (Renesas hardware manual, 1998); J-Core did not previously
 implement it, and [../soc/p4-mmio-map.md](../soc/p4-mmio-map.md) held the region reserved for it
-pending this specification. This document defines the baseline hardware feature only — the
-interaction with a hypervisor guest is out of scope here and is added in §6–7 by a later revision
-of this document.
+pending this specification. §1–§5 define the baseline hardware feature, which stands on its own
+and is what a non-virtualized J-Core implements; §6–§7 then specify what changes when the store
+queue is used by a hypervisor guest.
 
 ## 2. Region Layout
 
@@ -34,17 +34,26 @@ range is also an aliasing window: `VA[5]` selects SQ0 vs. SQ1, `VA[4:2]` selects
 within the 8-word queue, and `VA[25:6]` participates in forming the eventual burst target
 address (§3). All SQ accesses require `SR.MD = 1` (§5).
 
-Reading the queue buffers back (via ordinary load) is architecturally undefined on the baseline
-hardware described in this document. A later section may define a narrow, explicitly-scoped
-exception to this for hypervisor-privileged software; until such a section exists, no software
-may rely on reading queue contents.
+`0xE4000000`–`0xEFFFFFFF` is allocated to the SQ in [../soc/p4-mmio-map.md §2](../soc/p4-mmio-map.md)
+but is decoded by nothing: no queue absorbs it and no slave claims it. For a hypervisor guest it
+therefore traps like the rest of P4 — the guest-mode P4 carve-out of
+[../hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spec.md) is exactly
+`0xE0000000`–`0xE3FFFFFF`, the SQ-decoded range and no more.
+
+Reading the queue buffers back (via ordinary load) is architecturally undefined at `SR.MD = 1`
+with `SR.HPRIV = 0`, and on any implementation without the hypervisor extension. The single,
+narrow exception is hyperprivileged software: §6.2 defines queue-buffer readback at
+`SR.HPRIV = 1`. No other software may rely on reading queue contents.
 
 ## 3. QACR Layout and Address Formation
 
-**Register layout** (MMIO, privileged; addresses from [../soc/p4-mmio-map.md](../soc/p4-mmio-map.md)):
+**Register layout** (MMIO, privileged). Both registers live in the MMU per-CPU block at
+`0xFF000000`, at the offsets allocated in
+[../soc/p4-mmio-map.md §3.2](../soc/p4-mmio-map.md): `QACR0` at offset `0x03C`, `QACR1` at offset
+`0x040`.
 
 ```
-QACR0 (0xFF00003C)   QACR1 (0xFF000040)
+QACR0 (base + 0x03C = 0xFF00003C)   QACR1 (base + 0x040 = 0xFF000040)
 [31:5]  reserved, RAZ/WI
 [4:2]   AREA         PA[28:26] contributed to the SQ0 (QACR0) / SQ1 (QACR1) burst target
 [1:0]   reserved, RAZ/WI
@@ -130,6 +139,16 @@ Hypervisor **writes** to the same range also address the buffers directly and do
 paths independent is what lets a restore sequence reproduce any state exactly, including a queue
 whose bytes are fully written but whose `VALID`/`DIRTY` bits are clear.
 
+**Prior art, pre-2006.** The store queue itself, including the architectural decision to leave
+buffer readback undefined, is SH-4 (Renesas SH-4 CPU Core Architecture manual, 1998); this section
+narrows that "undefined" to "defined at the highest privilege level only", which is the
+System/370 pattern: IBM System/370 (1970) exposed otherwise-inaccessible machine state — storage
+keys — to privileged software through `ISK`/`SSK` precisely so that a supervisor could read and
+write state the problem program could neither see nor rely on. Extending readback to the
+hyperprivileged level and no further is the same move at one privilege level higher: the state is
+opaque to every level that could depend on it, and legible to the one level that must checkpoint
+it.
+
 ### 6.3 HSQCR semantics
 
 `HSQCR`'s bit layout is defined in
@@ -189,3 +208,15 @@ happens, if at all, only when the guest's own `PREF` next executes.
 may skip steps 2–3 of the save sequence for a queue whose `VALID` bit is clear, since there is
 nothing live to preserve, but the worst case is bounded and small relative to the general-purpose
 register file it is saved alongside.
+
+**Prior art, pre-2006.** Saving and restoring *pending, not-yet-committed* write state across a
+context switch, rather than forcing it to complete at the switch point, is IBM System/370 (1970):
+the machine-state save/restore discipline around the PSW and the storage keys preserves a
+program's in-progress machine state across a supervisor intervention instead of draining it, and
+`ISK`/`SSK` are what make the otherwise-invisible portion of that state saveable. The specific
+state being preserved here — two 32-byte write-combining queues and their area registers — is
+SH-4's own store queue (Renesas SH-4 CPU Core Architecture manual, 1998); SH-4 defined the queues
+and the `QACR` registers, and this section adds only the rule that a hypervisor treats them as
+per-vCPU context. The deliberate choice *not* to flush on switch also follows the same 1970
+lineage: a supervisor intervention is required to be transparent to the interrupted program, and
+forcing a burst the guest did not ask for would not be.

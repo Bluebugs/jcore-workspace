@@ -32,7 +32,7 @@ The 512 MB P4 segment is partitioned into four quarter-gigabyte regions. Sub-all
 
 | Range                       | Size   | Purpose                                                    | Status     |
 |-----------------------------|--------|------------------------------------------------------------|------------|
-| `0xE0000000`–`0xEFFFFFFF`   | 256 MB | SH-4 store-queue (SQ) region, see [../sq/spec.md](../sq/spec.md) | allocated  |
+| `0xE0000000`–`0xEFFFFFFF`   | 256 MB | SH-4 store-queue (SQ) region, see [../sq/spec.md](../sq/spec.md); only `0xE0000000`–`0xE3FFFFFF` is SQ-decoded, the remainder is reserved | allocated  |
 | `0xF0000000`–`0xF7FFFFFF`   | 128 MB | Cache management — L1 array access, L2 array access        | reserved   |
 | `0xF8000000`–`0xFEFFFFFF`   | 112 MB | Future expansion                                           | reserved   |
 | `0xFF000000`–`0xFFFFFFFF`   | 16 MB  | **Core MMIO** — all current allocations live here          | allocated  |
@@ -88,9 +88,9 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 | `0x01C`     | TSBPTR     | TSB pointer (read-only)               |
 | `0x020`     | CPUINFO    | Per-CPU hart ID + capability flags    |
 | `0x024`     | ASIDR      | 16-bit ASID_TAG (kernel-encoded ASID + generation) |
-| `0x03C`     | QACR0      | Store-queue 0 area register, see [../sq/spec.md §3](../sq/spec.md) |
-| `0x040`     | QACR1      | Store-queue 1 area register, see [../sq/spec.md §3](../sq/spec.md) |
-| `0x025`–`0x03B`, `0x041`–`0xFFC` | reserved | future registers                 |
+| `0x03C`     | QACR0      | Store-queue 0 area register (`0xFF00003C`), see [../sq/spec.md §3](../sq/spec.md) |
+| `0x040`     | QACR1      | Store-queue 1 area register (`0xFF000040`), see [../sq/spec.md §3](../sq/spec.md) |
+| `0x028`–`0x038`, `0x044`–`0xFFC` | reserved | future registers                 |
 
 ### 3.3 SoC-wide control (`0xFF00F000`–`0xFF00FFFF`)
 
@@ -137,7 +137,7 @@ Rules for adding new P4 allocations:
 1. **Update this document first.** No spec may claim a P4 address that does not appear here.
 2. **Choose the right region.** Per-CPU blocks go in `0xFF000000`–`0xFF00EFFF`; SoC-wide control blocks go after `0xFF00F000`; peripherals go in `0xFF100000+`.
 3. **Reserve generously.** Allocate at least 4 KB even if you only need 256 bytes; allocate 64 KB for blocks expected to grow (cache subsystems, multi-instance controllers).
-4. **`0xE0000000`–`0xEFFFFFFF` (SQ region)** is allocated to the Store Queue and owned by [../sq/spec.md](../sq/spec.md). The subdivision of this range is determined by the SQ spec. **`0xF0000000`–`0xFEFFFFFF`** remains reserved without explicit project review. The reservation policy keeps those regions empty for future major subsystems.
+4. **`0xE0000000`–`0xEFFFFFFF` (SQ region)** is allocated to the Store Queue and owned by [../sq/spec.md](../sq/spec.md). The subdivision of this range is determined by the SQ spec: `0xE0000000`–`0xE3FFFFFF` is SQ-decoded, `0xE4000000`–`0xEFFFFFFF` is reserved and decoded by nothing. Only the SQ-decoded sub-range is exempt from the guest-mode P4 trap ([../hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spec.md)); a spec that wants to place anything in the reserved remainder must amend both documents. **`0xF0000000`–`0xFEFFFFFF`** remains reserved without explicit project review. The reservation policy keeps those regions empty for future major subsystems.
 5. **Document the per-CPU vs SoC-wide property** explicitly in the table above.
 6. **Cite the canonical spec** for the block in the table's "Spec" column.
 7. **Update both this map and the [bus/fabric-spec.md §3](../bus/fabric-spec.md) slave-port table** in the same change; they must agree.
