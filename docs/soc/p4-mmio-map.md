@@ -37,7 +37,7 @@ The 512 MB P4 segment is partitioned into four quarter-gigabyte regions. Sub-all
 | `0xF8000000`–`0xFEFFFFFF`   | 112 MB | Future expansion                                           | reserved   |
 | `0xFF000000`–`0xFFFFFFFF`   | 16 MB  | **Core MMIO** — all current allocations live here          | allocated  |
 
-**Why the 16 MB live region.** All shipping J-Core control registers fit in the top 16 MB. The other three quarters of P4 are deliberately empty — they preserve room for: (1) the SH-4 store-queue facility if J-Core ever implements it, (2) direct L1/L2 array access for debug/diagnostics, and (3) a generous reserve for blocks we haven't designed yet.
+**Why the 16 MB live region.** All shipping J-Core control registers fit in the top 16 MB. The other three quarters of P4 are deliberately empty — they preserve room for: (1) the SH-4 store-queue (SQ) facility, see [../sq/spec.md](../sq/spec.md); (2) direct L1/L2 array access for debug/diagnostics, and (3) a generous reserve for blocks we haven't designed yet.
 
 ---
 
