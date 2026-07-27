@@ -141,8 +141,25 @@ struct kvm_vcpu_arch {
     
     /* Pending virtual interrupts */
     unsigned long              vintr_pending;
+
+    /* Emulated-MMIO aperture (docs/hypervisor/hardware-spec.md §2.5) */
+    unsigned long              hemub;
+    unsigned long              hemum;
+
+    /* Store queue lazy state (docs/sq/spec.md §7) */
+    unsigned long              qacr[2];
+    unsigned long              hsqcr;
+    unsigned char              sq_buf[2][32];
 };
 ```
+
+The aperture and store-queue fields added here bring the per-vCPU footprint to 80 bytes beyond
+the base register save area, alongside the existing lazy FPU (132-byte) and SIMD (272-byte)
+context images (§4.3 of [../fpu/spec.md](../fpu/spec.md), §2.6 of
+[../simd/spec.md](../simd/spec.md)). `hemub`/`hemum` mirror HEMUB/HEMUM 1:1 so VM entry can load
+them directly; `hsqcr` and `sq_buf[2][32]` mirror HSQCR and the two 32-byte store-queue buffers so
+a vCPU's in-flight burst state survives a VM exit that lands mid-queue (§7 of
+[../sq/spec.md](../sq/spec.md)).
 
 ### 3.3 The hypervisor entry/exit path
 
@@ -194,6 +211,32 @@ jcore_hyp_entry_0x190:
         mov.l   @r15+, r1
         mov.l   @r15+, r0
         hrte
+         nop
+
+        .global jcore_hyp_entry_0x200   /* Guest emulated-MMIO trap */
+jcore_hyp_entry_0x200:
+        /* Hardware has already latched everything the exit path needs into
+         * HMAR/HMCR/HMDR (docs/hypervisor/hardware-spec.md §2.6, §4.5); this
+         * entry point does no decoding of its own. Save minimal scratch,
+         * copy the hardware-latched fields into vcpu->arch, and exit to the
+         * common EXIT_REASON_MMIO path (§3.10). */
+        mov.l   r0, @-r15
+        mov.l   r1, @-r15
+
+        stc     hmar, r0             /* faulting virtual address */
+        stc     hmcr, r1             /* {SQ, DIR, SIZE, BANK, REGN} */
+
+        mov.l   handle_guest_mmio, r2
+        jsr     @r2
+         nop                         /* delay slot */
+
+        /* handle_guest_mmio() copies HMAR/HMCR/HMDR (and, for SQ=1, the
+         * store-queue buffers per docs/sq/spec.md §6) into vcpu->arch and
+         * returns EXIT_REASON_MMIO to the C dispatch loop in §3.9; it never
+         * calls HRTE itself — the in-kernel-serviceable case (§3.10) does. */
+        mov.l   @r15+, r1
+        mov.l   @r15+, r0
+        rts
          nop
 ```
 
@@ -472,6 +515,79 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu, struct kvm_run *run)
 
 The `enter_guest_asm` is the assembly stub that saves host state, restores guest state, executes HRTE, and on the next VM exit saves guest state and restores host state.
 
+### 3.10 MMIO trap handling
+
+A guest access whose translated physical address matches the emulation aperture
+(`(PA & HEMUM) == HEMUB`) traps to `jcore_hyp_entry_0x200` (§3.3), per
+[hardware-spec.md §4.5](hardware-spec.md). The C handler it calls:
+
+```c
+/* arch/sh/kvm/mmio.c */
+
+int handle_guest_mmio(struct kvm_vcpu *vcpu)
+{
+    unsigned long hmcr = vcpu->arch.hmcr;   /* copied from HMCR by hyp_entry.S */
+    unsigned long offset = vcpu->arch.hmar & ~vcpu->arch.hemum;  /* aperture offset */
+
+    /* Fast path: does this VM's dispatch table know this offset? */
+    struct jcore_mmio_dev *dev = jcore_mmio_lookup(vcpu->kvm, offset);
+
+    if (dev && dev->in_kernel_ops) {
+        /* In-kernel serviceable: compute the value, write HMDR if this was
+         * a load, and return to the guest without ever reaching kvm_run.
+         * Target: under 40 cycles round trip. */
+        if (!(hmcr & HMCR_DIR))     /* DIR = 0: load */
+            jcore_hv_write_hmdr(dev->in_kernel_ops->read(dev, offset, hmcr));
+        else                        /* DIR = 1: store */
+            dev->in_kernel_ops->write(dev, offset, vcpu->arch.hmdr, hmcr);
+
+        return HANDLED_IN_KERNEL;   /* hyp_entry.S falls through to HRTE */
+    }
+
+    /* No in-kernel handler: needs the userspace device model. Populate
+     * kvm_run->mmio directly from the hardware-latched fields — no guest
+     * instruction is decoded here, because HMCR/HMAR/HMDR already contain
+     * exactly the fields a decode would have produced (§4.5). */
+    vcpu->run->exit_reason = KVM_EXIT_MMIO;
+    vcpu->run->mmio.phys_addr = jcore_ra_to_hpa(vcpu, vcpu->arch.hmar);
+    vcpu->run->mmio.len       = hmcr_size_bytes(hmcr);      /* from HMCR.SIZE */
+    vcpu->run->mmio.is_write  = !!(hmcr & HMCR_DIR);         /* from HMCR.DIR */
+    if (hmcr & HMCR_DIR)
+        memcpy(vcpu->run->mmio.data, &vcpu->arch.hmdr, vcpu->run->mmio.len);
+
+    return EXIT_REASON_MMIO;
+}
+```
+
+Two outcomes, both reached without `hyp_entry.S` or `handle_guest_mmio()` decoding the trapping
+instruction:
+
+1. **In-kernel serviceable.** The handler computes the value, writes `HMDR` if `HMCR.DIR = 0`, and
+   returns; `jcore_hyp_entry_0x200` executes `HRTE` directly and never enters the `kvm_run` outer
+   loop of §3.9. Target: under 40 cycles round trip, since this path never leaves hyperprivileged
+   mode.
+2. **Needs the userspace device model.** The handler populates `kvm_run->mmio` (address, size,
+   direction, data for a store) and returns `EXIT_REASON_MMIO` to the §3.9 dispatch loop, which
+   sets `run->exit_reason = KVM_EXIT_MMIO` and returns to userspace exactly as it already does for
+   `EXIT_REASON_MMIO` today.
+
+**Why this reuses `EXIT_REASON_MMIO` rather than adding a new exit reason.** The aperture trap and
+the pre-existing MMIO exit path in §3.9 both resolve to the same userspace contract — an address,
+a size, a direction, and a data payload for stores. Carrying the store-queue-burst distinction
+(`HMCR.SQ = 1`) as a flag inside the `kvm_run->mmio` payload, rather than inventing
+`EXIT_REASON_MMIO_SQ` or similar, means the existing userspace MMIO handling in the VMM applies
+unchanged: a device model that already implements `KVM_EXIT_MMIO` handling needs no new exit-reason
+case to also handle store-queue bursts, only to notice the burst flag and read 32 bytes instead of
+up to 4.
+
+**Why the exit path performs no decoding.** `HMCR`, `HMAR`, and `HMDR` are populated entirely by
+hardware at trap time (§2.6, §4.5 of [hardware-spec.md](hardware-spec.md)): `HMCR.DIR`,
+`HMCR.SIZE`, `HMCR.REGN`, `HMCR.BANK`, and `HMCR.SQ` are exactly the fields a software instruction
+decode would have produced from the faulting load or store, and `HMAR`/`HMDR` are exactly the
+address and data fields. `handle_guest_mmio()` above does nothing but copy these hardware-latched
+fields into `kvm_run->mmio` (or into the in-kernel device's read/write call) — there is no guest
+instruction bytes to fetch or decode anywhere in this path, in either outcome.
+
 ## 4. Guest Support (Paravirt Hooks)
 
 For a guest kernel to perform well, it should be paravirt-aware. The hooks:
@@ -519,9 +635,31 @@ void __init jcore_detect_virtualization(void)
 {
     long ret;
     unsigned long version;
-    
-    /* Try HV_API_VERSION hypercall; if hypervisor exists, it answers */
+
+    /* CPUINFO[16] (HYP_SUPPORT) is set only when this core was built with
+     * the hyperprivileged extension at all; a plain bare-metal SH-4 core
+     * reads 0 here and HCALL is not even a valid encoding to probe. */
+    if (!(read_cpuinfo() & CPUINFO_HYP_SUPPORT)) {
+        jcore_running_as_guest = false;
+        pr_info("J-Core: no hypervisor extension, running on bare metal\n");
+        return;
+    }
+
+    /* The extension is present, but this could still be an unhosted core
+     * (hypervisor never installed) rather than a guest. Wrap the probe in
+     * a temporary trap handler so an HCALL taken to the ordinary
+     * supervisor vector (no hyperprivileged mode configured to receive
+     * it) is caught instead of crashing the boot. */
+    if (jcore_install_temp_hcall_trap_handler()) {
+        jcore_running_as_guest = false;
+        pr_info("J-Core: hypervisor extension present but unhosted\n");
+        jcore_remove_temp_hcall_trap_handler();
+        return;
+    }
+
     ret = jcore_hcall(HCALL_HV_API_VERSION, 0, 0, 0, 0, &version);
+    jcore_remove_temp_hcall_trap_handler();
+
     if (ret == HV_RET_OK) {
         jcore_running_as_guest = true;
         pr_info("J-Core: running as guest under hypervisor v%lu\n", version);
@@ -532,9 +670,15 @@ void __init jcore_detect_virtualization(void)
 }
 ```
 
-The HCALL itself doesn't fault on bare metal — it just executes as a no-op (per Phase 3 hardware spec §3.1), returning some default value that doesn't match the expected version response.
-
-Actually, more robust: HCALL on bare metal raises a trap if HEDR isn't configured. Detection: install a temporary trap handler that catches the HCALL exception and sets a flag. Run HCALL, check flag.
+Per [hardware-spec.md §3.1](hardware-spec.md), `HCALL` executed with `SR.HPRIV = 1` already set
+behaves as a no-op — but that rule describes hypercalls issued from *already-hyperprivileged* code
+(e.g. the hypervisor calling its own service routines), not bare-metal execution. On a machine with
+no hypervisor installed, `SR.HPRIV` is hardwired to 0, so `HCALL` always traps normally, exactly as
+it does under a real hypervisor's guest — there is no bare-metal case where `HCALL` silently
+no-ops. Detection above therefore does not rely on `HCALL`'s no-op behavior at all: it uses
+`CPUINFO[16]` (`HYP_SUPPORT`) together with a temporary trap handler installed around the probe, so
+that a bare-metal `HCALL` trap (taken to the ordinary supervisor vector, since there is no
+hyperprivileged mode to receive it) is caught and reported as "no hypervisor" rather than crashing.
 
 ### 4.3 Hypercall stub
 
@@ -572,6 +716,59 @@ jcore_hcall:
 For paravirt I/O (much faster than emulating real devices), the guest uses virtio-style drivers. The hypervisor exposes virtio devices over a shared-memory ring protocol, with notifications via HCALL_HV_VIRTIO_NOTIFY.
 
 This is a significant chunk of work for the guest side but it's largely a port of existing virtio code (already in `drivers/virtio/`). No j-core-specific innovation; just glue.
+
+### 4.5 Bare-metal guest support
+
+§4.1–§4.4 assume a cooperating Linux guest that detects the hypervisor and switches to
+paravirt-aware MMU and I/O paths. A Dreamcast image is the opposite case: a bare-metal SH-4 binary
+with `MMUCR.AT = 0` (per [hardware-spec.md §4.4](hardware-spec.md)) and no knowledge that a
+hypervisor exists at all. For this guest, the VMM — not the guest — does the work §4.1–§4.4 leave
+to a cooperating kernel:
+
+- **Build the guest's TLB mappings directly.** There is no guest page table to shadow (§3.6 does
+  not apply); the VMM installs the guest's fixed memory map into the shadow/guest TLB itself, ahead
+  of guest execution, driven by the worked example below rather than by guest-issued `LDTLB` traps.
+- **Install both cached and uncached views of guest RAM** (`PTEL.C = 1` and `PTEL.C = 0`) at the
+  guest's expected addresses, since the guest's own code assumes both P1/P2-style aliases exist and
+  never sets them up itself.
+- **Allocate device pages into the emulation aperture and ordinary pages elsewhere.** Only the
+  physical range the VMM wants trapped needs to fall inside `HEMUB`/`HEMUM`; guest RAM and VRAM are
+  mapped straight to host RAM and never trap.
+- **Set `HEMUB`/`HEMUM` on VM entry** from the per-vCPU `hemub`/`hemum` fields added to
+  `kvm_vcpu_arch` in §3.2.
+- **Never expect the guest to execute `HCALL`.** A bare-metal image was compiled with no knowledge
+  of hypercalls; the entire paravirt surface of §4.1–§4.3 is unused for this guest class, and the
+  MMU and I/O paths above are the VMM's sole levers.
+
+**Dreamcast guest memory map (worked example):**
+
+| Region | Guest address | Size | Mapping |
+|---|---|---|---|
+| Main RAM, cached | `0x8C000000` | 16 MB | host RAM, `PTEL.C = 1` |
+| Main RAM, uncached | `0xAC000000` | 16 MB | same frames, `PTEL.C = 0` |
+| VRAM | `0xA5000000` | 8 MB | host RAM |
+| Sound RAM | `0xA0800000` | 2 MB | host RAM |
+| TA submission window | per `QACR` | — | host ring buffer, [../sq/spec.md §6](../sq/spec.md) |
+
+The Dreamcast register file at `0xA05F6800`–`0xA05F8000` (holobox/AICA/GD-ROM control and status
+registers) does not map uniformly into one bucket. It is split into the emulation aperture **per
+page**, not per register:
+
+- Pages holding only pure-storage registers (status bits the guest merely reads back, counters,
+  configuration fields with no external effect) map to host RAM and never trap.
+- Pages holding **any** side-effecting register (TA kickoff, DMA start, GD-ROM command issue,
+  interrupt acknowledge) map into the aperture in their entirety, so that register traps into the
+  hypervisor.
+
+**Consequence, stated honestly:** because the split is per page rather than per register, a
+pure-storage register that happens to share a page with a side-effecting register still traps on
+every access, even though its own value never needs hypervisor involvement. This is pure overhead
+with no correctness benefit, and it argues for choosing the smallest page size the MMU supports for
+this register block specifically, to minimize how many pure-storage registers get dragged into the
+aperture by a page-mate. Producing the actual side-effect classification for each register in
+`0xA05F6800`–`0xA05F8000` — which ones are pure-storage and which are side-effecting — is VMM work
+outside the scope of this spec; it depends on the target console's device model, not on the
+hypervisor architecture.
 
 ## 5. Boot Sequence (with Hypervisor)
 
@@ -679,6 +876,32 @@ This is standard KVM SMP work, not j-core specific.
 - Verify Phase 1 binary kernels run as guests (via shadow MMU; slower but correct).
 - Verify paravirt-aware kernels detect virtualization correctly.
 - Verify both run unchanged on bare metal when no hypervisor is active.
+
+### 9.5 Dreamcast validation stages
+
+Four ordered stages, each with its own pass criterion. Later stages assume earlier ones pass.
+
+1. **Synthetic guest, cosim.** A guest built to deliberately exercise each trap class the
+   emulated-MMIO path can take — byte/word/longword loads and stores, both register banks, an SQ
+   burst that lands inside the aperture, and an SQ burst that lands outside it. Pass criterion:
+   every verification point listed in [hardware-spec.md §9](hardware-spec.md) (items 10–15) is
+   observed at least once in the cosim trace, with the expected `HMAR`/`HMCR`/`HMDR` values at each
+   trap.
+2. **Homebrew, RAM-resident.** A small homebrew Dreamcast ELF that touches only main RAM (cached
+   and uncached aliases) and does no TA/AICA/GD-ROM access. Pass criterion: the binary runs
+   unmodified to completion with zero emulated-MMIO traps, confirming the §4.5 memory map by
+   itself introduces no spurious aperture hits.
+3. **Homebrew, TA-submitting.** A homebrew demo that submits polygon data to the tile accelerator
+   via the store-queue burst path (§4.5 worked example, TA submission window). Pass criterion: the
+   SQ path takes **zero traps**, verified by the hypervisor's exit counter — the entire TA
+   submission burst goes straight to the host ring buffer with no aperture hit, which is the
+   headline performance claim of the store-queue design (§6, [../sq/spec.md](../sq/spec.md)) and
+   must hold even though the TA kickoff register itself, on the same or an adjacent register page,
+   does trap.
+4. **Commercial title.** A full commercial Dreamcast title runs at playable speed under the
+   hypervisor. Pass criterion: subjectively playable frame rate, with the emulated-MMIO exit rate
+   per frame recorded so later hardware or software optimization work has a baseline to improve
+   against.
 
 ## 10. Upstream Merge Plan
 
