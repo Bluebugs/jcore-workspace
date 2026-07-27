@@ -91,9 +91,21 @@ LDC Rm, VBR_HYP  : 0100 mmmm 0010 1111   = 0x402F | m<<8
 STC VBR_HYP, Rn  : 0000 nnnn 0010 1111   = 0x002F | n<<8
 LDC Rm, HEDR     : 0100 mmmm 0011 1111   = 0x403F | m<<8
 STC HEDR, Rn     : 0000 nnnn 0011 1111   = 0x003F | n<<8
+LDC Rm, HEMUB    : 0100 mmmm 0100 1111   = 0x404F | m<<8
+STC HEMUB, Rn    : 0000 nnnn 0100 1111   = 0x004F | n<<8
+LDC Rm, HEMUM    : 0100 mmmm 0101 1111   = 0x405F | m<<8
+STC HEMUM, Rn    : 0000 nnnn 0101 1111   = 0x005F | n<<8
+LDC Rm, HMAR     : 0100 mmmm 0110 1111   = 0x406F | m<<8
+STC HMAR, Rn     : 0000 nnnn 0110 1111   = 0x006F | n<<8
+LDC Rm, HMDR     : 0100 mmmm 0111 1111   = 0x407F | m<<8
+STC HMDR, Rn     : 0000 nnnn 0111 1111   = 0x007F | n<<8
+LDC Rm, HMCR     : 0100 mmmm 1000 1111   = 0x408F | m<<8
+STC HMCR, Rn     : 0000 nnnn 1000 1111   = 0x008F | n<<8
+LDC Rm, HSQCR    : 0100 mmmm 1001 1111   = 0x409F | m<<8
+STC HSQCR, Rn    : 0000 nnnn 1001 1111   = 0x009F | n<<8
 ```
 
-This carves a new control-register family with capacity for up to 16 hyperprivileged control registers (slots 0–15). All accesses in this family trap with illegal-instruction exception if executed with `SR.HPRIV=0`, enforcing that only hyperprivileged code can read or write these registers.
+This carves a new control-register family with capacity for up to 16 hyperprivileged control registers (slots 0–15). After allocation of HEMUB, HEMUM, HMAR, HMDR, HMCR, and HSQCR in slots 4–9, **six free slots (10–15) remain** for future hyperprivileged register extensions. All accesses in this family trap with illegal-instruction exception if executed with `SR.HPRIV=0`, enforcing that only hyperprivileged code can read or write these registers.
 
 The choice of low nibble `0xF` avoids collision with SH-4's existing `0xE` (LDC/STC) and `0xB`/`0xA`/`0x7`/`0x3` (LDC.L/STC.L variants) low nibbles in the 0100 family.
 
@@ -153,6 +165,81 @@ This table resolves the open question raised in [../fpu/spec.md §10 #3](../fpu/
 ### 2.4 No changes to existing registers
 
 PTEH, PTEL, TSBBR, TSBCFG, TSBPTR, MMUCR, VBR, SPC, SSR, GBR, R0-R15 all behave exactly as in Phase 1. The TLB and TSB structures are unchanged.
+
+### 2.5 HEMUB and HEMUM — Emulation Aperture
+
+```
+HEMUB   Hypervisor Emulation Aperture Base   word-sized
+HEMUM   Hypervisor Emulation Aperture Mask   word-sized
+
+Trap condition (guest only, SR.HPRIV = 0):
+    (PA & HEMUM) == HEMUB
+```
+
+**Normative rules:**
+
+1. **Physical-address matching:** The aperture test is applied to the **physical** address produced by the TLB, not the virtual address. This allows the hypervisor to trap accesses to any physical region, even if mapped by the guest at different virtual addresses.
+
+2. **Guest-mode only:** The aperture test applies only when `SR.HPRIV = 0`. Accesses by the hypervisor to the same physical addresses do not trigger the aperture trap and do not recurse; the hypervisor is exempt from emulation.
+
+3. **Aperture disabled by HEMUM=0:** When `HEMUM = 0`, the aperture is disabled. No address matches the test (since any value AND'ed with 0 equals 0, which cannot equal `HEMUB` unless both are 0; define `HEMUM = 0` explicitly as "aperture disabled" rather than relying on bit arithmetic to fall out correctly).
+
+4. **Per-vCPU context:** HEMUB and HEMUM are per-vCPU state, saved and restored across VM exit and entry by the hypervisor's vCPU context-save/restore sequence.
+
+5. **Reset value:** Both HEMUB and HEMUM read as 0 at reset (aperture disabled).
+
+**Design rationale:** The emulation aperture traps guest accesses to reserved regions, such as Dreamcast console I/O devices (the AIC, AICA, GD-ROM, etc.), which exist at fixed physical addresses. The trap diverts these accesses to the hypervisor, which can then emulate the behavior or inject the appropriate device state into the guest. Pre-2006 prior art: IBM S/370 storage keys (1970) pioneered physical-address-indexed access tests for memory protection; the aperture applies the same model to I/O emulation on a virtualized architecture.
+
+### 2.6 HMAR, HMDR, and HMCR — MMIO Trap Information Registers
+
+```
+HMAR    Hypervisor MMIO Address Register     word-sized, hardware-written
+HMDR    Hypervisor MMIO Data Register        word-sized, read/write
+HMCR    Hypervisor MMIO Control Register     32-bit, hardware-written
+```
+
+**HMAR — Hypervisor MMIO Address Register:** On an emulation aperture trap, the faulting **virtual** address is captured in HMAR. The hypervisor recovers the physical address from its own guest-to-host PA translation tables (as in sun4v), and keeping the virtual address lets it identify which guest mapping was used for the access. This is essential for correct trap context when the guest page tables or TLB state change between the trap and the hypervisor's inspection.
+
+**Why HMAR is a new register, not an alias of TEA:** The TLB exception address register (TEA) is written by TLB exceptions delivered to the *guest* (miss, protection violation, etc.). Overloading HMAR onto TEA would destroy the guest's TEA state whenever an emulation aperture trap occurs, even though the guest never sees the trap. This would break the guest's TLB miss handler invariants. HMAR as a separate register preserves guest state and closes a previously-open design question (design spec, item 3).
+
+**HMDR — Hypervisor MMIO Data Register:** Holds the data payload associated with an emulation aperture trap. For a load (`HMCR.DIR = 0`), the hypervisor writes the guest's expected result into HMDR before `HRTE`. For a store (`HMCR.DIR = 1`), HMDR holds the guest's store value on entry. For a burst store (`HMCR.SQ = 1`), the data is **not** in HMDR — it resides in the store queue buffers and is readable per [../sq/spec.md §6](../sq/spec.md), which gives the buffer layout and access protocol.
+
+**HMCR — Hypervisor MMIO Control Register (32-bit, read-only to software except as noted):**
+
+```
+[31:9]  reserved, RAZ
+[8]     SQ      1 = 32-byte store-queue burst; SIZE and REGN are ignored
+[7]     DIR     0 = load (hypervisor supplies HMDR), 1 = store (HMDR holds guest data)
+[6:5]   SIZE    0 = byte, 1 = word (16-bit), 2 = longword (32-bit), 3 = reserved
+[4]     BANK    destination register bank for a load (0 = bank 0, 1 = bank 1)
+[3:0]   REGN    destination register number for a load (R0-R15)
+```
+
+BANK is meaningful only for REGN 0–7; R8–R15 are unbanked and BANK reads 0 for them. Hardware sets all fields on trap; software cannot write HMCR. The hypervisor uses HMCR fields to determine where to inject the emulated result (REGN, BANK for registers; SIZE for the number of bytes to write), and whether HMDR holds the value or the data is in the store queue (SQ flag).
+
+### 2.7 HSQCR — Hypervisor Store-Queue Status Register
+
+```
+HSQCR   Hypervisor Store-Queue Status Register    32-bit
+```
+
+**Layout (32-bit):**
+
+```
+[31:4]  reserved, RAZ/WI
+[3]     DIRTY1  queue 1 holds data not yet burst
+[2]     DIRTY0  queue 0 holds data not yet burst
+[1]     VALID1  queue 1 has been written since last burst or clear
+[0]     VALID0  queue 0 has been written since last burst or clear
+```
+
+**VALID[1:0] and DIRTY[1:0]:** The SQ hardware sets VALID bits to 1 when the corresponding queue slot is written by the guest, and clears them on a burst (when the queue is flushed to memory). DIRTY bits shadow valid bits until cleared. The hypervisor uses these bits to determine which queue slots hold pending store data. Write access to HSQCR is allowed only at `SR.HPRIV = 1` for context restore (clearing bits after reading them, or setting them to match saved state). Writes at `SR.HPRIV = 0` trap with an illegal-instruction exception.
+
+**Per-vCPU context:** HSQCR is per-vCPU state, saved and restored across VM exit and entry as part of the vCPU context-save/restore sequence.
+
+**Reset value:** 0 (both queues empty).
+
+**Cross-reference:** The store queue architecture and the format of the queue buffers are specified in [../sq/spec.md §6](../sq/spec.md).
 
 ## 3. New Instructions
 
