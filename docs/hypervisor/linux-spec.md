@@ -3,7 +3,7 @@
 **Status:** Draft  
 **Scope:** Linux kernel changes to support running as host and guest under the J-Core hypervisor extension  
 **Audience:** KVM and Linux kernel developers  
-**Prerequisites:** Phase 1 Linux spec, Phase 3 design spec, Phase 3 hardware spec
+**Prerequisites:** Phase 1 Linux spec, Phase 3 design spec, Phase 3 hardware spec, [../sq/spec.md](../sq/spec.md)
 
 ---
 

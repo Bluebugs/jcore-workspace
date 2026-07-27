@@ -58,7 +58,7 @@ All three architectures pre-date the 2006 cutoff comfortably. Post-2006 innovati
 
 ### 3.4 All guest TLB writes mediated by hypervisor
 
-**Decision:** When `SR.HPRIV=0` and a guest attempts LDTLB or LDTLB.R, the operation traps to the hyperprivileged trap vector. The hypervisor reads the guest's PTEH/PTEL, performs RA-to-HPA translation, and writes the real TLB entry.
+**Decision:** When `SR.HPRIV=0` and a guest attempts LDTLB or LDTLB.RN, the operation traps to the hyperprivileged trap vector. The hypervisor reads the guest's PTEH/PTEL, performs RA-to-HPA translation, and writes the real TLB entry.
 
 **Rationale:** This is sun4v's exact model. The cost is a trap per TLB write, mitigated by:
 - Per-guest TSB caching (hypervisor pre-populates entries the guest can refer to without walking page tables)
@@ -99,7 +99,7 @@ Earlier drafts of this spec, of the Phase 1 MMU spec, and of the Phase 2 IOMMU s
 
 ### 3.8 Per-guest TSB managed by hypervisor
 
-**Decision:** Each guest has its own TSB, allocated and managed by the hypervisor. The hypervisor populates the TSB with pre-translated entries (already containing HPAs) as part of handling guest hypercalls. The guest's TLB miss handler reads from this TSB on miss; on TSB hit, it constructs a PTEL with the HPA from the TSB entry and executes LDTLB.R, which traps to the hypervisor. The hypervisor verifies the LDTLB matches a TSB entry it wrote, installs in TLB.
+**Decision:** Each guest has its own TSB, allocated and managed by the hypervisor. The hypervisor populates the TSB with pre-translated entries (already containing HPAs) as part of handling guest hypercalls. The guest's TLB miss handler reads from this TSB on miss; on TSB hit, it constructs a PTEL with the HPA from the TSB entry and executes LDTLB.RN, which traps to the hypervisor. The hypervisor verifies the LDTLB matches a TSB entry it wrote, installs in TLB.
 
 **Rationale:** Sun4v's TSB registration API (`hv_mmu_tsb_ctx0`, `hv_mmu_tsb_ctxnon0`) is the precedent. The TSB hot path remains fast (no page-table walk in the guest), and the verification step on LDTLB is a quick cryptographic-cookie or pointer-range check.
 
@@ -252,8 +252,8 @@ The hypercall numbering and parameter convention mirror the sun4v hypervisor API
 1. Guest user code touches a VA; TLB miss.
 2. Hardware traps to guest's TLB miss vector (`VBR + 0x400`), delegated via HEDR.
 3. Guest's miss handler reads its TSB (registered with hypervisor at boot).
-4. On TSB hit: build PTEL with HPA from TSB entry, execute LDTLB.R.
-5. LDTLB.R traps to hyperprivileged trap vector (LDTLB always traps in S mode under virt).
+4. On TSB hit: build PTEL with HPA from TSB entry, execute LDTLB.RN.
+5. LDTLB.RN traps to hyperprivileged trap vector (LDTLB always traps in S mode under virt).
 6. Hypervisor verifies the LDTLB entry came from a TSB it manages, installs in TLB, returns.
 7. Guest resumes.
 

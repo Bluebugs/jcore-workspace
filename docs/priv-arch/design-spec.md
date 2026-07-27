@@ -13,7 +13,7 @@ Making a J-Core that an SH-4 (`-m4-nofpu`) Linux can boot was initially scoped a
 
 J2 is an **SH-2-class** core. SH-2 has no concept of user vs. supervisor mode, no register banking, and a stack-based exception model. SH-3 introduced — and SH-4 inherited — privilege levels, banked registers, and a register-based exception model (`SPC`/`SSR`/`SGR`). SH-4 Linux depends on all of it. Adding it is genuine control-path and datapath work in the core, distinct from translation and from the cache.
 
-This is not "extra credit" relative to the MMU — it is a **hard prerequisite**. The MMU miss handler in [mmu/hardware-spec.md §7](../mmu/hardware-spec.md) opens in bank 1 (`SR.RB=1`) with the faulting PC in `SPC` and the saved status in `SSR`, and returns through `LDTLB.R` (a fused `LDTLB`+`RTE` that restores `PC←SPC, SR←SSR`). None of those mechanisms exist in J2 today.
+This is not "extra credit" relative to the MMU — it is a **hard prerequisite**. The MMU miss handler in [mmu/hardware-spec.md §7](../mmu/hardware-spec.md) opens in bank 1 (`SR.RB=1`) with the faulting PC in `SPC` and the saved status in `SSR`, and returns through `LDTLB.RN` (a fused `LDTLB`+`RTE` that restores `PC←SPC, SR←SSR`). None of those mechanisms exist in J2 today.
 
 ## 2. Current J2 state (verified against the RTL)
 
@@ -70,7 +70,7 @@ Evidence from `jcore-soc/components/cpu` confirms J2 implements the SH-2 system 
 
 ### 4.2 Real register banking
 
-Replace the `register_file_two_bank` duplication with genuine SH banking: R0–R7 have a **bank 0** and **bank 1** copy; `SR.RB` (when `MD=1`) selects which is architecturally visible as R0–R7. R8–R15 are unbanked. On exception entry hardware forces `RB=1`; `RTE`/`LDTLB.R` restores the caller's `RB` from `SSR`.
+Replace the `register_file_two_bank` duplication with genuine SH banking: R0–R7 have a **bank 0** and **bank 1** copy; `SR.RB` (when `MD=1`) selects which is architecturally visible as R0–R7. R8–R15 are unbanked. On exception entry hardware forces `RB=1`; `RTE`/`LDTLB.RN` restores the caller's `RB` from `SSR`.
 
 The existing dual-read-port structure does not disappear — each bank still needs its two read ports — so the change is "two *distinct* banks, each dual-ported," roughly doubling the R0–R7 storage (8 × 32 b on J32) plus `RB`-muxing on the read/write address path.
 
@@ -92,7 +92,7 @@ Replace the SH-2 stack push/pop with:
 5. `SR.MD ← 1, SR.RB ← 1, SR.BL ← 1`, and for interrupts `SR.IMASK ← level`.
 6. `PC ← VBR + offset`, where the offset is the SH-4-style fixed vector (§4.5).
 
-**On `RTE`:** `SR ← SSR; PC ← SPC` (one-instruction delay slot, as today). This replaces the SH-2 `stack -> PC/SR`. `LDTLB.R` ([mmu/hardware-spec.md §3.2](../mmu/hardware-spec.md)) is the MMU-fused variant.
+**On `RTE`:** `SR ← SSR; PC ← SPC` (one-instruction delay slot, as today). This replaces the SH-2 `stack -> PC/SR`. `LDTLB.RN` ([mmu/hardware-spec.md §3.2](../mmu/hardware-spec.md)) is the MMU-fused variant.
 
 `TRAPA #imm` changes from "push PC/SR to stack" to "`TRA ← imm<<2`; take a general exception via the register model." This is the one **behavioural break** from J2's current SH-2 semantics; no SH-2 binary that relies on stack-frame exceptions survives, but J-Core's own software stack is rebuilt for SH-4 anyway.
 
@@ -127,7 +127,7 @@ SH-4 saves exactly **one** level of `SPC`/`SSR` — there is no hardware trap-le
 
 The miss handler's own memory accesses are: the `TSBPTR`-relative load of the candidate TTE, and (on TSB miss) the page-table walk. If any of those addresses were *translated* (P0/P3), they could themselves miss the TLB → recursive fault → corruption. Therefore:
 
-> **The per-CPU TSB and the kernel page tables MUST live in the untranslated direct map (P1).** With `PA = VA & 0x1FFFFFFF`, a miss-handler load can never trigger a second translation, so a single level of `SPC`/`SSR` is provably sufficient and `LDTLB.R` returns cleanly to the original fault.
+> **The per-CPU TSB and the kernel page tables MUST live in the untranslated direct map (P1).** With `PA = VA & 0x1FFFFFFF`, a miss-handler load can never trigger a second translation, so a single level of `SPC`/`SSR` is provably sufficient and `LDTLB.RN` returns cleanly to the original fault.
 
 This refines [mmu/design-spec.md §4.3](../mmu/design-spec.md) ("TSB lives in normal cacheable memory"): it must be normal cacheable memory *in P1*. P1 is cached (so the TSB still benefits from L1/L2), just untranslated. The cost is that the TSB and page tables consume lowmem (the P1 window), which is the same constraint classic SH-4 and MIPS (`kseg0`) kernels already live with. The alternative — letting the handler save/restore `SPC`/`SSR` to tolerate one nested miss — was considered and rejected: it adds cost to every miss to buy placement flexibility we do not need.
 
@@ -142,7 +142,7 @@ The privileged-architecture subset of the J2→SH-4 gap (full list and tiers in 
 - `LDC Rm,SPC` / `STC SPC,Rn` (+`.l`)
 - `LDC Rm,Rn_BANK` / `STC Rm_BANK,Rn` (+`.l`)
 - `RTE` — semantics change (restore from `SPC`/`SSR`)
-- `LDTLB` / `LDTLB.R` — owned by the MMU spec, listed here for completeness
+- `LDTLB` / `LDTLB.RN` — owned by the MMU spec, listed here for completeness
 
 **Optional / droppable (Tier-3):** `STC SGR,Rn` (+`.l`), `LDC/STC DBR` (debug base, unrelated to privilege), `CLRS`/`SETS` (MAC saturation S-bit).
 
@@ -163,7 +163,7 @@ Each milestone is independently testable. PM0–PM2 have **no MMU dependency** a
 - **PM4 — `SGR` (optional).** Add `SGR ← R15` on entry and `STC SGR,Rn` only if SH-4A binary compat is wanted.
 - **PM5 — Linux bring-up gate.** With PM0–PM3 (+ the MMU milestones), boot an SH-4 `-m4-nofpu` kernel to user space. Shared gate with [mmu/](../mmu/) and the [ULX3S SoC roadmap](../ulx3s-soc-component-inventory.md).
 
-**Dependency summary:** PM0 → PM1 → PM2 → PM3 are linear; the MMU's `LDTLB`/`LDTLB.R` and miss-handler hot path require PM1 (banking) + PM2 (SPC/SSR) before they are meaningful. The cache-maintenance ISA ([cache/l2-spec.md §17.5](../cache/l2-spec.md)) is independent of this spec.
+**Dependency summary:** PM0 → PM1 → PM2 → PM3 are linear; the MMU's `LDTLB`/`LDTLB.RN` and miss-handler hot path require PM1 (banking) + PM2 (SPC/SSR) before they are meaningful. The cache-maintenance ISA ([cache/l2-spec.md §17.5](../cache/l2-spec.md)) is independent of this spec.
 
 ## 8. Hardware-cost sketch
 
