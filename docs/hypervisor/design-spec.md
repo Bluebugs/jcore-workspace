@@ -14,7 +14,7 @@ Add hardware-assisted virtualization to the J-Core CPU family while:
 - Preserving the strict pre-2006 prior-art constraint that has driven the project
 - Reusing the Phase 1 MMU and Phase 2 IOMMU primitives without changes
 - Supporting both unmodified and paravirtualized guests
-- Keeping hardware additions minimal (under 200 LUTs per core)
+- Keeping hardware additions minimal (approximately 300 LUTs per core — see §5)
 - Providing a clean upgrade path: a J-Core variant without virtualization remains a strict subset
 
 Non-goals:
@@ -103,6 +103,49 @@ Earlier drafts of this spec, of the Phase 1 MMU spec, and of the Phase 2 IOMMU s
 
 **Rationale:** Sun4v's TSB registration API (`hv_mmu_tsb_ctx0`, `hv_mmu_tsb_ctxnon0`) is the precedent. The TSB hot path remains fast (no page-table walk in the guest), and the verification step on LDTLB is a quick cryptographic-cookie or pointer-range check.
 
+### 3.9 Untranslated guests are translated
+
+**Decision:** When virtualization is active for a guest (`SR.HPRIV=0` in that context), all of the guest's P0-P3 accesses are translated through the TLB, regardless of what value the guest's own `MMUCR.AT` holds. A guest may believe it is running with translation off; the hardware translates it anyway. See [hardware-spec.md §4.4.1](hardware-spec.md).
+
+**Rationale:** A bare-metal SH-4 image — a Dreamcast binary is the motivating case — runs with `MMUCR.AT=0` and lives entirely in P1/P2, which are untranslated by SH-4 architecture and bypass the TLB by design. Such a guest, taken as-is, has no translation path at all: its "physical" addresses are whatever it wrote into P1/P2 at link time, unconditionally. Load two such guests under one hypervisor and they resolve to the same host physical addresses and collide in DRAM. Forcing translation on is what turns "the address the guest wrote down" into something the hypervisor can relocate.
+
+We reuse the existing TLB for this rather than adding a second, parallel relocation datapath, and inherit Phase 1's multi-size page support for free: a flat 16 MB guest image costs one large-page TLB entry, not per-4K-page bookkeeping. This is the same design axis §3.2 already committed to — no new translation hardware, only new uses of the old translation hardware.
+
+**Rejected alternative:** a dedicated base+bound register pair (`HGBR`/`HGLR`) that would add a constant offset to every guest physical address instead of routing it through the TLB. This is cheaper in gates than reusing the TLB, but it forces each VM's guest memory to be a single physically contiguous region — no scattering a guest's frames across DRAM, no demand-paging guest memory on the host — and it adds a second, redundant address-relocation mechanism sitting alongside a TLB that already does this job. Reusing the TLB keeps address relocation as one mechanism, not two.
+
+Prior art, pre-2006: IBM System/360 base-and-bounds relocation registers (1964) established that a program's addresses can be transparently relocated by hardware without the program's knowledge or cooperation — precisely the property an AT=0 guest needs. Sun4v's real-address offset mechanism (UltraSPARC Architecture 2005 Specification) is the direct SPARC-side precedent for treating "what the guest thinks is physical" as a software-relocatable real address rather than a literal physical one.
+
+### 3.10 Emulated MMIO by physical aperture, not a PTE bit
+
+**Decision:** Guest MMIO accesses to emulated devices are detected after translation, by comparing the resulting physical address against a hypervisor-configured aperture (`HEMUB`/`HEMUM`), not by a bit stored in the guest's PTE. See [hardware-spec.md §2.5](hardware-spec.md) and [hardware-spec.md §4.5](hardware-spec.md).
+
+**Rationale:** The reason for this choice is that there is nowhere to put an MMIO bit. The jcore PTE format is already full:
+
+```
+bit: 31..............14 13 12 11 10  9  8  7  6  5  4  3  2  1  0
+     |      PFN       |SZ2|SZ1|SP|SZ0|PN|AC| W| X| U| D| C| G|ST| V|
+```
+
+Bits 0-7 are the hardware `PTEL` flags at identical bit positions, which is why `jcore_pte_to_ptel()` is a mask-and-shift operation with no bit rearrangement. Bits 8, 9, and 11 are software-only (not consulted by hardware TLB fill). Bits 10, 12, and 13 are the scattered 3-bit huge-page size slot. Bits 14-31 are the PFN. There are zero free bits in this layout. All eight size-slot code points the 3-bit field can express are already consumed (`HUGE_MAX_HSTATE 8`), so the size field cannot be narrowed to make room. Swap PTEs are equally tight: the swap-entry type field occupies bits 1-5, which is why jcore already overrides `_PAGE_SWP_EXCLUSIVE` to alias `_PAGE_EXEC` rather than allocate a fresh bit. (Source: `arch/sh/include/asm/pgtable-bits-jcore.h`.)
+
+Against that budget, adding an "emulated device" PTE bit would cost one of: a huge-page size code point, a PFN bit (shrinking the addressable physical range), or promoting `pte_t` to 64 bits across the whole kernel. All three are bad trades for a property that is knowable a different way — from the physical address alone, at the moment of translation. The aperture derives the property instead of storing it, at the cost of one comparator (`(PA & HEMUM) == HEMUB`) rather than a PTE bit anywhere. It also gives per-VM device identity for free: because each VM's aperture slice is a distinct physical range, the comparator that detects "this is emulated MMIO" simultaneously identifies which VM's device model should handle it, with no separate tag to invent or maintain. `BMID` carries that same per-VM identity onto the bus for shared device blocks (§4.6), reusing the existing Phase 2 IOMMU partitioning scheme rather than inventing a second identity mechanism for the same purpose.
+
+**Accepted constraint:** a guest device page and a guest RAM page can never share a real frame — device pages must be allocated from within the aperture, RAM pages from outside it. This is a real restriction on the hypervisor's physical memory allocator, accepted because the alternative (a PTE bit) is not available at any acceptable cost, per the audit above.
+
+### 3.11 Complete-on-resume
+
+**Decision:** When an emulated-MMIO trap fires, the faulting access is architecturally complete on every axis except the one effect the aperture intercepted (a load's register writeback, or a store's effect on the target device). The hypervisor supplies that missing half and resumes with `HRTE`; there is no guest instruction left to re-decode or re-execute. See [hardware-spec.md §4.5](hardware-spec.md).
+
+**Rationale:** Three problems rule out the naive alternative of trapping before the access and having the hypervisor synthesize and single-step the instruction in software.
+
+First, the unbanked-register problem: an SH-4 load's destination can be any of R0-R15, including R8-R15, which the hypervisor's own hyperprivileged context shares with the guest and therefore cannot use as scratch space or write into without first spilling guest state to memory on every single trapped access. A hardware-armed writeback port that fires exactly once, atomically, on the mode transition back to the guest sidesteps this entirely — the hypervisor never touches R8-R15 at all.
+
+Second, cost: a re-execute design requires the hypervisor to fetch and decode the guest's SH-4 instruction stream on every trap to recover the addressing mode, register operands, and access width — work the hardware already did once, correctly, before the trap fired. That is a 40-80 cycle software-decode tax per trapped access. For a Dreamcast workload, whose device-driver hot path is dominated by exactly this kind of access (AICA sound registers, GD-ROM control, PVR2 tile-accelerator registers), paying that tax on every access is unacceptable; complete-on-resume replaces it with a small, fixed hardware cost (§5) and no software decode at all.
+
+Third, the delay-slot hazard: if the faulting access sits in a branch delay slot, a re-execute design would need the hypervisor to recognize the delay slot, know whether the branch was taken, and resume at the correct target — delay-slot bookkeeping the hypervisor has no architectural way to reconstruct after the fact. Complete-on-resume avoids this because `HSPC` is captured pointing past the faulting access; the branch, if any, is already resolved by the time the trap is taken, and the hypervisor only ever sees the already-decided post-branch PC.
+
+Prior art, pre-2006: IBM System/370 SIE (Start Interpretive Execution) interception controls (1980, generally available 1983) established exactly this contract for LPAR virtualization — an intercepted instruction reports enough decoded state that the host can complete or reject the operation and resume the guest without the host ever re-fetching or re-decoding the original instruction stream. `HMCR`'s captured `REGN`/`BANK`/`SIZE`/`DIR`/`SQ` fields are the modern equivalent of SIE's interception state.
+
 ## 4. Architecture Overview
 
 ### 4.1 Privilege model
@@ -119,6 +162,10 @@ SR.HPRIV    SR.MD    Mode                Description
 A J-Core CPU without Phase 3 support has `SR.HPRIV` hardwired to 0. Software that tries to set HPRIV (via LDC SR) on such a CPU sees the bit ignored. This preserves binary compatibility.
 
 ### 4.2 Address space model
+
+The mechanism underneath is a single one — hypervisor-installed TLB entries that turn a guest's notion of "physical" into a real host physical address — configured two ways depending on whether the guest walks its own page tables.
+
+**Configuration A: MMU-using guest.** A guest that runs with `MMUCR.AT=1` and maintains its own page tables constructs its own VA-to-RA mappings in software, exactly as an unvirtualized SH-4 kernel would:
 
 ```
                   +------------------+
@@ -143,7 +190,28 @@ A J-Core CPU without Phase 3 support has `SR.HPRIV` hardwired to 0. Software tha
                        DRAM
 ```
 
-The hypervisor's RA-to-HPA mapping is a software data structure (radix tree, hash table, or linear range list — implementer's choice). It's consulted on every guest TLB miss to compose the final TLB entry.
+The hypervisor's RA-to-HPA mapping is a software data structure (radix tree, hash table, or linear range list — implementer's choice). It's consulted on every guest TLB miss (§4.5) to compose the final TLB entry, which the guest's own page-table walk supplies the RA half of.
+
+**Configuration B: flat/bare-metal guest.** A guest that runs with `MMUCR.AT=0` — a bare-metal SH-4 image such as a Dreamcast binary — maintains no page tables at all. Per §3.9, its P0-P3 accesses are translated anyway, so there is no guest-side VA-to-RA step to walk:
+
+```
+   guest P0-P3 ---->  (no guest page tables)
+   address                    |
+                               v
+                  +------------------+
+                  |  hypervisor-    |  (hypervisor owns,
+                  |  installed TLB  |   installed at guest
+                  |  entries        |   creation / boot)
+                  +------------------+
+                          |
+                          v
+                  Host physical address (HPA)
+                          |
+                          v
+                       DRAM
+```
+
+Here the guest's untranslated address *is* what Configuration A calls the RA: the hypervisor pre-computes the RA-to-HPA map once (typically a single large-page mapping per §3.9, since a flat image is one contiguous region) and installs the resulting TLB entries directly, with no per-access guest-side walk and no TLB-miss round trip to a guest miss handler that doesn't exist. Configuration B is not a second translation mechanism — it is Configuration A with the guest-owned VA-to-RA stage collapsed to identity, because there is no guest page table to produce anything else. Both configurations terminate in the same hypervisor-owned RA-to-HPA map and the same TLB hardware; only the source of the RA differs.
 
 ### 4.3 Trap delivery
 
@@ -215,6 +283,8 @@ For typical workloads (high TLB hit rate, occasional TSB warming), the **average
 
 The overhead is higher than hardware-walked nested-paging designs (EPT/NPT achieve sub-1% for most workloads) but the gap closes for I/O-heavy workloads where the IOMMU does the heavy lifting (Phase 2 already paid that performance bill, and it's the same cost under virtualization).
 
+**Hardware budget: ~300 LUTs/core, not ~200.** Earlier drafts of this spec set a goal of under 200 LUTs per core. That goal is superseded: the actual budget, itemized in [hardware-spec.md §10](hardware-spec.md), is approximately 300 LUTs per core. The increase over the original goal is entirely attributable to two additions made to support bare-metal (Dreamcast-class) guests, neither of which existed when the 200-LUT goal was set: the complete-on-resume writeback path (§3.11) — the destination-register latch and the `HRTE`-armed writeback port that let the hypervisor complete a trapped load without touching guest R8-R15 — and the emulated-MMIO aperture comparator and its trap-entry sequencing (§3.10). What that ~100-LUT increase buys is real: native-speed store-queue bursts to emulated devices with no software involvement on the hot path (the SQ carve-out of [hardware-spec.md §4.4.2](hardware-spec.md)), and zero software instruction decode on every trapped MMIO access — the 40-80 cycle per-access alternative that §3.11 rejects. Both are prerequisites for running an unmodified Dreamcast image at acceptable speed; the budget grew because the goalposts (bare-metal guest support) moved, not because the original design was under-costed.
+
 ## 6. Memory Isolation Guarantees
 
 With the hypervisor active and all guests confined to their assigned ASID ranges and RA maps:
@@ -232,6 +302,10 @@ Honest accounting of what we give up by staying pre-2006:
 - **Shadow page tables (for non-paravirt guests) consume hypervisor memory** proportional to active guest mappings. A guest with a large address space and many mappings has a sizable shadow PT footprint. Manageable but real.
 - **Migration between physical machines requires significant hypervisor work** (gathering all RA-to-HPA mappings, transferring, reconstructing). Not impossible, but more work than EPT-based designs where the page tables are themselves the state.
 - **Para-virtualization of the guest is highly recommended for performance.** Stock kernels work via shadow PTs but at a measurable cost.
+- **Device pages must come from the aperture.** Because §3.10 detects emulated MMIO by physical address rather than by a PTE bit, a guest device page and a guest RAM page can never share a real frame; the hypervisor's physical allocator must carve device pages exclusively from the `HEMUB`/`HEMUM` aperture. This is a real constraint on how flexibly the hypervisor can pack guest physical memory, accepted because a PTE bit was not available at any acceptable cost (§3.10).
+- **Cached/uncached guest aliases are not hardware-coherent.** The P1/P2 alias described in [hardware-spec.md §4.4.2](hardware-spec.md) gives a guest two TLB entries mapping one physical frame, one cached and one uncached, exactly as bare-metal SH-4 software expects — but the hardware does not keep the two views coherent. A guest (or a buggy device model) that writes through the cached alias and reads through the uncached one without an explicit flush sees stale data, same as on real bare-metal hardware.
+- **A Dreamcast guest's TLB footprint competes with the host's.** Guest translations, including the large-page mapping installed under §3.9's flat-guest configuration, occupy real TLB entries alongside host and other-guest entries. A guest with a large or fragmented footprint can evict host-hot entries, adding TLB-miss cost to the host's own steady-state workload.
+- **Page-granular aperture mapping over-traps some device accesses.** The emulation aperture test (§3.10, §4.5) operates at physical-page granularity. A non-side-effecting register that happens to share a page with a side-effecting one traps on every access, even though the access itself has no emulation-relevant effect, because the hardware comparator cannot distinguish offsets within a page.
 
 For J-Core's target market — embedded systems, FPGA-based dev boards, single-purpose appliances with isolation requirements — these trade-offs are acceptable. We're not building a cloud server.
 
@@ -254,3 +328,11 @@ For J-Core's target market — embedded systems, FPGA-based dev boards, single-p
 - *Intel Virtualization Technology Specification for the IA-32 Architecture* (initial VT-x), Intel, 2005.
 - Phase 1 MMU design spec (`01-design-spec.md`)
 - Phase 2 IOMMU design spec (`04-iommu-design-spec.md`)
+- *IBM System/360 Principles of Operation*, IBM, 1964 (base-and-bounds relocation registers).
+- *IBM System/370 Principles of Operation*, IBM, 1970 (storage keys).
+- *IBM System/370 Extended Architecture Interpretive Execution* (SA22-7095-0), IBM, January 1984 (SIE, 1980, refined through 1983).
+- *UltraSPARC Architecture 2005 Specification* (Hyperprivileged Edition), Sun Microsystems, 2005 (`PRIMARY_CONTEXT`, real-address offset mechanism).
+- Renesas SH-4 CPU Core Architecture manual, 1998 (store queues).
+- `arch/sh/include/asm/pgtable-bits-jcore.h` (jcore Linux PTE bit layout, §3.10).
+- [hardware-spec.md §4.4](hardware-spec.md), [hardware-spec.md §4.5](hardware-spec.md), [hardware-spec.md §10](hardware-spec.md)
+- [../sq/spec.md](../sq/spec.md) (store-queue architecture)
