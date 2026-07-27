@@ -146,6 +146,12 @@ struct kvm_vcpu_arch {
     unsigned long              hemub;
     unsigned long              hemum;
 
+    /* Emulated-MMIO trap capture (docs/hypervisor/hardware-spec.md §2.6).
+     * hpar is the faulting PHYSICAL address, not a virtual one. */
+    unsigned long              hpar;
+    unsigned long              hmdr;
+    unsigned long              hmcr;
+
     /* Store queue lazy state (docs/sq/spec.md §7) */
     unsigned long              qacr[2];
     unsigned long              hsqcr;
@@ -217,21 +223,21 @@ jcore_hyp_entry_0x190:
         .global jcore_hyp_entry_0x200   /* Guest emulated-MMIO trap */
 jcore_hyp_entry_0x200:
         /* Hardware has already latched everything the exit path needs into
-         * HMAR/HMCR/HMDR (docs/hypervisor/hardware-spec.md §2.6, §4.5); this
+         * HPAR/HMCR/HMDR (docs/hypervisor/hardware-spec.md §2.6, §4.5); this
          * entry point does no decoding of its own. Save minimal scratch,
          * copy the hardware-latched fields into vcpu->arch, and exit to the
          * common EXIT_REASON_MMIO path (§3.10). */
         mov.l   r0, @-r15
         mov.l   r1, @-r15
 
-        stc     hmar, r0             /* faulting virtual address */
+        stc     hpar, r0             /* faulting PHYSICAL address */
         stc     hmcr, r1             /* {SQ, DIR, SIZE, BANK, REGN} */
 
         mov.l   handle_guest_mmio, r2
         jsr     @r2
          nop                         /* delay slot */
 
-        /* handle_guest_mmio() copies HMAR/HMCR/HMDR (and, for SQ=1, the
+        /* handle_guest_mmio() copies HPAR/HMCR/HMDR (and, for SQ=1, the
          * store-queue buffers per docs/sq/spec.md §6) into vcpu->arch and
          * returns EXIT_REASON_MMIO to the C dispatch loop in §3.9; it never
          * calls HRTE itself — the in-kernel-serviceable case (§3.10) does. */
@@ -528,7 +534,11 @@ A guest access whose translated physical address matches the emulation aperture
 int handle_guest_mmio(struct kvm_vcpu *vcpu)
 {
     unsigned long hmcr = vcpu->arch.hmcr;   /* copied from HMCR by hyp_entry.S */
-    unsigned long offset = vcpu->arch.hmar & ~vcpu->arch.hemum;  /* aperture offset */
+    /* HPAR holds the faulting physical address - the same PA the aperture
+     * comparator matched, per hardware-spec.md §2.6. The aperture offset is
+     * therefore a plain mask of a physical address against a physical mask;
+     * no address translation of any kind happens on this path. */
+    unsigned long offset = vcpu->arch.hpar & ~vcpu->arch.hemum;  /* aperture offset */
 
     /* Fast path: does this VM's dispatch table know this offset? */
     struct jcore_mmio_dev *dev = jcore_mmio_lookup(vcpu->kvm, offset);
@@ -547,10 +557,10 @@ int handle_guest_mmio(struct kvm_vcpu *vcpu)
 
     /* No in-kernel handler: needs the userspace device model. Populate
      * kvm_run->mmio directly from the hardware-latched fields — no guest
-     * instruction is decoded here, because HMCR/HMAR/HMDR already contain
+     * instruction is decoded here, because HMCR/HPAR/HMDR already contain
      * exactly the fields a decode would have produced (§4.5). */
     vcpu->run->exit_reason = KVM_EXIT_MMIO;
-    vcpu->run->mmio.phys_addr = jcore_ra_to_hpa(vcpu, vcpu->arch.hmar);
+    vcpu->run->mmio.phys_addr = vcpu->arch.hpar;  /* already a PA (§2.6) */
     vcpu->run->mmio.len       = hmcr_size_bytes(hmcr);      /* from HMCR.SIZE */
     vcpu->run->mmio.is_write  = !!(hmcr & HMCR_DIR);         /* from HMCR.DIR */
     if (hmcr & HMCR_DIR)
@@ -581,11 +591,12 @@ unchanged: a device model that already implements `KVM_EXIT_MMIO` handling needs
 case to also handle store-queue bursts, only to notice the burst flag and read 32 bytes instead of
 up to 4.
 
-**Why the exit path performs no decoding.** `HMCR`, `HMAR`, and `HMDR` are populated entirely by
+**Why the exit path performs no decoding.** `HMCR`, `HPAR`, and `HMDR` are populated entirely by
 hardware at trap time (§2.6, §4.5 of [hardware-spec.md](hardware-spec.md)): `HMCR.DIR`,
 `HMCR.SIZE`, `HMCR.REGN`, `HMCR.BANK`, and `HMCR.SQ` are exactly the fields a software instruction
-decode would have produced from the faulting load or store, and `HMAR`/`HMDR` are exactly the
-address and data fields. `handle_guest_mmio()` above does nothing but copy these hardware-latched
+decode would have produced from the faulting load or store, and `HPAR`/`HMDR` are exactly the
+address and data fields — `HPAR` specifically being the post-translation *physical* address, so
+even the address needs no resolution step in software. `handle_guest_mmio()` above does nothing but copy these hardware-latched
 fields into `kvm_run->mmio` (or into the in-kernel device's read/write call) — there is no guest
 instruction bytes to fetch or decode anywhere in this path, in either outcome.
 
@@ -741,6 +752,20 @@ to a cooperating kernel:
   mapped straight to host RAM and never trap.
 - **Set `HEMUB`/`HEMUM` on VM entry** from the per-vCPU `hemub`/`hemum` fields added to
   `kvm_vcpu_arch` in §3.2.
+- **Copy `HPAR`/`HMCR`/`HMDR` out on every MMIO trap** into the like-named `kvm_vcpu_arch`
+  fields (§3.2, §3.3); `hpar` is a *physical* address and is used as such by §3.10.
+- **Install and pin the guest's P1 mappings at VM creation, for an MMU-using guest.** A
+  bare-metal Dreamcast image runs its whole life with `MMUCR.AT = 0` and never has a miss handler,
+  so this obligation does not arise for it. It *does* arise for any guest that runs its own TLB
+  miss handler — i.e. any VM whose `HEDR` delegates the TLB-miss causes to the guest. For those,
+  [hardware-spec.md §4.4.5](hardware-spec.md) makes it **mandatory**: before the first
+  `HRTE` into the guest, the VMM installs TLB mappings covering the guest's entire P1 window
+  (`0x80000000`–`0x9FFFFFFF`) using the largest page size that covers it, marks them pinned, and
+  never evicts them while the VM is runnable. This is what keeps the guest's own miss handler
+  provably non-faulting and therefore keeps one level of `SPC`/`SSR` sufficient inside the guest,
+  the invariant [../priv-arch/design-spec.md §4.7](../priv-arch/design-spec.md) proves. A VM
+  creation that cannot reserve the pinned entries must fail at `KVM_CREATE_VCPU` time rather than
+  produce a guest that loses `SPC`/`SSR` on a nested miss.
 - **Never expect the guest to execute `HCALL`.** A bare-metal image was compiled with no knowledge
   of hypercalls; the entire paravirt surface of §4.1–§4.3 is unused for this guest class, and the
   MMU and I/O paths above are the VMM's sole levers.
@@ -890,7 +915,7 @@ Four ordered stages, each with its own pass criterion. Later stages assume earli
    emulated-MMIO path can take — byte/word/longword loads and stores, both register banks, an SQ
    burst that lands inside the aperture, and an SQ burst that lands outside it. Pass criterion:
    every verification point listed in [hardware-spec.md §9](hardware-spec.md) (items 10–15) is
-   observed at least once in the cosim trace, with the expected `HMAR`/`HMCR`/`HMDR` values at each
+   observed at least once in the cosim trace, with the expected `HPAR`/`HMCR`/`HMDR` values at each
    trap.
 2. **Homebrew, RAM-resident.** A small homebrew Dreamcast ELF that touches only main RAM (cached
    and uncached aliases) and does no TA/AICA/GD-ROM access. Pass criterion: the binary runs
