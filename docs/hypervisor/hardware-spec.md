@@ -3,7 +3,7 @@
 **Status:** Draft  
 **Scope:** RTL implementation guide for J-Core hyperprivileged mode  
 **Audience:** Hardware engineers implementing the hypervisor extension  
-**Prerequisites:** Phase 1 hardware spec (`02-hardware-spec.md`), Phase 3 design spec (`07-hypervisor-design-spec.md`)
+**Prerequisites:** Phase 1 hardware spec ([../mmu/hardware-spec.md](../mmu/hardware-spec.md)), Phase 3 design spec ([design-spec.md](design-spec.md)), [../sq/spec.md](../sq/spec.md)
 
 ---
 
@@ -201,7 +201,7 @@ HMDR    Hypervisor MMIO Data Register        word-sized, read/write
 HMCR    Hypervisor MMIO Control Register     32-bit, hardware-written
 ```
 
-**HMAR — Hypervisor MMIO Address Register:** On an emulation aperture trap, the faulting **virtual** address is captured in HMAR. The hypervisor recovers the physical address from its own guest-to-host PA translation tables (as in sun4v), and keeping the virtual address lets it identify which guest mapping was used for the access. This is essential for correct trap context when the guest page tables or TLB state change between the trap and the hypervisor's inspection.
+**HMAR — Hypervisor MMIO Address Register:** On an emulation aperture trap, the faulting **virtual** address is captured in HMAR. The hypervisor recovers the physical address from its own guest-to-host PA translation tables (as in sun4v, UltraSPARC Architecture 2005), and keeping the virtual address lets it identify which guest mapping was used for the access. This is essential for correct trap context when the guest page tables or TLB state change between the trap and the hypervisor's inspection.
 
 **Why HMAR is a new register, not an alias of TEA:** The TLB exception address register (TEA) is written by TLB exceptions delivered to the *guest* (miss, protection violation, etc.). Overloading HMAR onto TEA would destroy the guest's TEA state whenever an emulation aperture trap occurs, even though the guest never sees the trap. This would break the guest's TLB miss handler invariants. HMAR as a separate register preserves guest state and closes a previously-open design question (design spec, item 3).
 
