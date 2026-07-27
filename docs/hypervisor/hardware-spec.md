@@ -162,9 +162,11 @@ Notes:
 
 This table resolves the open question raised in [../fpu/spec.md §10 #3](../fpu/spec.md): `EXC_FPU_DISABLED` occupies HEDR bit 3 and is delegatable. The parallel SIMD trap `EXC_SIMD_DISABLED` ([../simd/spec.md §2.5](../simd/spec.md)) occupies HEDR bit 24 — placed in the formerly-reserved range so that the dense low-numbered bits remain stable as J-Core's exception model evolves.
 
-### 2.4 No changes to existing registers
+### 2.4 No changes to existing register layouts
 
-PTEH, PTEL, TSBBR, TSBCFG, TSBPTR, MMUCR, VBR, SPC, SSR, GBR, R0-R15 all behave exactly as in Phase 1. The TLB and TSB structures are unchanged.
+PTEH, PTEL, TSBBR, TSBCFG, TSBPTR, MMUCR, VBR, SPC, SSR, GBR, R0-R15 all keep exactly the same bit layout as in Phase 1. The TLB and TSB structures are unchanged.
+
+**Amendment:** layout is unchanged, but `MMUCR.AT` acquires new *meaning* under `SR.HPRIV = 0`. On bare metal (no hypervisor present, or `SR.HPRIV = 1`), `MMUCR.AT` still gates P0/P3 translation exactly as specified in [../mmu/hardware-spec.md §2.3](../mmu/hardware-spec.md). For a guest (`SR.HPRIV = 0` with virtualization active), hardware forces translation on for P0-P3 regardless of the `MMUCR.AT` bit value; guest writes to `MMUCR` are trapped and shadowed rather than applied directly. See §4.4.1 for the full rule.
 
 ### 2.5 HEMUB and HEMUM — Emulation Aperture
 
@@ -396,6 +398,107 @@ Existing SH-4 EXPEVT codes (`0x040`–`0x130`, `0x500`–`0x740`) retain their m
 **`EXC_FPU_DISABLED` (0x1B0).** Raised when an FPU instruction is decoded with `SR.FD = 1` on a CPU that ships a Tier 2 (hypervisor-aware) FPU. The cause is subject to HEDR delegation: when `HEDR[bit-for-0x1B0] = 0` (the default) the trap is taken by the hypervisor, which uses it to implement the lazy FPU context-switch ABI (per-vCPU FPU-ownership flag, save/restore of the 132-byte FPU image, re-enable of `SR.FD = 0` in the guest's `HSSR` shadow before `HRTE`). When the bit is set, the trap is delegated to the guest's own supervisor handler (a guest OS that wants to manage its own lazy-FPU model for user threads sets the bit). The full trap-handler ABI, save/restore sequence, and migration corner cases are specified in [../fpu/spec.md §7](../fpu/spec.md).
 
 **`EXC_SIMD_DISABLED` (0x1C0).** The exact analogue of `EXC_FPU_DISABLED` for the SIMD facility. Raised when any SIMD-touching instruction or register access (governed SIMD instruction, SIMDV/SIMDH prefix, VLD.Q/VST.Q, VEXT/VINS, VMKCHG, LDS/STS to P0 / VCSR / VFPUL, or the §5.8 boundary instructions FMOV.VS / FMOV.VD) is decoded with `SR.VD = 1` on a CPU that ships a Tier 2 (hypervisor-aware) SIMD implementation. HEDR-delegation rules are identical: bit 24 = 0 → trap to hypervisor (which implements lazy SIMD context-switch ABI: per-vCPU SIMD-ownership flag, save/restore of the **272-byte SIMD image** — V0..V15 + P0 + VCSR + VFPUL — and re-enable of `SR.VD = 0` in `HSSR` before `HRTE`); bit 24 = 1 → trap delegated to guest's supervisor handler for guest-managed lazy SIMD across guest user threads. Full trap-handler ABI in [../simd/spec.md §2.6](../simd/spec.md). Note: the §5.8 boundary instructions also trap under SR.FD because they touch the scalar FPU register file; SR.VD wins when both are set.
+
+## 4.4 Guest-Mode Address Translation
+
+A Dreamcast image is a bare-metal SH-4 binary: it runs with `MMUCR.AT = 0`, entirely inside
+P1/P2, which are architecturally untranslated and bypass the TLB. Such a binary has no
+translation path of its own. Two such guests loaded by the same hypervisor would both resolve
+their P1/P2 references to the same physical addresses and collide in RAM. §4.4.1-§4.4.4 specify
+the rule that fixes this: translation is forced on for guests, independent of the value the guest
+believes `MMUCR.AT` holds, so that a flat MMU-off binary becomes relocatable.
+
+### 4.4.1 Translation forced on
+
+**Decision:** Whenever a guest is active (`SR.HPRIV = 0`, virtualization active for the running
+context), all P0, P1, P2, and P3 accesses are translated through the TLB, regardless of the
+guest's `MMUCR.AT` value. The guest may read and write what it believes is `MMUCR.AT` — the
+hypervisor shadows this bit per-vCPU (guest writes to `MMUCR` trap to the hypervisor as an
+ordinary P4 MMIO access, per §4.4.3, since `MMUCR` lives at `0xFF000010`) — but the shadow value
+never reaches the hardware `AT` gate while a guest is running. Hardware translation remains
+enabled unconditionally for the guest's P0-P3 accesses.
+
+This does not contradict [../mmu/hardware-spec.md §2.3](../mmu/hardware-spec.md), which states
+that `MMUCR.AT` gates P0/P3 only and that P1, P2, P4 are unaffected by it. That statement
+describes the bare-metal (non-virtualized, or `SR.HPRIV = 1`) behavior of the `AT` bit itself, and
+remains true unchanged: on bare metal, `AT` still gates only P0/P3, and P1/P2 are still
+architecturally untranslated when `AT = 0`. The rule here is a guest-mode override sitting above
+that bit, forcing translation on for P0-P3 for the guest — it does not change what `AT` gates, it
+changes whether `AT`'s bare-metal meaning is consulted at all while a guest runs.
+
+**Rationale:** Bare-metal SH-4 runs with `AT = 0` entirely in P1/P2, an untranslated-by-architecture
+region that bypasses the TLB. Without this rule, a guest has no translation path at all, and two
+VMs sharing one physical machine would both land on the same physical memory. Forcing translation
+on reuses the existing TLB rather than adding a parallel relocation datapath, and inherits Phase 1's
+multi-size page support: a flat 16 MB guest image costs a single large-page TLB entry, not per-page
+bookkeeping. Prior art for guest-address relocation, both pre-dating hardware-assisted virtualization
+patents: IBM System/360 base-and-bounds relocation registers (1964), and sun4v's real-address offset
+mechanism (UltraSPARC Architecture 2005).
+
+**Rejected alternative:** a dedicated base+bound register pair (`HGBR`/`HGLR`) that would add a
+constant offset to every guest physical address instead of going through the TLB. This is cheaper
+in gates than reusing the TLB, but it was rejected because it forces each VM's guest memory to be
+physically contiguous (no ability to scatter a guest's frames, no demand-paging of guest memory
+from the host), and it adds a second, redundant address-relocation mechanism alongside the TLB that
+already does this job. Reusing the TLB is one relocation mechanism, not two.
+
+### 4.4.2 Cacheability and the C-bit alias
+
+**Decision:** A guest's P1/P2 accesses, now translated per §4.4.1, are mapped by hypervisor-installed
+PTEs. Because P1 (`VA[31:29] = 100`, i.e. `KSEG0`) and P2 (`VA[31:29] = 101`, i.e. `KSEG1`) differ
+only in `VA[29]` and otherwise alias the same low address range, the hypervisor can map the *same*
+guest physical frame twice — once through a P1-range VPN with `PTEL.C = 1` (cached) and once through
+a P2-range VPN with `PTEL.C = 0` (uncached) — reproducing the P1/P2 cached/uncached alias that
+bare-metal SH-4 software already relies on.
+
+**Consequence, stated explicitly:** this creates a cached/uncached alias of one physical frame
+through two distinct TLB entries. The hardware does **not** maintain coherence between the two
+views — a write through the cached (P1) mapping is not automatically visible through the uncached
+(P2) mapping until the cache line is flushed, exactly as on real, non-virtualized SH-4 hardware.
+Guest software is responsible for using the correct alias and flushing when it switches between
+them, precisely as it already had to do running bare-metal on real Dreamcast hardware. This design
+does not soften or paper over that requirement; it reproduces it faithfully so unmodified Dreamcast
+binaries continue to work.
+
+### 4.4.3 P4 in guest mode
+
+**Decision:** A guest access to P4 (`0xE0000000`-`0xFFFFFFFF`) raises the emulated-MMIO trap (§4.5),
+**except** for accesses in the range `0xE0000000`-`0xEFFFFFFF`, which is the store-queue region
+per [../sq/spec.md §2](../sq/spec.md). Those do not trap; they are handled CPU-locally as ordinary
+store-queue operations.
+
+The carve-out applies to the *data* path only. A queue-data store to `0xE0000000`-`0xEFFFFFFF` is
+absorbed into the store queue without a trap, exactly as on bare metal. But the burst that a
+subsequent `PREF` triggers is still address-translated (per [../sq/spec.md §3](../sq/spec.md), the
+burst target is formed from `QACRn.AREA` and `VA[25:5]`) and the resulting physical burst address
+is still subject to the emulation-aperture test of §2.5. The carve-out means the store-queue *data
+writes* skip the P4 trap; it does not mean the store-queue *burst target* skips translation or the
+aperture test.
+
+**Rationale:** P4 is an untranslated-by-architecture region holding core control and MMIO registers;
+a guest has no legitimate direct access to host control state, so trapping the whole segment is
+correct and needs no per-register range comparators — one range check (`VA[31:29] == 111`, minus
+the SQ carve-out) covers all of P4. The store-queue carve-out exists because the SQ region is
+architecturally inside P4 but is exercised on a hot path: eight sequential word stores followed by
+one `PREF` per 32-byte burst. Trapping each of the eight stores would cost eight traps per burst —
+exactly the cost this design exists to avoid. Leaving the burst's translated target subject to the
+aperture test preserves the hypervisor's ability to emulate or intercept any physical destination
+the guest's store-queue burst resolves to, including a device the hypervisor wants to virtualize.
+
+### 4.4.4 Guest TLB refill
+
+**Decision:** A guest's TLB refill uses plain `LDTLB` (`0x0038`), which — per §3.3 — traps to
+`VBR_HYP + 0x190` whenever `SR.HPRIV = 0` and `SR.MD = 1`. The hypervisor's own refill of its
+shadow/host TLB entries uses the fused `LDTLB.RN` (`0x0078`) at full speed, untouched by this rule.
+
+**Rationale:** This is free for the host. The host's own TLB-miss hot path, specified in
+[../mmu/linux-spec.md §4.1](../mmu/linux-spec.md), uses `LDTLB.RN` exclusively (`ldtlb.rn` at the
+end of the fast-path compare-and-install sequence in `jcore_tlb_miss`) and never emits plain
+`LDTLB`. Plain `LDTLB` is consequently dead code in a non-virtualized J-Core kernel today. Routing
+the guest-refill trap through the encoding the host never uses costs the host's own hot path
+nothing — no fast-path instruction changes meaning, no extra branch is added to
+`jcore_tlb_miss`, and the trap-on-`LDTLB` behavior for supervisor mode was already specified in
+§3.3 for exactly this purpose.
 
 ## 5. Hyperprivileged-Only Instructions and Operations
 
