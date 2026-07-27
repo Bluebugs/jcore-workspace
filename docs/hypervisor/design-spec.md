@@ -192,6 +192,8 @@ The mechanism underneath is a single one — hypervisor-installed TLB entries th
 
 The hypervisor's RA-to-HPA mapping is a software data structure (radix tree, hash table, or linear range list — implementer's choice). It's consulted on every guest TLB miss (§4.5) to compose the final TLB entry, which the guest's own page-table walk supplies the RA half of.
 
+Configuration A carries one obligation Configuration B does not. Because §3.9 forces translation on for the guest's P0-P3, the guest's P1 is no longer the untranslated direct map that [../priv-arch/design-spec.md §4.7](../priv-arch/design-spec.md)'s single-level-`SPC`/`SSR` proof depends on — so the guest's own miss handler could fault on its own TSB load. [hardware-spec.md §4.4.5](hardware-spec.md) closes this normatively: the hypervisor MUST install pinned mappings covering the guest's whole P1 before entry and MUST NOT evict them while that guest runs, which makes the guest miss handler provably non-faulting again. Configuration A remains fully supported; it is simply an admission-control requirement (§7).
+
 **Configuration B: flat/bare-metal guest.** A guest that runs with `MMUCR.AT=0` — a bare-metal SH-4 image such as a Dreamcast binary — maintains no page tables at all. Per §3.9, its P0-P3 accesses are translated anyway, so there is no guest-side VA-to-RA step to walk:
 
 ```
@@ -278,12 +280,51 @@ Realistic estimates for a Linux guest under a paravirtualized hypervisor on 100 
 | Guest context switch | ~50 cycles (hypercall to update ASID/TSB) |
 | Privileged instruction trap | ~40 cycles |
 | Inter-guest IPI | ~100 cycles |
+| Guest MMUCR / TSBBR / TSBCFG access (P4 MMIO trap) | ~60 cycles, cold path only |
+
+**What a guest TLB miss actually costs — the trap breakdown.** The forced-translation rule of
+[hardware-spec.md §4.4.1](hardware-spec.md) makes all of a guest's P0-P3 accesses translated, and
+[hardware-spec.md §4.4.3](hardware-spec.md) traps guest P4 wholesale. It is worth being exact
+about which of the guest miss handler's instructions that actually costs, because the two rules
+have very different reach:
+
+| Guest miss-handler step | Mechanism | Traps? |
+|-------------------------|-----------|:------:|
+| `STC TSBPTR, Rn` — read the hardware-computed TSB slot pointer | in-core `STC` (`0x0043`), [mmu/hardware-spec.md §2.8](../mmu/hardware-spec.md), [§3.1](../mmu/hardware-spec.md) | no |
+| Load the candidate TTE from the TSB | ordinary memory load, into the guest's pinned P1 window (§4.4.5) | no |
+| `LDC Rm, PTEH` / `LDC Rm, PTEL` / `LDC Rm, ASIDR` | in-core `LDC` only — **these registers have no MMIO alias** ([mmu/hardware-spec.md §2.1](../mmu/hardware-spec.md), [§2.1a](../mmu/hardware-spec.md), [§3.1](../mmu/hardware-spec.md)) | no |
+| `LDTLB` / `LDTLB.RN` | traps to `VBR_HYP + 0x190` by §3.4 | **yes — 1** |
+
+So the figure is **one trap per guest TLB refill**, and the "~30 cycles, fast LDTLB trap" row above
+stands. The guest's staging-register writes are not trapped and do not need to be: `PTEH`, `PTEL`
+and `ASIDR` are write-only staging state that hardware consults *only* at `LDTLB` time, so letting
+a guest load them natively leaks nothing — and it is exactly what makes
+[hardware-spec.md §3.3](hardware-spec.md)'s handler work, since the hypervisor reads the guest's
+intended VPN/RFN/ASID straight out of those registers at the trap.
+
+Only `MMUCR` (`0xFF000010`), `TSBBR` (`0xFF000014`) and `TSBCFG` (`0xFF000018`) are genuinely MMIO
+in the P4 core block, and only they take the emulated-MMIO trap. They are boot/config registers
+([mmu/hardware-spec.md §3.1](../mmu/hardware-spec.md) puts them on the cold path deliberately), so
+a guest touches them at boot and at whole-TLB-flush time (`MMUCR.TI`), not per miss — hence the
+cold-path row added to the table above. A guest that flushes its whole TLB on every context switch
+pays one extra ~60-cycle trap there, not one per mapping.
+
+Note also that `TSBBR`/`TSBCFG` being trapped is load-bearing, not merely tolerable: it is how the
+hypervisor keeps ownership of the guest's TSB placement (§3.8) while the guest's own
+`STC TSBPTR` still returns a pointer into that TSB, computed by hardware from the base the
+hypervisor programmed.
+
+**Pinned P1 mappings ([hardware-spec.md §4.4.5](hardware-spec.md)) cost TLB capacity, not cycles.**
+An MMU-using guest requires its P1 window resident and never evicted. Because P1 is one contiguous
+region, that is typically a single large-page entry per admitted guest — the same entry a flat
+guest already needs — so the steady-state cost is one TLB way's worth of capacity per MMU-using
+guest, and zero added cycles on any hot path.
 
 For typical workloads (high TLB hit rate, occasional TSB warming), the **average virtualization overhead is 1-3%**. This is competitive with sun4v's measured overhead on Solaris workloads.
 
 The overhead is higher than hardware-walked nested-paging designs (EPT/NPT achieve sub-1% for most workloads) but the gap closes for I/O-heavy workloads where the IOMMU does the heavy lifting (Phase 2 already paid that performance bill, and it's the same cost under virtualization).
 
-**Hardware budget: ~300 LUTs/core, not ~200.** Earlier drafts of this spec set a goal of under 200 LUTs per core. That goal is superseded: the actual budget, itemized in [hardware-spec.md §10](hardware-spec.md), is approximately 300 LUTs per core. The increase over the original goal is entirely attributable to two additions made to support bare-metal (Dreamcast-class) guests, neither of which existed when the 200-LUT goal was set: the complete-on-resume writeback path (§3.11) — the destination-register latch and the `HRTE`-armed writeback port that let the hypervisor complete a trapped load without touching guest R8-R15 — and the emulated-MMIO aperture comparator and its trap-entry sequencing (§3.10). What that ~100-LUT increase buys is real: native-speed store-queue bursts to emulated devices with no software involvement on the hot path (the SQ carve-out of [hardware-spec.md §4.4.2](hardware-spec.md)), and zero software instruction decode on every trapped MMIO access — the 40-80 cycle per-access alternative that §3.11 rejects. Both are prerequisites for running an unmodified Dreamcast image at acceptable speed; the budget grew because the goalposts (bare-metal guest support) moved, not because the original design was under-costed.
+**Hardware budget: ~300 LUTs/core, not ~200.** Earlier drafts of this spec set a goal of under 200 LUTs per core. That goal is superseded: the actual budget, itemized in [hardware-spec.md §10](hardware-spec.md), is approximately 300 LUTs per core. The increase over the original goal is entirely attributable to two additions made to support bare-metal (Dreamcast-class) guests, neither of which existed when the 200-LUT goal was set: the complete-on-resume writeback path (§3.11) — the destination-register latch and the `HRTE`-armed writeback port that let the hypervisor complete a trapped load without touching guest R8-R15 — and the emulated-MMIO aperture comparator and its trap-entry sequencing (§3.10). What that ~100-LUT increase buys is real: native-speed store-queue bursts to emulated devices with no software involvement on the hot path (the SQ carve-out of [hardware-spec.md §4.4.3](hardware-spec.md)), and zero software instruction decode on every trapped MMIO access — the 40-80 cycle per-access alternative that §3.11 rejects. Both are prerequisites for running an unmodified Dreamcast image at acceptable speed; the budget grew because the goalposts (bare-metal guest support) moved, not because the original design was under-costed.
 
 ## 6. Memory Isolation Guarantees
 
@@ -305,6 +346,22 @@ Honest accounting of what we give up by staying pre-2006:
 - **Device pages must come from the aperture.** Because §3.10 detects emulated MMIO by physical address rather than by a PTE bit, a guest device page and a guest RAM page can never share a real frame; the hypervisor's physical allocator must carve device pages exclusively from the `HEMUB`/`HEMUM` aperture. This is a real constraint on how flexibly the hypervisor can pack guest physical memory, accepted because a PTE bit was not available at any acceptable cost (§3.10).
 - **Cached/uncached guest aliases are not hardware-coherent.** The P1/P2 alias described in [hardware-spec.md §4.4.2](hardware-spec.md) gives a guest two TLB entries mapping one physical frame, one cached and one uncached, exactly as bare-metal SH-4 software expects — but the hardware does not keep the two views coherent. A guest (or a buggy device model) that writes through the cached alias and reads through the uncached one without an explicit flush sees stale data, same as on real bare-metal hardware.
 - **A Dreamcast guest's TLB footprint competes with the host's.** Guest translations, including the large-page mapping installed under §3.9's flat-guest configuration, occupy real TLB entries alongside host and other-guest entries. A guest with a large or fragmented footprint can evict host-hot entries, adding TLB-miss cost to the host's own steady-state workload.
+- **An MMU-using guest obliges the hypervisor to pin its whole P1 window.** Because §3.9 forces
+  translation on for a guest's P0-P3, a guest that runs its own TLB-miss handler no longer has the
+  untranslated P1 that [../priv-arch/design-spec.md §4.7](../priv-arch/design-spec.md)'s
+  single-level-`SPC`/`SSR` proof relies on. [hardware-spec.md §4.4.5](hardware-spec.md) restores
+  the proof by *requiring* the hypervisor to install pinned TLB mappings covering the guest's
+  entire P1 before entry and to hold them for the guest's lifetime. That is a real cost: TLB
+  entries are permanently consumed per admitted MMU-using guest, and a hypervisor that cannot
+  spare them must refuse to admit the guest. It is cheap in practice — P1 is contiguous, so it is
+  normally one large-page entry — but it is a hard admission-control constraint, not a hint.
+- **Only a restricted set of access classes may target the emulation aperture.** Per
+  [hardware-spec.md §4.6](hardware-spec.md), `HMCR` can describe `MOV.{B,W,L}` loads and stores and
+  the store-queue burst, and nothing else; `TAS.B`, FPU/SIMD loads and stores, `MAC`, and
+  instruction fetch into the aperture are unrepresentable and fail closed to the illegal-instruction
+  path. The VMM must therefore not map into the aperture anything a guest reaches by such an
+  access. For the Dreamcast case this is checkable ahead of time, but it constrains what an
+  arbitrary guest's device model may look like.
 - **Page-granular aperture mapping over-traps some device accesses.** The emulation aperture test (§3.10, §4.5) operates at physical-page granularity. A non-side-effecting register that happens to share a page with a side-effecting one traps on every access, even though the access itself has no emulation-relevant effect, because the hardware comparator cannot distinguish offsets within a page.
 
 For J-Core's target market — embedded systems, FPGA-based dev boards, single-purpose appliances with isolation requirements — these trade-offs are acceptable. We're not building a cloud server.
@@ -329,7 +386,7 @@ For J-Core's target market — embedded systems, FPGA-based dev boards, single-p
 - Phase 1 MMU design spec (`01-design-spec.md`)
 - Phase 2 IOMMU design spec (`04-iommu-design-spec.md`)
 - *IBM System/360 Principles of Operation*, IBM, 1964 (base-and-bounds relocation registers).
-- *IBM System/370 Principles of Operation*, IBM, 1970 (storage keys).
+- *IBM System/370 Principles of Operation*, IBM, 1970 (storage keys — physical-address-indexed access checking, the precedent cited by §3.10's emulation aperture and by [hardware-spec.md §2.5](hardware-spec.md); also the `ISK`/`SSK` privileged-only exposure of otherwise-invisible machine state cited by [../sq/spec.md §6.2](../sq/spec.md) and [§7](../sq/spec.md)).
 - *IBM System/370 Extended Architecture Interpretive Execution* (SA22-7095-0), IBM, January 1984 (SIE, 1980, refined through 1983).
 - *UltraSPARC Architecture 2005 Specification* (Hyperprivileged Edition), Sun Microsystems, 2005 (`PRIMARY_CONTEXT`, real-address offset mechanism).
 - Renesas SH-4 CPU Core Architecture manual, 1998 (store queues).
