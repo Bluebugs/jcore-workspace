@@ -15,7 +15,7 @@ What's specified:
 - The SR.HPRIV mode bit and associated state
 - New control registers (HSPC, HSSR, VBR_HYP, HEDR)
 - The HCALL instruction
-- LDTLB/LDTLB.R behavior in guest mode
+- LDTLB/LDTLB.RN behavior in guest mode
 - Trap delivery logic with delegation
 - Reset state
 
@@ -117,7 +117,7 @@ The mapping is dense from the low bits up so a typical hypervisor configuration 
 | HEDR bit | EXPEVT     | Cause                                                    | Delegatable? |
 |---------:|------------|----------------------------------------------------------|:------------:|
 |    0     | `0x180`    | HCALL instruction                                        | **no**       |
-|    1     | `0x190`    | Guest LDTLB / LDTLB.R trap                               | **no**       |
+|    1     | `0x190`    | Guest LDTLB / LDTLB.RN trap                              | **no**       |
 |    2     | `0x1A0`    | Hyperprivileged-register access from non-HS mode         | **no**       |
 |    3     | `0x1B0`    | `EXC_FPU_DISABLED` — SR.FD trap (Tier 2 FPU)             | yes          |
 |    4     | `0x040`    | TLB miss (read)                                          | yes          |
@@ -158,9 +158,25 @@ PTEH, PTEL, TSBBR, TSBCFG, TSBPTR, MMUCR, VBR, SPC, SSR, GBR, R0-R15 all behave 
 
 ### 3.1 HCALL — Hypervisor Call
 
-Encoding: `0000 0000 0111 1000` = `0x0078`
+Encoding: `0000 0000 1001 1000` = `0x0098`
 
-Allocated in the `0000 0000 nnnn 1000` family alongside LDTLB (`0x38`), CLRS (`0x48`), SETS (`0x58`), LDTLB.R (`0x68`). The slot at `0x78` was previously unallocated.
+Allocated in the `0000 0000 nnnn 1000` family alongside LDTLB (`0x38`), CLRS (`0x48`), SETS (`0x58`), LDTLB.RN (`0x78`). The slot at `0x98` is now allocated to HCALL.
+
+| Offset | Mnemonic | Encoding |
+|--------|----------|----------|
+| `0x0008` | CLRT | `0000 0000 0000 1000` |
+| `0x0018` | SETT | `0000 0000 0001 1000` |
+| `0x0028` | CLRMAC | `0000 0000 0010 1000` |
+| `0x0038` | LDTLB | `0000 0000 0011 1000` |
+| `0x0048` | CLRS | `0000 0000 0100 1000` |
+| `0x0058` | SETS | `0000 0000 0101 1000` |
+| `0x0068` | SH-2A `nott` | `0000 0000 0110 1000` |
+| `0x0078` | LDTLB.RN | `0000 0000 0111 1000` |
+| `0x0088` | HRTE | `0000 0000 1000 1000` |
+| `0x0098` | HCALL | `0000 0000 1001 1000` |
+| `0x00A8`–`0x00F8` | (free) | — |
+
+**Reconciliation note.** An earlier draft assigned `HCALL` encoding `0x0078` and described that slot as unallocated, attributing `LDTLB.R` to `0x0068`. Both statements were incorrect. The ground truth from RTL is: `LDTLB.RN` occupies `0x0078` (the J-Core fused TLB-fill-and-return instruction implemented in `decode/gen-go/spec/sh4/mmu.toml:165` and used on the host TLB-miss hot path), while SH-2A `nott` occupies `0x0068` per `decode/gen-go/spec/sh2a/misc.toml:24`. The `0x0098` slot is the next free slot in the family, adjacent to `HRTE` at `0x0088`, and is the appropriate place for `HCALL`.
 
 **Semantics:**
 
@@ -283,7 +299,7 @@ The hyperprivileged-mode extension adds four new EXPEVT codes on top of the exis
 | Code  | Cause                                                          | HEDR bit | Delegatable? |
 |-------|----------------------------------------------------------------|---------:|:------------:|
 | 0x180 | HCALL instruction (new)                                        | 0        | no           |
-| 0x190 | Guest LDTLB/LDTLB.R trap (new)                                 | 1        | no           |
+| 0x190 | Guest LDTLB/LDTLB.RN trap (new)                                | 1        | no           |
 | 0x1A0 | Hyperprivileged register access from non-HS mode (new)         | 2        | no           |
 | 0x1B0 | `EXC_FPU_DISABLED` — SR.FD trap (Tier 2 FPU, new)              | 3        | yes          |
 | 0x1C0 | `EXC_SIMD_DISABLED` — SR.VD trap (Tier 2 SIMD, new)            | 24       | yes          |
@@ -300,7 +316,7 @@ Operations that are valid only when SR.HPRIV=1:
 
 1. **LDC/STC to hyperprivileged control registers** (HSPC, HSSR, VBR_HYP, HEDR).
 2. **HRTE** — Return from hyperprivileged exception.
-3. **LDTLB / LDTLB.R** without trapping (in supervisor mode, these trap; in hyperprivileged mode, they execute).
+3. **LDTLB / LDTLB.RN** without trapping (in supervisor mode, these trap; in hyperprivileged mode, they execute).
 4. **Setting SR.HPRIV via LDC** — only possible to clear it (transitioning down via HRTE), never to set it directly; setting requires hyperprivileged-mode trap entry.
 
 Attempts to execute hyperprivileged-only operations outside SR.HPRIV=1 raise illegal-instruction trap, which delivers to the hypervisor (always; not delegate-able).
