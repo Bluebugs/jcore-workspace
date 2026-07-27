@@ -153,7 +153,8 @@ struct kvm_vcpu_arch {
 };
 ```
 
-The aperture and store-queue fields added here bring the per-vCPU footprint to 80 bytes beyond
+The aperture and store-queue fields added here bring the per-vCPU footprint to 84 bytes
+(4 + 4 + 8 + 4 + 64, assuming 32-bit `unsigned long` on J32; J64 would make it 100 bytes) beyond
 the base register save area, alongside the existing lazy FPU (132-byte) and SIMD (272-byte)
 context images (§4.3 of [../fpu/spec.md](../fpu/spec.md), §2.6 of
 [../simd/spec.md](../simd/spec.md)). `hemub`/`hemum` mirror HEMUB/HEMUM 1:1 so VM entry can load
@@ -670,15 +671,19 @@ void __init jcore_detect_virtualization(void)
 }
 ```
 
-Per [hardware-spec.md §3.1](hardware-spec.md), `HCALL` executed with `SR.HPRIV = 1` already set
-behaves as a no-op — but that rule describes hypercalls issued from *already-hyperprivileged* code
-(e.g. the hypervisor calling its own service routines), not bare-metal execution. On a machine with
-no hypervisor installed, `SR.HPRIV` is hardwired to 0, so `HCALL` always traps normally, exactly as
-it does under a real hypervisor's guest — there is no bare-metal case where `HCALL` silently
-no-ops. Detection above therefore does not rely on `HCALL`'s no-op behavior at all: it uses
-`CPUINFO[16]` (`HYP_SUPPORT`) together with a temporary trap handler installed around the probe, so
-that a bare-metal `HCALL` trap (taken to the ordinary supervisor vector, since there is no
+Per [hardware-spec.md §3.1](hardware-spec.md), what `HCALL` does when executed with
+`SR.HPRIV = 1` already set is **implementer-defined**: it "behaves as a no-op (or, optionally,
+raises illegal-instruction trap — implementer's choice; document the choice)." Either way, that
+rule describes hypercalls issued from *already-hyperprivileged* code (e.g. the hypervisor calling
+its own service routines) — it says nothing about bare-metal execution. On a machine with no
+hypervisor installed, `SR.HPRIV` is hardwired to 0, so `HCALL` always traps normally, exactly as it
+does under a real hypervisor's guest. Detection above therefore cannot rely on `HCALL`'s
+HPRIV=1 behavior at all, since that behavior is not architecturally fixed — it uses `CPUINFO[16]`
+(`HYP_SUPPORT`) together with a temporary trap handler installed around the probe instead, so that
+a bare-metal `HCALL` trap (taken to the ordinary supervisor vector, since there is no
 hyperprivileged mode to receive it) is caught and reported as "no hypervisor" rather than crashing.
+This is precisely why the detection method is robust: it never depends on which of the two
+implementer-defined choices a given core made.
 
 ### 4.3 Hypercall stub
 
