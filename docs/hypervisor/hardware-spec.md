@@ -707,15 +707,26 @@ physical page that the guest reaches by an unrepresentable access. For a bare-me
 checkable ahead of time — the device register windows a Dreamcast image touches
 ([linux-spec.md §4.5](linux-spec.md)) are byte/word/longword `MOV` accesses and store-queue
 bursts, exactly the representable set. A guest that issues an unrepresentable access into the
-aperture is a guest whose device model the VMM got wrong, and it is reported to the VMM as an
-illegal-instruction exit rather than being silently mis-emulated.
+aperture is a guest whose device model the VMM got wrong.
+
+**Where that exception is delivered depends on HEDR, and the VMM must choose.** The exception is
+raised through the general illegal-instruction path, and HEDR bit 12 is delegatable — so it is
+delivered to whichever handler HEDR selects: to the hypervisor if bit 12 is *not* delegated, or to
+the guest's own illegal-instruction handler if it is. In the delegated case the guest absorbs the
+violation and **the VMM never learns its device model is wrong**. Failure is closed either way —
+no bus access, no partial emulation, no state the guest can exploit — but visibility is not
+automatic. A VMM that wants to observe guest device-model violations MUST NOT delegate HEDR
+bit 12 for that guest. This specification does not add a separate non-delegatable code point for
+the case; the routing is deliberately the ordinary illegal-instruction routing, and the
+consequence is stated here so a VMM author can configure HEDR accordingly.
 
 **Rationale:** the alternative is widening `HMCR` to encode a register file selector, a
 second destination, and read-modify-write sequencing — a materially larger capture path and a
-larger writeback mux, for access classes no known guest performs against MMIO. Failing closed and
-loudly (a delivered exception naming the offending instruction) is strictly better than failing
+larger writeback mux, for access classes no known guest performs against MMIO. Failing closed (a
+delivered exception, with no bus access and no partial emulation) is strictly better than failing
 open (an aperture access that silently reaches the bus) or than a partially-decoded trap the
-hypervisor cannot complete. Pre-2006 prior art for restricting which instruction classes may
+hypervisor cannot complete — and whether that failure is also *loud* to the VMM is an HEDR bit 12
+configuration choice, per the paragraph above. Pre-2006 prior art for restricting which instruction classes may
 target an intercepted region: IBM System/370-XA SIE (1980, generally available 1983) likewise
 intercepts a defined set of instruction classes and presents an operation exception for
 instructions outside it, rather than attempting to describe every possible operand form.
@@ -794,7 +805,10 @@ Critical RTL verification:
 16. **Unrepresentable aperture accesses fail closed (§4.6):** a guest `TAS.B @Rn`, `FMOV.S @Rm,FRn`,
     `MAC.L @Rm+,@Rn+`, or instruction fetch whose physical address falls inside the aperture raises
     the general illegal-instruction path, does **not** raise `EXPEVT = 0x1E0`, does **not** write
-    `HPAR`/`HMDR`/`HMCR`, and does **not** reach the bus.
+    `HPAR`/`HMDR`/`HMCR`, and does **not** reach the bus. Test both HEDR configurations: with
+    bit 12 clear the exception is delivered at `VBR_HYP`; with bit 12 set it is delivered to the
+    guest at `VBR` and the hypervisor is not entered. Fail-closed behaviour (no bus access, no
+    aperture register capture) must hold identically in both.
 
 ## 10. Cost Estimation
 

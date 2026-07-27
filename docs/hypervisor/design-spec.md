@@ -361,7 +361,10 @@ Honest accounting of what we give up by staying pre-2006:
   instruction fetch into the aperture are unrepresentable and fail closed to the illegal-instruction
   path. The VMM must therefore not map into the aperture anything a guest reaches by such an
   access. For the Dreamcast case this is checkable ahead of time, but it constrains what an
-  arbitrary guest's device model may look like.
+  arbitrary guest's device model may look like. Note also that the resulting exception routes
+  through HEDR bit 12, which is delegatable: a VMM that delegates bit 12 lets the guest absorb the
+  violation and never learns its device model is wrong. Failure is closed either way, but a VMM
+  that wants visibility must not delegate bit 12.
 - **Page-granular aperture mapping over-traps some device accesses.** The emulation aperture test (§3.10, §4.5) operates at physical-page granularity. A non-side-effecting register that happens to share a page with a side-effecting one traps on every access, even though the access itself has no emulation-relevant effect, because the hardware comparator cannot distinguish offsets within a page.
 
 For J-Core's target market — embedded systems, FPGA-based dev boards, single-purpose appliances with isolation requirements — these trade-offs are acceptable. We're not building a cloud server.
