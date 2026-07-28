@@ -6,6 +6,11 @@
 
 **Authority:** This document is the single source of truth for P4 address allocation. If another spec disagrees with this map, this map wins and the other spec is wrong. Every spec that places a control register in P4 MUST cite this document and use an address allocated here.
 
+That authority covers **allocation** — who owns an address — not **implementation**: it does not
+make an address decoded merely because this map lists it. Where the RTL is the question ("does this
+register answer at this address today?"), `jcore-cpu` is the ground truth and this map records what
+it found; see §3.2's notes on undecoded offsets and on CPUINFO.
+
 **Audience:** Anyone authoring a J-Core hardware spec, RTL implementer, kernel-driver author, IOMMU/hypervisor reviewer.
 
 ---
@@ -78,19 +83,44 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 
 | Offset      | Register   | Description                          |
 |-------------|------------|--------------------------------------|
-| `0x000`     | PTEH       | Page-table entry, high (VPN only — ASID lives in ASIDR) |
-| `0x004`     | PTEL       | Page-table entry, low (with PageMask) |
 | `0x008`     | TTB        | Translation table base (software)     |
 | `0x00C`     | TEA        | TLB exception address                 |
 | `0x010`     | MMUCR      | MMU control                           |
 | `0x014`     | TSBBR      | TSB base register                     |
 | `0x018`     | TSBCFG     | TSB configuration                     |
 | `0x01C`     | TSBPTR     | TSB pointer (read-only)               |
-| `0x020`     | CPUINFO    | Per-CPU hart ID + capability flags    |
-| `0x024`     | ASIDR      | 16-bit ASID_TAG (kernel-encoded ASID + generation) |
+| `0x020`     | CPUINFO    | Per-CPU hart ID + capability flags — **allocated, NOT implemented in current RTL** (see note below) |
 | `0x03C`     | QACR0      | Store-queue 0 area register (`0xFF00003C`), see [../sq/spec.md §3](../sq/spec.md) |
 | `0x040`     | QACR1      | Store-queue 1 area register (`0xFF000040`), see [../sq/spec.md §3](../sq/spec.md) |
+| `0x024`     | reserved   | formerly ASIDR — see "Registers with no P4 address" below |
 | `0x028`–`0x038`, `0x044`–`0xFFC` | reserved | future registers                 |
+
+**Registers with no P4 address: PTEH, PTEL, ASIDR.** Earlier revisions of this map listed
+PTEH at `0x000`, PTEL at `0x004` and ASIDR at `0x024`. **Those rows were wrong and have been
+removed.** PTEH, PTEL and ASIDR are **LDC/STC-only control registers with no P4 MMIO address**:
+they are written with `LDC Rm, PTEH` / `LDC Rm, PTEL` / `LDC Rm, ASIDR` and read with the
+matching `STC`, and they are never P4-MMIO selected. See
+[../mmu/hardware-spec.md §2.1](../mmu/hardware-spec.md) (PTEH), §2.1a (ASIDR) and §2.2 (PTEL).
+PTEU ([mmu/hardware-spec.md §2.10](../mmu/hardware-spec.md), PAE-only) is likewise LDC/STC-only.
+
+The RTL is the ground truth here: `jcore-cpu/core/datapath.vhm:1136-1155` decodes exactly six P4
+offsets — `0x08` TTB, `0x0C` TEA, `0x10` MMUCR, `0x14` TSBBR, `0x18` TSBCFG, `0x1C` TSBPTR
+(read-only) — and the comment at `datapath.vhm:1147` states that "PTEH/PTEL/ASIDR are never P4-MMIO
+selected (handled via LDC)". The LDC write path for those three is `datapath.vhm:1335-1342`.
+Linux agrees independently: `arch/sh/include/cpu-jcore/cpu/mmu_context.h` defines MMIO addresses for
+the six decoded registers only and documents that "PTEH/PTEL/PTEU and ASIDR are LDC/STC-only control
+registers"; `arch/sh/mm/tlb-jcore.c` uses `ldc %0, pteh`.
+
+**Undecoded P4 offsets fail SILENTLY (normative hazard).** A load or store to a P4 offset in this
+block that the hardware does not decode raises **no exception and no bus error**. Writes fall into
+the decoder's `when others => null` arm (`datapath.vhm:1174`) and are discarded; reads fall into
+`when others => this.m_dr_next := (others => '0')` (`datapath.vhm:1184`) and return **zero**, with
+`m_en` still asserted so the access completes normally from the pipeline's point of view. Software
+that uses a phantom P4 address therefore observes a register that is permanently zero and never
+faults — a failure mode that is easy to mistake for "the feature is disabled". Any address in this
+sub-block marked *reserved*, or marked *allocated but not implemented* (CPUINFO at `0x020`), behaves
+this way today. There are zero occurrences of `cpuinfo` in any `.vhd`/`.vhm` source; its allocation
+is a valid reservation, but reading it returns zero rather than a hart ID.
 
 ### 3.3 SoC-wide control (`0xFF00F000`–`0xFF00FFFF`)
 
@@ -163,4 +193,20 @@ All references pre-2006, satisfying the project-wide prior-art policy ([glossary
 1. **Pre-this-map peripheral addresses.** Several jcore-soc peripherals currently sit at ad-hoc P4 addresses outside this map. A coordinated re-allocation across the existing RTL and the Linux DTS is required to bring them into conformance. Owner: jcore-soc maintainer + Linux DTS maintainer.
 2. **Cross-CPU debug access.** Reserved range `0xFF003000`–`0xFF00EFFF` is currently empty. If a cross-CPU register-poke debug facility is desired (e.g. for halt-mode debugging), specify the protocol and consume some of this range.
 3. **L1 array access for diagnostics.** SH-4 used the `0xF0000000`–`0xF7FFFFFF` region for direct cache-array access. J-Core has not yet committed to whether to implement an equivalent facility; the region is reserved either way.
-4. **64-bit J64 P4 layout.** This map specifies the 32-bit J32 layout. J64 retains P4 at the same virtual addresses (high half of address space) but with wider underlying PA — see [mmu/design-spec.md §3.7](../mmu/design-spec.md). No new addresses are introduced by J64; the existing allocations remain valid.
+4. **Three-way conflict at `0x020`/`0x024`/`0x028` (UNRESOLVED — needs an owner).** Three
+   documents disagree about this half-dozen bytes, and this change does **not** resolve the
+   disagreement; it only records it accurately.
+   - **This map** allocates `0x020` = CPUINFO and (formerly) `0x024` = ASIDR.
+   - **Linux** `arch/sh/include/cpu-jcore/cpu/mmu_context.h` assigns `0xff000020` = TRA,
+     `0xff000024` = EXPEVT, `0xff000028` = INTEVT.
+   - **The RTL** (`jcore-cpu/core/datapath.vhm:1136-1155`) decodes **none** of the three.
+   ASIDR has been removed from the table above (it is LDC/STC-only), which frees `0x024` but does
+   not by itself bless the Linux assignment. [../priv-arch/design-spec.md §4.6](../priv-arch/design-spec.md)
+   proposed relocating EXPEVT/INTEVT/TRA and deferred the final addresses to this map; that
+   deferral was never closed. Practical consequence today: the Linux `EXPEVT` define at
+   `0xff000024` is **dead** — the address is undecoded, so reads return zero and writes are
+   discarded with no exception, per the fail-silently note in §3.2. Any kernel code that believes
+   it is reading EXPEVT through MMIO is reading a constant zero. Owner: needed — a joint
+   priv-arch / Linux-arch-sh decision that either allocates these three offsets here and implements
+   the decode in `datapath.vhm`, or removes the Linux defines.
+5. **64-bit J64 P4 layout.** This map specifies the 32-bit J32 layout. J64 retains P4 at the same virtual addresses (high half of address space) but with wider underlying PA — see [mmu/design-spec.md §3.7](../mmu/design-spec.md). No new addresses are introduced by J64; the existing allocations remain valid.
