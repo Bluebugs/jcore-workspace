@@ -245,7 +245,42 @@ jcore_hyp_entry_0x200:
         mov.l   @r15+, r0
         rts
          nop
+
+        .global jcore_hyp_entry_0x300   /* Hyperprivileged-register access trap */
+jcore_hyp_entry_0x300:
+        /* A guest (or a supervisor-mode kernel with SR.HPRIV=0) touched one of
+         * the hyperprivileged registers of docs/hypervisor/hardware-spec.md
+         * §2.2. EXPEVT = 0x1A0, HEDR bit 2, non-delegatable; the vector is
+         * VBR_HYP + 0x300 (hardware-spec.md §3.4, §4.2). For a paravirt guest
+         * this is a guest bug; for a bare-metal guest being emulated it may be
+         * a sensitive instruction the VMM chooses to emulate. */
+        mov.l   r0, @-r15
+        mov.l   r1, @-r15
+
+        stc     hspc, r0             /* faulting instruction PC */
+        stc     hssr, r1             /* guest SR at fault */
+
+        mov.l   handle_hyp_reg_access, r2
+        jsr     @r2
+         nop                         /* delay slot */
+
+        /* handle_hyp_reg_access() either emulates the access and advances the
+         * guest PC in HSPC, or returns EXIT_REASON_INTERNAL_ERROR to the C
+         * dispatch loop of §3.9 to inject a fault into the guest. */
+        mov.l   @r15+, r1
+        mov.l   @r15+, r0
+        rts
+         nop
 ```
+
+The four entry symbols correspond one-for-one to the four Phase-3 dedicated vectors of
+[hardware-spec.md §4.2](hardware-spec.md): `_0x100` HCALL, `_0x190` guest LDTLB, `_0x200` emulated
+MMIO, `_0x300` hyperprivileged-register access. Inherited SH-4 causes that `HEDR` routes to the
+hypervisor do **not** get bespoke symbols here: per §4.2's mirror rule they arrive at the same
+offsets from `VBR_HYP` that a kernel already uses from `VBR` (`+0x100`, `+0x400`/`+0x420`/`+0x440`,
+`+0x600`), so the hypervisor's vector table reuses the ordinary `arch/sh` entry shape for those and
+demultiplexes on `EXPEVT`/`INTEVT`. Note that `_0x100` therefore serves both HCALL and any inherited
+general exception taken to HS mode; it reads `EXPEVT` first.
 
 ### 3.4 Hypercall service table
 
