@@ -52,7 +52,7 @@ The live 16 MB region is partitioned into per-block ranges. **Per-CPU blocks** a
 
 | Range                       | Size   | Block                              | Per-CPU? | Spec |
 |-----------------------------|-------:|------------------------------------|:--------:|------|
-| `0xFF000000`–`0xFF000FFF`   |  4 KB  | MMU control + CPUINFO              | yes      | [mmu/hardware-spec.md §2](../mmu/hardware-spec.md) |
+| `0xFF000000`–`0xFF000FFF`   |  4 KB  | MMU control + event regs + CPUINFO | yes      | [mmu/hardware-spec.md §2](../mmu/hardware-spec.md) |
 | `0xFF001000`–`0xFF001FFF`   |  4 KB  | PMU (Performance Monitoring Unit)  | yes      | [ooo/j32ooo-spec.md §12](../ooo/j32ooo-spec.md) |
 | `0xFF002000`–`0xFF002FFF`   |  4 KB  | Hypervisor control registers       | yes      | [hypervisor/hardware-spec.md §2.2](../hypervisor/hardware-spec.md) |
 | `0xFF003000`–`0xFF00EFFF`   | 48 KB  | reserved (future per-CPU blocks)   | —        | —    |
@@ -91,12 +91,47 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 | `0x014`     | TSBBR      | TSB base register                     |
 | `0x018`     | TSBCFG     | TSB configuration                     |
 | `0x01C`     | TSBPTR     | TSB pointer (read-only)               |
-| `0x020`     | CPUINFO    | Per-CPU hart ID + capability flags — **allocated, NOT implemented in current RTL** (see note below) |
-| `0x024`     | reserved   | freed — see "Registers with no P4 address" below, and §7 open question 4 |
-| `0x028`–`0x038` | reserved | future registers                              |
+| `0x020`     | TRA        | TRAPA immediate — stock SH-4 placement; **allocated, NOT implemented in current RTL** |
+| `0x024`     | EXPEVT     | Exception event code — stock SH-4 placement; **allocated, NOT implemented in current RTL** |
+| `0x028`     | INTEVT     | Interrupt event code — stock SH-4 placement; **allocated, NOT implemented in current RTL** |
+| `0x02C`     | CPUINFO    | Per-CPU hart ID + capability flags — **allocated, NOT implemented in current RTL** (see note below) |
+| `0x030`–`0x038` | reserved | future registers                              |
 | `0x03C`     | QACR0      | Store-queue 0 area register (`0xFF00003C`), see [../sq/spec.md §3](../sq/spec.md) |
 | `0x040`     | QACR1      | Store-queue 1 area register (`0xFF000040`), see [../sq/spec.md §3](../sq/spec.md) |
 | `0x044`–`0xFFC` | reserved | future registers                                  |
+
+**Decision: `0x020`/`0x024`/`0x028` are TRA / EXPEVT / INTEVT.** This closes the three-way
+conflict formerly recorded as §7 open question 4, and CPUINFO moves from `0x020` to `0x02C`.
+
+**Rationale:** these three offsets are the stock SH-4 architectural placement of TRA, EXPEVT and
+INTEVT (SH-4 hardware manual, Renesas/Hitachi, 1998 — pre-2006). Matching the architecture *is* the
+rationale: it is what an SH-4-aware kernel, debugger and simulator already assume, and it is what
+Linux `arch/sh/include/cpu-jcore/cpu/mmu_context.h` already defines (`TRA 0xff000020`,
+`EXPEVT 0xff000024`, `INTEVT 0xff000028`). Nothing is displaced by adopting it: the RTL
+(`jcore-cpu/core/datapath.vhm:1136-1155`) decodes none of `0x020`/`0x024`/`0x028`, so there is no
+implemented register to move; `0x024` was freed when ASIDR was removed from MMIO (below); and
+CPUINFO at `0x020` was a paper allocation only — there are zero occurrences of `cpuinfo` in any
+`jcore-cpu` or `jcore-soc` source. Moving a never-implemented allocation costs nothing, while
+diverging from SH-4 would cost every future port.
+
+**This supersedes [../priv-arch/design-spec.md §4.6](../priv-arch/design-spec.md)'s proposal** to
+relocate EXPEVT/INTEVT/TRA to `0x028`/`0x02C`/`0x030`. That proposal existed solely to dodge
+CPUINFO at `0x020` and ASIDR at `0x024`. ASIDR has since been removed from MMIO entirely (it is
+LDC/STC-only), and CPUINFO has moved here, so the reason for the relocation has dissolved. The
+relocated addresses `0x028`/`0x02C`/`0x030` are **not** allocated to those registers; do not use
+them.
+
+**CPUINFO overlaps `jcore,cpuid-mmio` — a future implementer must pick one.** CPUINFO's `HART_ID`
+field ([mmu/hardware-spec.md §2.9](../mmu/hardware-spec.md)) duplicates a facility jcore-soc already
+implements: the `cpumreg` block (`jcore-soc/targets/cpumreg.vhm`, decoded at
+`jcore-soc/targets/cpu_core_pkg.vhd:132-137`) exposes per-core identity at `0xABCD0600`, emitted
+into every board device tree as `jcore,cpuid-mmio` by
+`jcore-soc/tools/socgen/devicetree/tree.go:409-411` and reserved in
+`jcore-soc/tools/socgen/elaborate/addr_validate.go:66`. SMP boot depends on it today:
+`jcore-soc/boot/main.c:414-432` reads bit 0 of `0xABCD0600` to learn which core it is. Whoever
+implements CPUINFO should decide whether to fold `cpuid-mmio` into it or drop CPUINFO's HART_ID
+field and keep `cpuid-mmio`; building both would give a core two disagreeing answers to "who am I?".
+This map does not make that choice — it flags it.
 
 **Registers with no P4 address: PTEH, PTEL, ASIDR.** Earlier revisions of this map listed
 PTEH at `0x000`, PTEL at `0x004` and ASIDR at `0x024`. **Those rows were wrong and have been
@@ -121,9 +156,12 @@ the decoder's `when others => null` arm (`datapath.vhm:1174`) and are discarded;
 `m_en` still asserted so the access completes normally from the pipeline's point of view. Software
 that uses a phantom P4 address therefore observes a register that is permanently zero and never
 faults — a failure mode that is easy to mistake for "the feature is disabled". Any address in this
-sub-block marked *reserved*, or marked *allocated but not implemented* (CPUINFO at `0x020`), behaves
-this way today. There are zero occurrences of `cpuinfo` in any `.vhd`/`.vhm` source; its allocation
-is a valid reservation, but reading it returns zero rather than a hart ID.
+sub-block marked *reserved*, or marked *allocated but not implemented* (TRA `0x020`, EXPEVT `0x024`,
+INTEVT `0x028`, CPUINFO `0x02C`), behaves this way today. There are zero occurrences of `cpuinfo` in
+any `.vhd`/`.vhm` source; its allocation is a valid reservation, but reading it returns zero rather
+than a hart ID. The same holds for the Linux `TRA`/`EXPEVT`/`INTEVT` defines: they now name the
+correct architectural addresses, but until `datapath.vhm` decodes them a kernel reading them through
+MMIO reads a constant zero.
 
 ### 3.3 SoC-wide control (`0xFF00F000`–`0xFF00FFFF`)
 
@@ -196,20 +234,23 @@ All references pre-2006, satisfying the project-wide prior-art policy ([glossary
 1. **Pre-this-map peripheral addresses.** Several jcore-soc peripherals currently sit at ad-hoc P4 addresses outside this map. A coordinated re-allocation across the existing RTL and the Linux DTS is required to bring them into conformance. Owner: jcore-soc maintainer + Linux DTS maintainer.
 2. **Cross-CPU debug access.** Reserved range `0xFF003000`–`0xFF00EFFF` is currently empty. If a cross-CPU register-poke debug facility is desired (e.g. for halt-mode debugging), specify the protocol and consume some of this range.
 3. **L1 array access for diagnostics.** SH-4 used the `0xF0000000`–`0xF7FFFFFF` region for direct cache-array access. J-Core has not yet committed to whether to implement an equivalent facility; the region is reserved either way.
-4. **Three-way conflict at `0x020`/`0x024`/`0x028` (UNRESOLVED — needs an owner).** Three
-   documents disagree about this half-dozen bytes, and this change does **not** resolve the
-   disagreement; it only records it accurately.
-   - **This map** allocates `0x020` = CPUINFO and (formerly) `0x024` = ASIDR.
-   - **Linux** `arch/sh/include/cpu-jcore/cpu/mmu_context.h` assigns `0xff000020` = TRA,
-     `0xff000024` = EXPEVT, `0xff000028` = INTEVT.
-   - **The RTL** (`jcore-cpu/core/datapath.vhm:1136-1155`) decodes **none** of the three.
-   ASIDR has been removed from the table above (it is LDC/STC-only), which frees `0x024` but does
-   not by itself bless the Linux assignment. [../priv-arch/design-spec.md §4.6](../priv-arch/design-spec.md)
-   proposed relocating EXPEVT/INTEVT/TRA and deferred the final addresses to this map; that
-   deferral was never closed. Practical consequence today: the Linux `EXPEVT` define at
-   `0xff000024` is **dead** — the address is undecoded, so reads return zero and writes are
-   discarded with no exception, per the fail-silently note in §3.2. Any kernel code that believes
-   it is reading EXPEVT through MMIO is reading a constant zero. Owner: needed — a joint
-   priv-arch / Linux-arch-sh decision that either allocates these three offsets here and implements
-   the decode in `datapath.vhm`, or removes the Linux defines.
+4. **Three-way conflict at `0x020`/`0x024`/`0x028` — RESOLVED.** Three documents used to disagree
+   about this half-dozen bytes: this map allocated `0x020` = CPUINFO and (formerly) `0x024` =
+   ASIDR; Linux `arch/sh/include/cpu-jcore/cpu/mmu_context.h` assigned `0xff000020` = TRA,
+   `0xff000024` = EXPEVT, `0xff000028` = INTEVT; and the RTL
+   (`jcore-cpu/core/datapath.vhm:1136-1155`) decoded **none** of the three — only `0x08` TTB,
+   `0x0C` TEA, `0x10` MMUCR, `0x14` TSBBR, `0x18` TSBCFG, `0x1C` TSBPTR.
+   **Decision:** `0x020` = TRA, `0x024` = EXPEVT, `0x028` = INTEVT — the stock SH-4 architectural
+   placement (SH-4 hardware manual, Renesas/Hitachi, 1998), which is also what Linux already
+   defines. CPUINFO moves to `0x02C` and remains allocated-but-not-implemented. This supersedes
+   [../priv-arch/design-spec.md §4.6](../priv-arch/design-spec.md)'s `0x028`/`0x02C`/`0x030`
+   relocation proposal, whose only motivation — dodging CPUINFO and ASIDR — has dissolved now that
+   ASIDR is LDC/STC-only and CPUINFO has moved. Nothing had to be displaced: CPUINFO was a paper
+   allocation with zero occurrences of `cpuinfo` anywhere in `jcore-cpu` or `jcore-soc`. See
+   [§3.2](#32-mmu-sub-allocation-0xff000000-0xff000fff) for the full rationale and for the
+   flagged functional overlap between CPUINFO's `HART_ID` and jcore-soc's `jcore,cpuid-mmio` at
+   `0xABCD0600`.
+   **Residual (not part of this question):** all four offsets remain undecoded in RTL, so the
+   Linux defines still read as constant zero until `datapath.vhm` implements them. That is an
+   implementation task, not an allocation dispute.
 5. **64-bit J64 P4 layout.** This map specifies the 32-bit J32 layout. J64 retains P4 at the same virtual addresses (high half of address space) but with wider underlying PA — see [mmu/design-spec.md §3.7](../mmu/design-spec.md). No new addresses are introduced by J64; the existing allocations remain valid.

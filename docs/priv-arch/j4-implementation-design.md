@@ -215,10 +215,12 @@ pass existing regression on every PR.
 
 ## 7. Deferred (follow-on spec)
 
-- **PM3** — fixed SH-4 vector offsets + `EXPEVT`/`INTEVT`/`TRA` MMIO. Carries an
-  external dependency: the `0xFF000020` collision with `CPUINFO`/`ASIDR`
-  ([`design-spec.md` §4.6](design-spec.md), owned by the P4-map). Low coupling to
-  PM0–PM2, mechanical.
+- **PM3** — fixed SH-4 vector offsets + `EXPEVT`/`INTEVT`/`TRA` MMIO. The former
+  `0xFF000020` collision with `CPUINFO`/`ASIDR` is **resolved**: `TRA`/`EXPEVT`/`INTEVT`
+  keep the stock SH-4 addresses `0xFF000020`/`0x24`/`0x28`, `ASIDR` is LDC/STC-only, and
+  `CPUINFO` moved to `0xFF00002C` ([`design-spec.md` §4.6](design-spec.md),
+  [`soc/p4-mmio-map.md` §3.2](../soc/p4-mmio-map.md)). No external dependency remains;
+  PM3 just adds the decode. Low coupling to PM0–PM2, mechanical.
 - **PM4** — optional `SGR` (SH-4A binary compat), droppable.
 - **MMU integration** — segment (`MD`-gated P1/P2/P4) decode; consumes PM0–PM2 as
   substrate.

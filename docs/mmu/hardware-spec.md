@@ -219,7 +219,11 @@ The `<< 4` is because each TSB entry is 16 bytes. TSBPTR is therefore naturally 
 
 ### 2.9 CPUINFO — CPU Information (NEW, MMIO only)
 
-Read-only MMIO register, per-CPU-distinct. Each CPU reading address `0xFF000020` sees its own hart ID and capability flags.
+Read-only MMIO register, per-CPU-distinct. Each CPU reading address `0xFF00002C` sees its own hart ID and capability flags.
+
+**Address:** `0xFF00002C`. CPUINFO formerly sat at `0xFF000020`; that offset and the two following it are the stock SH-4 placement of `TRA`/`EXPEVT`/`INTEVT` (SH-4 hardware manual, Renesas/Hitachi, 1998) and have been returned to those registers. See [soc/p4-mmio-map.md §3.2](../soc/p4-mmio-map.md) for the decision and rationale. CPUINFO is **allocated but not implemented** in current RTL: `jcore-cpu/core/datapath.vhm:1136-1155` decodes no offset above `0x1C`, and an undecoded P4 read returns zero without faulting, so a CPU reading CPUINFO today gets `0` rather than its hart ID.
+
+**Overlap with `jcore,cpuid-mmio` (unresolved, flagged).** The `HART_ID` field duplicates a facility jcore-soc already implements: `cpumreg` (`jcore-soc/targets/cpumreg.vhm`, decoded at `jcore-soc/targets/cpu_core_pkg.vhd:132-137`) exposes per-core identity at `0xABCD0600`, published to every board device tree as `jcore,cpuid-mmio`, and SMP boot reads it today (`jcore-soc/boot/main.c:414-432`). Whoever implements CPUINFO must pick one of the two rather than build both; this spec does not choose.
 
 **Layout (32 bits):**
 ```
@@ -230,7 +234,7 @@ Read-only MMIO register, per-CPU-distinct. Each CPU reading address `0xFF000020`
 [3:0]    HART_ID       This CPU's hart number (0–15)
 ```
 
-No new instruction is needed; standard `MOV.L @rA, Rn` from a register holding `0xFF000020` reads it. The SoC's address decoder routes this access to a small per-core hard-wired register.
+No new instruction is needed; standard `MOV.L @rA, Rn` from a register holding `0xFF00002C` reads it. The SoC's address decoder routes this access to a small per-core hard-wired register.
 
 ### 2.10 PTEU — Page Table Entry Upper (NEW, optional — PAE only)
 
@@ -576,7 +580,7 @@ Critical points to verify in RTL:
 5. **Register banking on TLB miss:** Bank 1 R0–R7 visible to handler, bank 0 preserved.
 6. **ASIDR preservation across miss:** ASIDR is not touched by miss-vector entry; hardware writes only PTEH.VPN. Handler can read ASIDR directly and trust it reflects the current context.
 7. **STALE bit preservation:** LDTLB carries the STALE bit from PTEL into the TLB entry intact.
-8. **Per-CPU CPUINFO routing:** Each CPU reads a distinct HART_ID at `0xFF000020`.
+8. **Per-CPU CPUINFO routing:** Each CPU reads a distinct HART_ID at `0xFF00002C`.
 9. **Exception priority:** TLB miss vs. instruction-fetch fault vs. higher-priority interrupts handled correctly.
 10. **Reset state:** All MMU registers cleared, TLB invalidated, MMU disabled.
 11. **Multi-word-unit instruction-fetch miss (only if the SIMD or density extension is present, §5.1):** an instruction-fetch miss on the *interior* word of a multi-word unit must save the unit's **first-word PC** into SPC, and `RTE` must re-execute the whole unit. Verify both instances: (a) a SIMD block straddling a 16 KB boundary whose tail page misses → SPC = prefix PC, block re-opens with correct lane-wise semantics (test the prefix-time-validation probe path *and* a non-crossing block that takes no probe/stall); (b) a two-word `movi20`/`lea`/disp12 whose word1 lands on a missing page → SPC = word0 PC, instruction re-executes (not a resume into word1).
