@@ -90,9 +90,9 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 | `0x018`     | TSBCFG     | TSB configuration                     |
 | `0x01C`     | TSBPTR     | TSB pointer (read-only)               |
 | `0x020`     | CPUINFO    | Per-CPU hart ID + capability flags — **allocated, NOT implemented in current RTL** (see note below) |
+| `0x024`     | reserved   | freed — see "Registers with no P4 address" below, and §7 open question 4 |
 | `0x03C`     | QACR0      | Store-queue 0 area register (`0xFF00003C`), see [../sq/spec.md §3](../sq/spec.md) |
 | `0x040`     | QACR1      | Store-queue 1 area register (`0xFF000040`), see [../sq/spec.md §3](../sq/spec.md) |
-| `0x024`     | reserved   | formerly ASIDR — see "Registers with no P4 address" below |
 | `0x028`–`0x038`, `0x044`–`0xFFC` | reserved | future registers                 |
 
 **Registers with no P4 address: PTEH, PTEL, ASIDR.** Earlier revisions of this map listed
