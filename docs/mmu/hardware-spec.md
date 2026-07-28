@@ -394,7 +394,7 @@ The bit range compared depends on the entry's PageMask: a 16 KB page compares VP
 
 If exactly one entry matches: it provides the translation.  
 If zero entries match: hardware initiates the miss sequence (see §5).  
-If more than one matches: behavior undefined — software must not write duplicate entries. (Same rule as SH-4 and UltraSPARC.) The J4 reference implementation resolves a multi-hit to the highest-index matching entry (no hardware multi-hit exception); a future hardening option may add a multi-hit detector. Permission enforcement (IPROT/DPROT) on a hit is normatively specified in [design-spec.md §6.1](design-spec.md).
+If more than one matches: behavior undefined — software must not write duplicate entries. (Same rule as SH-4 and UltraSPARC.) The J4 reference implementation detects a multi-hit in hardware (S-I5) and takes an exception rather than translating; see the MULTI_HIT note in [§5](#5-tlb-miss-exception-sequence) for how it is delivered. Permission enforcement (IPROT/DPROT) on a hit is normatively specified in [design-spec.md §6.1](design-spec.md).
 
 ## 5. TLB Miss Exception Sequence
 
@@ -405,7 +405,7 @@ When a memory access misses the TLB and translation is enabled (MMUCR.AT=1):
 3. Latch the faulting VPN into PTEH. The page size is not yet known at miss time (it is decided by the PTE the handler eventually loads), so hardware captures the VPN at the **finest** supported granularity — 4 KB, i.e. `PTEH[31:12] = VA[31:12]`, low bits `[11:0]` zeroed — and the handler masks coarser as needed at `LDTLB` time. (Capturing only `VA[31:14]` would alias 4 KB pages that differ in `VA[13:12]`.) **ASIDR is not touched** — the kernel has set ASIDR at context switch and it remains valid for the miss handler to read.
 4. Save PC → SPC and SR → SSR. The exception is a **re-execute** type: SPC must be the faulting instruction's own PC so `LDTLB.RN`/`RTE` re-runs the access (critical for stores — a faulting load's destination register is already written, but a dropped store write is lost). I-fetch faults capture the live PC (detected at the fetch pointer); **D-access faults are detected in the MA stage, where the live PC has run a variable distance ahead**, so hardware latches the faulting instruction's restart-PC and SR on the first fault cycle (alongside TEA/PTEH) and sources SPC/SSR from those latches.
 5. Update SR: set MD=1, RB=1, BL=1, IMASK=0xF.
-6. Jump to `VBR + 0x400` (instruction-fetch miss) or `VBR + 0x420` (data-load miss) or `VBR + 0x440` (data-store miss) — same vector layout as SH-4.
+6. Jump to `VBR + 0x400`. **All six TLB fault causes share this one vector**, exactly as stock SH-4 does (Renesas/Hitachi SH-4 hardware manual, 1998); `EXPEVT` is the sole discriminator between them.
 
 Exception priorities and ordering relative to other interrupts follow SH-4 conventions.
 
@@ -414,13 +414,19 @@ Exception priorities and ordering relative to other interrupts follow SH-4 conve
 | Fault | VBR offset | EXPEVT | SPC source | SSR source |
 |-------|-----------|--------|-------------|-------------|
 | TLB IMISS (instruction-fetch miss) | `+0x400` | `0x040` | `TLBPC` (delay-slot-aware I-fetch restart PC) | live `SR` |
-| TLB DMISS_R (data-load miss) | `+0x420` | `0x060` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
-| TLB DMISS_W (data-store miss) | `+0x440` | `0x080` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
+| TLB DMISS_R (data-load miss) | `+0x400` | `0x060` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
+| TLB DMISS_W (data-store miss) | `+0x400` | `0x080` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
 | TLB IPROT (instruction protection violation) | `+0x400` | `0x0A0` | `TLBPC` (delay-slot-aware I-fetch restart PC) | live `SR` |
-| TLB DPROT_R (data-load protection violation) | `+0x420` | `0x0C0` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
-| TLB DPROT_W (data-store protection violation) | `+0x440` | `0x0C0` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
+| TLB DPROT_R (data-load protection violation) | `+0x400` | `0x0C0` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
+| TLB DPROT_W (data-store protection violation) | `+0x400` | `0x0C0` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
 
-**Note:** DPROT_R and DPROT_W share EXPEVT `0x0C0`; they are distinguished only by vector offset (`0x420` vs `0x440`).
+**One vector, six causes.** Every row above vectors to `VBR + 0x400`. `EXPEVT` is the only discriminator, and software must read it to classify the fault.
+
+**Known limitation — protection-fault direction is not recoverable.** DPROT_R and DPROT_W both write EXPEVT `0x0C0`. With a single TLB vector there is no second axis left, so on a protection fault **software cannot determine whether the faulting access was a read or a write from architectural state.** An earlier revision recovered the direction from the vector offset (`0x420` vs `0x440`); that information is gone. Software that needs the direction (e.g. to distinguish a write-to-read-only page from a read-of-no-read page when reporting `SIGSEGV`) must re-decode the faulting instruction at `SPC`, which is unambiguous because the D-side `SPC` is the faulting instruction's own restart PC. This is a deliberate accepted cost, not an oversight.
+
+**MULTI_HIT is delivered out-of-band.** A multiple-TLB-match (S-I5, `tlb.vhd` `i_multihit`/`d_multihit`) does **not** use the TLB vector. It is routed to the existing General Illegal register-model exception: `PC <- VBR + 0x100`, `EXPEVT <- 0x180`. **Rationale:** the decoder's system-plane immediate-value field (ROM imm-value selector, 5 bits) is at capacity — 32 of 32 distinct constants are used — so minting a dedicated MULTI_HIT vector/EXPEVT pair would require widening the field to 6 bits and regenerating the ROM template (guarded by `romImmFieldBits` in the decoder generator). Reusing General Illegal costs zero new immediate literals and zero new opcodes. Software distinguishes a multi-hit from a real illegal instruction with the sticky multi-hit status flag, not with EXPEVT.
+
+**Reconciliation note.** An earlier revision of this specification (and of the implementation) gave each TLB access type its own vector: I-fetch `VBR + 0x400`, data-load `VBR + 0x420`, data-store `VBR + 0x440` — the "Option-A" layout — so that the miss handler could branch on access type without reading EXPEVT. The implementation merged all six causes onto the single `VBR + 0x400` vector (commit `a8ab8d0`, "mmu: merge the three TLB-miss vectors into a single VBR+0x400"; design note at `jcore-cpu/decode/gen-go/spec/sh4/exceptions.toml:386-392`). **Rationale:** the real handler turned out to be byte-identical across all three entries — access type only matters on the slow `do_page_fault` path, which reads EXPEVT anyway — so the split merely triplicated the hot path's I-cache footprint. The merged layout also matches stock SH-4, which has always used one TLB vector (Renesas/Hitachi SH-4 hardware manual, 1998). EXPEVT codes and the SPC/SSR capture rules are unchanged by the merge.
 
 **SPC/SSR semantics.** I-fetch faults (IMISS/IPROT) save a delay-slot-aware restart PC (`TLBPC`) and take `SSR` from the live `SR`. D-access faults (DMISS_R/DMISS_W/DPROT_R/DPROT_W) save the faulting-instruction's own restart PC (`TLBPC-4`) so that `LDTLB.RN`/`RTE` re-executes the faulting instruction, and take `SSR` from the latched `TLBSR` (captured on the first fault cycle, alongside `TEA`/`PTEH`), because by the MA stage the live PC has already run ahead of the faulting instruction.
 
