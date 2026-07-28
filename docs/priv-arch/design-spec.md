@@ -119,7 +119,15 @@ A core built **without** the MMU still uses this vector layout; the `0x400` fami
 
 ### 4.6 Cause registers and the MMIO-map collision
 
-`EXPEVT`, `INTEVT`, and `TRA` are added as P4 MMIO (and readable via the CCN path Linux expects). **Open coordination item:** SH-4 places these at `0xFF000020` (`TRA`), `0xFF000024` (`EXPEVT`), `0xFF000028` (`INTEVT`) — but j-core has already assigned `0xFF000020 = CPUINFO` and `0xFF000024 = ASIDR` ([soc/p4-mmio-map.md §3.2](../soc/p4-mmio-map.md)). Proposed resolution: place `EXPEVT/INTEVT/TRA` at the next free offsets (`0xFF000028/2C/30`) and record the divergence in the P4 map so the Linux port reads the relocated addresses. This is a map-allocation decision, not an architectural one, and is deferred to the P4-map owner.
+`EXPEVT`, `INTEVT`, and `TRA` are added as P4 MMIO (and readable via the CCN path Linux expects).
+
+**Decision (RESOLVED — collision closed):** `TRA` = `0xFF000020`, `EXPEVT` = `0xFF000024`, `INTEVT` = `0xFF000028` — the stock SH-4 addresses, unchanged.
+
+**Rationale:** matching the architecture is the point. This is where the SH-4 hardware manual (Renesas/Hitachi, 1998) puts them, and where Linux `arch/sh/include/cpu-jcore/cpu/mmu_context.h` already defines them; adopting anything else would make every SH-4-aware kernel, debugger and simulator wrong for no gain. See [soc/p4-mmio-map.md §3.2](../soc/p4-mmio-map.md) for the canonical allocation.
+
+**Superseded proposal (recorded, not silently dropped).** An earlier revision of this section proposed relocating `EXPEVT`/`INTEVT`/`TRA` to `0xFF000028`/`0x2C`/`0x30` to dodge two conflicting claims on `0xFF000020` (`CPUINFO`) and `0xFF000024` (`ASIDR`). That proposal is **superseded** and those relocated addresses are **not** allocated to these registers. Both obstacles have since dissolved: `ASIDR` was removed from the P4 map entirely (it is an LDC/STC-only control register with no MMIO alias, [mmu/hardware-spec.md §2.1a](../mmu/hardware-spec.md)), and `CPUINFO` — a paper allocation with zero occurrences in `jcore-cpu` or `jcore-soc` RTL — has moved to `0xFF00002C` ([mmu/hardware-spec.md §2.9](../mmu/hardware-spec.md)).
+
+**Implementation status:** allocation only. `jcore-cpu/core/datapath.vhm:1136-1155` decodes no P4 offset above `0x1C`, so all three addresses currently read as zero without faulting; PM3 must add the decode.
 
 ### 4.7 Single-level save state constrains the VM design (TSB in P1)
 

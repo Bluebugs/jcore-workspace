@@ -500,7 +500,7 @@ Kernel pages (P0 ASID 0 kernel mappings, P3 vmalloc) use `_PAGE_GLOBAL` so they 
 File: `arch/sh/kernel/cpu/jcore/smp.c`
 
 ```c
-#define JCORE_CPUINFO_MMIO   0xFF000020
+#define JCORE_CPUINFO_MMIO   0xFF00002C
 #define JCORE_SMP_RELEASE    0xFF00FF00
 
 static unsigned int read_cpuinfo(void)
@@ -577,7 +577,7 @@ jcore_secondary_entry:
         mov.l   sr_init, r0
         ldc     r0, sr
 
-        mov.l   cpuinfo_p4, r0      ! 0xFF000020
+        mov.l   cpuinfo_p4, r0      ! 0xFF00002C
         mov.l   @r0, r1
         mov     #0xF, r2
         and     r2, r1              ! r1 = hart_id
@@ -615,7 +615,7 @@ jcore_secondary_entry:
 
         .align 4
 sr_init:      .long 0x500000F0
-cpuinfo_p4:   .long 0xFF000020
+cpuinfo_p4:   .long 0xFF00002C
 boot_data_p1: .long boot_data + 0x80000000
 mmucr_p4:     .long 0xFF000010
 ti_at_bits:   .long 0x00000005     /* AT=1 | TI=1 */
