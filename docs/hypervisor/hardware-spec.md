@@ -939,11 +939,14 @@ Phase 3 hardware additions beyond Phase 1 baseline:
 | Two 32-byte SQ buffers with valid/dirty tracking | attributed to [../sq/spec.md](../sq/spec.md), not counted here (§10 note below) |
 | `QACR` address-formation path reuse for aperture routing | ~15 LUTs |
 | MMIO-trap control/sequencing (entry mux, EXPEVT/vector selection) | ~25 LUTs |
-| **Emulated-MMIO trap subtotal** | **~120–180 LUTs, ~15 flops** |
+| Unrepresentable-access detection + fail-closed gating (§4.6) | ~10–15 LUTs |
+| **Emulated-MMIO trap subtotal** | **~130–195 LUTs, ~15 flops** |
 | **Total (per core)** | **approximately 300 LUTs, ~215 flops** |
 
-Arithmetic: 150 LUTs (existing Phase 3 baseline, row above) + 120–180 LUTs (emulated-MMIO trap,
-this task) = 270–330 LUTs, stated conservatively as **approximately 300 LUTs** per core. This is a
+Arithmetic: 150 LUTs (existing Phase 3 baseline, row above) + 130–195 LUTs (emulated-MMIO trap,
+this task) = 280–345 LUTs, stated conservatively as **approximately 300 LUTs** per core. The
+~300 LUT headline is unchanged by §4.6's addition and remains the conservative statement: the new
+row moves the midpoint from 300 to ~312, still inside the rounding the figure already carried. This is a
 doubling of the pre-existing Phase 3 hypervisor footprint, and it is not hidden: the single largest
 contributor is the `HRTE`-armed complete-on-resume writeback path (§4.5), because it must decode
 `HMCR.REGN`/`BANK`/`SIZE` into a register-file write port that can target any of R0–R15 including
@@ -954,6 +957,16 @@ the semantics in software — would remove this writeback port and most of the d
 latch, but was explicitly rejected (§4.5) because it would trade this fixed hardware cost for
 40–80 cycles of software instruction decode on every trapped MMIO access, unacceptable for a
 workload dominated by device access.
+
+**§4.6 unrepresentable-access detection (~10–15 LUTs).** §4.6 makes the aperture trap fire only for
+the representable set and fail closed for everything else. The representability predicate is a
+plain OR over opcode-class signals the decoder **already produces** — it must already distinguish
+the plain `MOV.{B,W,L}` load/store family in order to drive `HMCR.DIR`/`SIZE`/`REGN`/`BANK` at all,
+and it already identifies `TAS.B`, the FPU/SIMD memory ops and `MAC.W`/`MAC.L` as distinct classes.
+So the new logic is not a decoder; it is (a) the exception-source mux that steers an
+aperture-matching access to the general illegal-instruction path instead of `EXPEVT = 0x1E0`, and
+(b) the gating that holds off the bus request and the `HPAR`/`HMDR`/`HMCR` write enables on that
+path. Both are a handful of gates on signals already in flight, hence the small figure.
 
 **Store-queue buffer attribution.** The two 32-byte SQ buffers and their valid/dirty tracking
 listed above are **not** part of the hypervisor's gate cost: the store queue exists independently
@@ -977,7 +990,7 @@ To be explicit: Phase 3 adds nothing to the **TLB array or its lookup function**
 - Two new instructions (HCALL, HRTE), plus ten new hyperprivileged LDC/STC control-register encodings (§2.2)
 - One change to LDTLB behavior in supervisor mode
 - A guest-mode override on the `MMUCR.AT` translation gate (§4.4.1) — one extra term in front of the existing lookup, not a change to the lookup, and no change to the TLB entry format
-- One aperture comparator on the post-translation physical address (§2.5, §4.5), plus the trap-entry capture registers and the `HRTE`-armed writeback port that go with it (§10: ~120–180 LUTs, ~15 flops)
+- One aperture comparator on the post-translation physical address (§2.5, §4.5), plus the trap-entry capture registers and the `HRTE`-armed writeback port that go with it (§10: ~130–195 LUTs, ~15 flops, including §4.6 fail-closed gating)
 
 What Phase 3 still explicitly does **not** add, and what distinguishes it from post-2006 designs: no VMID or hardware guest tag, no second-stage translation, no hardware page-table walker, no TLB entry-format change, no change to how a TLB hit resolves. Every guest translation is an ordinary Phase 1 TLB entry, installed by hypervisor software.
 
@@ -994,6 +1007,21 @@ If patent landscape changes and post-2006 primitives become viable, the design c
 - **Nested virtualization:** Software-only; no new hardware. Just adds a layer of HEDR delegation. Implementable in Phase 3 without ISA changes if desired.
 
 None of these are blocked by Phase 3 — the design space is left open.
+
+**Open item — does the instruction-fetch path need its own aperture comparator?** §10's aperture
+comparator row (`(PA & HEMUM) == HEMUB`, ~15 LUTs) is described as "per access", which is ambiguous
+about whether the **instruction-fetch** address is one of those accesses. §4.6 requires it to be:
+"instruction fetch from inside the aperture" is listed as an unrepresentable access that must fail
+closed, and §9 verification point 16 tests exactly that — which is only implementable if the
+I-fetch physical address is compared against the aperture at all. If the implementation's single
+comparator sits on the data-side post-translation address only, a second instance on the
+instruction-fetch address is required, at roughly **another 15 LUTs** — a duplicate of the existing
+comparator row, plus the small amount of gating to turn its match into the fetch-side illegal
+path. Whether one comparator can be shared (the two paths may present their physical addresses in
+different pipeline cycles, in which case sharing is possible; if they can be simultaneous it is
+not) is a microarchitecture question this specification does not decide. **Flagged for the
+implementer:** budget the second comparator until the pipeline analysis shows it can be shared, and
+update §10 with the answer.
 
 **Open item — TLB fault `EXPEVT` labelling.** §2.3.1's HEDR rows label bits 4–7 as
 `0x040`/`0x060` "TLB miss read/write" and `0x0A0`/`0x0C0` "protection violation read/write", while
