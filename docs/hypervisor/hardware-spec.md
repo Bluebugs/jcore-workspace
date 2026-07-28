@@ -120,7 +120,7 @@ LDC Rm, HSQCR    : 0100 mmmm 1001 1111   = 0x409F | m<<8
 STC HSQCR, Rn    : 0000 nnnn 1001 1111   = 0x009F | n<<8
 ```
 
-This carves a new control-register family with capacity for up to 16 hyperprivileged control registers (slots 0–15). After allocation of HEMUB, HEMUM, HPAR, HMDR, HMCR, and HSQCR in slots 4–9, **six free slots (10–15) remain** for future hyperprivileged register extensions. All accesses in this family, executed with `SR.HPRIV=0`, raise the **hyperprivileged-register access exception** (`EXPEVT = 0x1F0`, HEDR bit 2, non-delegatable — §2.3.1, §3.4), delivered to the hypervisor. This enforces that only hyperprivileged code can read or write these registers.
+This carves a new control-register family with capacity for up to 16 hyperprivileged control registers (slots 0–15). After allocation of HEMUB, HEMUM, HPAR, HMDR, HMCR, and HSQCR in slots 4–9, **six free slots (10–15) remain** for future hyperprivileged register extensions. All accesses in this family, executed with `SR.HPRIV=0`, raise the **hyperprivileged-register access exception**, delivered to the hypervisor and not delegatable to a guest. Its cause code, HEDR bit and vector are specified once, in [§3.4](#34-privileged-register-access-from-supervisor-mode), and are deliberately not restated here; the HEDR bit assignment is tabulated in [§2.3.1](#231-expevt-to-hedr-bit-mapping-normative). This enforces that only hyperprivileged code can read or write these registers.
 
 The choice of low nibble `0xF` avoids collision with SH-4's existing `0xE` (LDC/STC) and `0xB`/`0xA`/`0x7`/`0x3` (LDC.L/STC.L variants) low nibbles in the 0100 family.
 
@@ -261,7 +261,7 @@ HSQCR   Hypervisor Store-Queue Status Register    32-bit
 [0]     VALID0  queue 0 has been written since last burst or clear
 ```
 
-**VALID[1:0] and DIRTY[1:0]:** The SQ hardware sets VALID bits to 1 when the corresponding queue slot is written by the guest, and clears them on a burst (when the queue is flushed to memory). DIRTY bits shadow valid bits until cleared. The hypervisor uses these bits to determine which queue slots hold pending store data. Write access to HSQCR is allowed only at `SR.HPRIV = 1` for context restore (clearing bits after reading them, or setting them to match saved state). Writes at `SR.HPRIV = 0` raise the hyperprivileged-register access exception (`EXPEVT = 0x1A0`, HEDR bit 2, non-delegatable), exactly as for every other register in the §2.2 family — see §3.4.
+**VALID[1:0] and DIRTY[1:0]:** The SQ hardware sets VALID bits to 1 when the corresponding queue slot is written by the guest, and clears them on a burst (when the queue is flushed to memory). DIRTY bits shadow valid bits until cleared. The hypervisor uses these bits to determine which queue slots hold pending store data. Write access to HSQCR is allowed only at `SR.HPRIV = 1` for context restore (clearing bits after reading them, or setting them to match saved state). Writes at `SR.HPRIV = 0` raise the hyperprivileged-register access exception exactly as for every other register in the §2.2 family. [§3.4](#34-privileged-register-access-from-supervisor-mode) is the canonical description of that exception — its cause code, HEDR bit, delegability and vector are stated there and are deliberately **not** restated here.
 
 **Per-vCPU context:** HSQCR is per-vCPU state, saved and restored across VM exit and entry as part of the vCPU context-save/restore sequence.
 
