@@ -255,9 +255,10 @@ File: `arch/sh/kernel/cpu/jcore/tlbmiss.S`
         .global jcore_tlb_miss
         .align 4
 jcore_tlb_miss:
-        ! Entry from VBR + 0x400 (instruction miss),
-        ! VBR + 0x420 (data load miss),
-        ! or VBR + 0x440 (data store miss).
+        ! Entry from VBR + 0x400 — the single TLB vector shared by
+        ! all six TLB fault causes (I/D, miss/protection). EXPEVT
+        ! is the only discriminator; the hot path below does not
+        ! need it, and only the slow path reads it.
         !
         ! On entry: SR.RB=1 (bank 1 selected), SR.MD=1, SR.BL=1.
         !           PTEH contains the faulting VPN (low bits zero).

@@ -112,7 +112,7 @@ Adopt SH-4 fixed VBR-relative offsets, aligned with the values the MMU spec alre
 |---|---|---|
 | Power-on reset | `0xA0000000` (P2, fixed) | `VBR` reset = 0 |
 | General exception | `VBR + 0x100` | illegal insn, `TRAPA`, address error |
-| TLB miss (I-fetch / load / store) | `VBR + 0x400 / 0x420 / 0x440` | per [mmu/hardware-spec.md §5](../mmu/hardware-spec.md) |
+| TLB miss / protection (I-fetch, load, store) | `VBR + 0x400` (single vector, all six causes; EXPEVT discriminates) | per [mmu/hardware-spec.md §5](../mmu/hardware-spec.md) |
 | Interrupt | `VBR + 0x600` | level in `INTEVT` |
 
 A core built **without** the MMU still uses this vector layout; the `0x400` family simply never fires until translation is enabled.
