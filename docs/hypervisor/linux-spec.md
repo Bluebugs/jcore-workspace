@@ -175,8 +175,8 @@ When a guest's exception or hypercall targets the hypervisor, control arrives at
 ```asm
 /* arch/sh/kvm/asm/hyp_entry.S */
 
-        .global jcore_hyp_entry_0x100   /* HCALL handler */
-jcore_hyp_entry_0x100:
+        .global jcore_hyp_entry_0x180   /* HCALL handler */
+jcore_hyp_entry_0x180:
         /* Save guest registers to vcpu->arch.gpr[] */
         mov.l   r0, @-r15           /* save R0 (hypercall code) */
         ; ... save R1-R15, banked regs, PR, etc.
@@ -250,7 +250,7 @@ jcore_hyp_entry_0x200:
 jcore_hyp_entry_0x300:
         /* A guest (or a supervisor-mode kernel with SR.HPRIV=0) touched one of
          * the hyperprivileged registers of docs/hypervisor/hardware-spec.md
-         * §2.2. EXPEVT = 0x1A0, HEDR bit 2, non-delegatable; the vector is
+         * §2.2. EXPEVT = 0x1F0, HEDR bit 2, non-delegatable; the vector is
          * VBR_HYP + 0x300 (hardware-spec.md §3.4, §4.2). For a paravirt guest
          * this is a guest bug; for a bare-metal guest being emulated it may be
          * a sensitive instruction the VMM chooses to emulate. */
@@ -274,13 +274,21 @@ jcore_hyp_entry_0x300:
 ```
 
 The four entry symbols correspond one-for-one to the four Phase-3 dedicated vectors of
-[hardware-spec.md §4.2](hardware-spec.md): `_0x100` HCALL, `_0x190` guest LDTLB, `_0x200` emulated
-MMIO, `_0x300` hyperprivileged-register access. Inherited SH-4 causes that `HEDR` routes to the
-hypervisor do **not** get bespoke symbols here: per §4.2's mirror rule they arrive at the same
-offsets from `VBR_HYP` that a kernel already uses from `VBR` (`+0x100`, `+0x400`/`+0x420`/`+0x440`,
-`+0x600`), so the hypervisor's vector table reuses the ordinary `arch/sh` entry shape for those and
-demultiplexes on `EXPEVT`/`INTEVT`. Note that `_0x100` therefore serves both HCALL and any inherited
-general exception taken to HS mode; it reads `EXPEVT` first.
+[hardware-spec.md §4.2](hardware-spec.md): `_0x180` HCALL (`EXPEVT 0x1D0`), `_0x190` guest LDTLB
+(`EXPEVT 0x190`), `_0x200` emulated MMIO (`EXPEVT 0x1E0`), `_0x300` hyperprivileged-register access
+(`EXPEVT 0x1F0`). Each is reached by a vector no other cause uses, and carries an `EXPEVT` no other
+cause uses, so none of them needs to disambiguate itself on entry. Inherited SH-4 causes that `HEDR`
+routes to the hypervisor do **not** get bespoke symbols here: per §4.2's mirror rule they arrive at
+the same offsets from `VBR_HYP` that a kernel already uses from `VBR` (`+0x100`, `+0x400` — one
+vector for all TLB faults — and `+0x600`), so the hypervisor's vector table reuses the ordinary
+`arch/sh` entry shape for those and demultiplexes on `EXPEVT`/`INTEVT`.
+
+**Reconciliation note.** This symbol was previously `jcore_hyp_entry_0x100`, because HCALL was
+delivered at `VBR_HYP + 0x100` with `EXPEVT = 0x180` — the same vector *and* the same code point as
+an inherited SH-4 general illegal instruction, which left the entry with nothing to branch on.
+HCALL now has its own vector `+0x180` and its own `EXPEVT 0x1D0`
+([hardware-spec.md §4.2](hardware-spec.md)), so the symbol is renamed to match the offset, per the
+existing `_0x<offset>` convention.
 
 ### 3.4 Hypercall service table
 

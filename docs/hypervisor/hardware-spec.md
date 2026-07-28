@@ -120,7 +120,7 @@ LDC Rm, HSQCR    : 0100 mmmm 1001 1111   = 0x409F | m<<8
 STC HSQCR, Rn    : 0000 nnnn 1001 1111   = 0x009F | n<<8
 ```
 
-This carves a new control-register family with capacity for up to 16 hyperprivileged control registers (slots 0–15). After allocation of HEMUB, HEMUM, HPAR, HMDR, HMCR, and HSQCR in slots 4–9, **six free slots (10–15) remain** for future hyperprivileged register extensions. All accesses in this family, executed with `SR.HPRIV=0`, raise the **hyperprivileged-register access exception** (`EXPEVT = 0x1A0`, HEDR bit 2, non-delegatable — §2.3.1, §3.4), delivered to the hypervisor. This enforces that only hyperprivileged code can read or write these registers.
+This carves a new control-register family with capacity for up to 16 hyperprivileged control registers (slots 0–15). After allocation of HEMUB, HEMUM, HPAR, HMDR, HMCR, and HSQCR in slots 4–9, **six free slots (10–15) remain** for future hyperprivileged register extensions. All accesses in this family, executed with `SR.HPRIV=0`, raise the **hyperprivileged-register access exception** (`EXPEVT = 0x1F0`, HEDR bit 2, non-delegatable — §2.3.1, §3.4), delivered to the hypervisor. This enforces that only hyperprivileged code can read or write these registers.
 
 The choice of low nibble `0xF` avoids collision with SH-4's existing `0xE` (LDC/STC) and `0xB`/`0xA`/`0x7`/`0x3` (LDC.L/STC.L variants) low nibbles in the 0100 family.
 
@@ -139,24 +139,24 @@ HEDR has 32 bits, each corresponding to an exception cause. The cause-to-bit map
 
 #### 2.3.1 EXPEVT-to-HEDR-bit mapping (normative)
 
-The mapping is dense from the low bits up so a typical hypervisor configuration looks like a small bitmask. SH-4-inherited EXPEVT values are grouped by class; J-Core hyperprivileged-extension causes (`0x180`+) follow.
+The mapping is dense from the low bits up so a typical hypervisor configuration looks like a small bitmask. SH-4-inherited EXPEVT values are grouped by class; J-Core hyperprivileged-extension causes (`0x190`, `0x1B0`–`0x1F0`) follow. The extension causes deliberately avoid every SH-4-inherited code point.
 
 | HEDR bit | EXPEVT     | Cause                                                    | Delegatable? | Vector (from VBR / VBR_HYP) |
 |---------:|------------|----------------------------------------------------------|:------------:|:---------------------------:|
-|    0     | `0x180`    | HCALL instruction                                        | **no**       | `+0x100` |
+|    0     | `0x1D0`    | HCALL instruction                                        | **no**       | `+0x180` |
 |    1     | `0x190`    | Guest LDTLB / LDTLB.RN trap                              | **no**       | `+0x190` |
-|    2     | `0x1A0`    | Hyperprivileged-register access from non-HS mode         | **no**       | `+0x300` |
+|    2     | `0x1F0`    | Hyperprivileged-register access from non-HS mode         | **no**       | `+0x300` |
 |    3     | `0x1B0`    | `EXC_FPU_DISABLED` — SR.FD trap (Tier 2 FPU)             | yes          | `+0x100` |
 |    4     | `0x040`    | TLB miss (read)                                          | yes          | `+0x400` |
-|    5     | `0x060`    | TLB miss (write)                                         | yes          | `+0x420 / 0x440` |
+|    5     | `0x060`    | TLB miss (write)                                         | yes          | `+0x400` |
 |    6     | `0x0A0`    | TLB protection violation (read)                          | yes          | `+0x400` |
-|    7     | `0x0C0`    | TLB protection violation (write)                         | yes          | `+0x420 / 0x440` |
+|    7     | `0x0C0`    | TLB protection violation (write)                         | yes          | `+0x400` |
 |    8     | `0x0E0`    | Address error (read)                                     | yes          | `+0x100` |
 |    9     | `0x100`    | Address error (write)                                    | yes          | `+0x100` |
 |   10     | `0x800`    | FPU exception (non-disable; arithmetic IEEE-754 trap)    | yes          | `+0x100` |
 |   11     | `0x820`    | FPU slot exception (in branch-delay slot)                | yes          | `+0x100` |
-|   12     | `0x180` (Sup. case) | General illegal instruction (non-hyp cause)      | yes          | `+0x100` |
-|   13     | `0x1A0` (Sup. case) | Slot illegal instruction                         | yes          | `+0x100` |
+|   12     | `0x180`    | General illegal instruction (SH-4 meaning, sole user)    | yes          | `+0x100` |
+|   13     | `0x1A0`    | Slot illegal instruction (SH-4 meaning, sole user)       | yes          | `+0x100` |
 |   14     | `0x160`    | Unconditional TRAPA                                      | yes          | `+0x100` |
 |   15     | `0x600`    | External IRL interrupt                                   | yes          | `+0x600` |
 |   16     | `0x620`    | NMI                                                      | yes          | `+0x600` |
@@ -173,8 +173,8 @@ The mapping is dense from the low bits up so a typical hypervisor configuration 
 
 Notes:
 - "Delegatable?" = whether the bit accepts software writes. Hardware ignores writes to non-delegatable bits, which always read 0.
-- Two EXPEVT values appear twice in the table (`0x180` and `0x1A0`) because they overload between the hyperprivileged extension cause (HCALL / hyp-register-from-non-HS) and the pre-existing SH-4 supervisor cause (illegal-instruction). Hardware distinguishes by context: when raised by HCALL or by a hyperprivileged-register access, the cause is non-delegatable (bits 0 and 2); when raised by an ordinary illegal-instruction, the cause is delegatable (bits 12 and 13).
-- The mapping is **stable**: future hardware revisions may add causes in bits 24–31 but MUST NOT reassign bits 0–23.
+- **Every EXPEVT value in this table is unique to one cause.** No code point is overloaded and no cause is "distinguished by context" or by which HEDR bit is set. In particular `0x180` means SH-4 general illegal instruction and only that (bit 12), and `0x1A0` means SH-4 slot illegal instruction and only that (bit 13); the two hypervisor extension causes that formerly squatted on them now use `0x1D0` (HCALL, bit 0) and `0x1F0` (hyperprivileged-register access, bit 2). See the reconciliation note in [§4.2](#42-vector-layout-normative).
+- The mapping is **stable**: future hardware revisions may add causes in bits 24–31 but MUST NOT reassign bits 0–23. **The EXPEVT reassignment described in the note above did not move any HEDR bit.** HCALL is still bit 0 and hyperprivileged-register access is still bit 2, exactly as before; only the EXPEVT *values* those two bits are associated with changed (`0x180` → `0x1D0` and `0x1A0` → `0x1F0`). Software that keys off HEDR bit positions is unaffected.
 - The **Vector** column gives the offset from `VBR` (supervisor delivery) or from `VBR_HYP`
   (hyperprivileged delivery) at which the cause is delivered. They are the same number: §4.2's
   mirror rule states that HS-mode delivery reuses the supervisor offset for every inherited cause,
@@ -298,8 +298,10 @@ Allocated in the `0000 0000 nnnn 1000` family alongside LDTLB (`0x38`), CLRS (`0
 1. Save PC + 2 → HSPC (instruction after HCALL).
 2. Save SR → HSSR.
 3. Set SR.HPRIV = 1, SR.MD = 1, SR.BL = 1, SR.RB = 1.
-4. Set EXPEVT = 0x180 (new value for HCALL trap).
-5. Jump to VBR_HYP + 0x100.
+4. Set EXPEVT = 0x1D0 (the HCALL trap code — unique to HCALL).
+5. Jump to VBR_HYP + 0x180 (HCALL's own dedicated vector).
+
+HCALL has both a dedicated vector (`VBR_HYP + 0x180`) and a dedicated EXPEVT (`0x1D0`). Neither is shared with any other cause, so the hypervisor's HCALL entry point never has to prove that a trap is a hypercall rather than a guest executing a bad opcode — see the reconciliation note in [§4.2](#42-vector-layout-normative).
 
 **Privilege:** HCALL is not privileged — user mode can execute it. The hypervisor decides what to do with hypercalls from user mode (typically: reject, since hypercalls should come from the guest kernel).
 
@@ -342,13 +344,13 @@ The hypervisor's handler reads PTEH (the guest's intended VPN), ASIDR (the guest
 
 ### 3.4 Privileged register access from supervisor mode
 
-When `SR.HPRIV = 0`, attempting to access any hyperprivileged register of the §2.2 family (HSPC, HSSR, VBR_HYP, HEDR, HEMUB, HEMUM, HPAR, HMDR, HMCR, HSQCR) raises the **hyperprivileged-register access exception**: `EXPEVT = 0x1A0`, HEDR bit 2, which is hard-wired non-delegatable (§2.3), so the trap always goes to the hypervisor. It is delivered at **`VBR_HYP + 0x300`** (§4.2) — the dedicated offset for the hyperprivileged-register / sensitive-instruction trap. `linux-spec.md` §3.3 names the entry point `jcore_hyp_entry_0x300`.
+When `SR.HPRIV = 0`, attempting to access any hyperprivileged register of the §2.2 family (HSPC, HSSR, VBR_HYP, HEDR, HEMUB, HEMUM, HPAR, HMDR, HMCR, HSQCR) raises the **hyperprivileged-register access exception**: `EXPEVT = 0x1F0`, HEDR bit 2, which is hard-wired non-delegatable (§2.3), so the trap always goes to the hypervisor. It is delivered at **`VBR_HYP + 0x300`** (§4.2) — the dedicated offset for the hyperprivileged-register / sensitive-instruction trap. `linux-spec.md` §3.3 names the entry point `jcore_hyp_entry_0x300`.
 
-**This section is the canonical description of that mechanism.** It is one exception with one cause code, not a family: §2.2 (LDC/STC encodings) and §2.7 (`HSQCR` writes) both refer here rather than restating it, and §9 verification point 7 checks it by `EXPEVT` value. It shares the SH-4 `0x1A0` code point with the pre-existing slot-illegal-instruction cause (HEDR bit 13, delegatable); the two are distinguished by HEDR bit, as §2.3.1's notes explain, in the same way HCALL's `0x180` is distinguished from general illegal-instruction.
+**This section is the canonical description of that mechanism.** It is one exception with one cause code, not a family: §2.2 (LDC/STC encodings) and §2.7 (`HSQCR` writes) both refer here rather than restating it, and §9 verification point 7 checks it by `EXPEVT` value. `0x1F0` is a code point of its own: it is **not** shared with the SH-4 slot-illegal-instruction cause, which keeps `0x1A0` and its `+0x100` vector exclusively (HEDR bit 13, delegatable). The two causes differ in both vector and EXPEVT, so no context rule or HEDR-bit inspection is needed to tell them apart.
 
 This is the mechanism by which the hypervisor catches a guest that tries to manipulate its own hyperprivileged state.
 
-**Reconciliation note.** An earlier draft gave the hyp-register-access trap as `EXPEVT = 0x180`, conflicting with §2.3.1 (bit 2: 0x1A0) and §4.3. The correct code is `0x1A0`. Note that `0x180` legitimately appears elsewhere: as the HCALL trap code (§2.3.1 bit 0, §4.3) and as the SH-4 supervisor general-illegal-instruction code (§2.3.1 bit 12). Hardware distinguishes these by context, as explained in §2.3.1.
+**Reconciliation note.** Earlier drafts gave the hyp-register-access trap `EXPEVT = 0x180`, then `0x1A0`. Both squatted on SH-4-inherited code points (`0x180` general illegal instruction, `0x1A0` slot illegal instruction) and relied on a "distinguished by HEDR bit / by context" rule. That rule is withdrawn — see the reconciliation note in [§4.2](#42-vector-layout-normative). The trap now uses the unallocated code point `0x1F0`, and `0x1A0` reverts to meaning slot illegal instruction and nothing else.
 
 ## 4. Trap Delivery
 
@@ -386,9 +388,9 @@ on exception(cause):
 ```
 
 **Always-to-hypervisor exceptions:** Regardless of HEDR, certain causes always go to the hypervisor:
-- HCALL (EXPEVT 0x180)
+- HCALL (EXPEVT 0x1D0)
 - Guest LDTLB trap (EXPEVT 0x190)
-- Hyperprivileged register access from non-HS mode
+- Hyperprivileged register access from non-HS mode (EXPEVT 0x1F0)
 - Guest emulated-MMIO access (EXPEVT 0x1E0, §4.5)
 
 These are the exceptions where delegation makes no sense.
@@ -401,8 +403,9 @@ offset from `VBR_HYP`.
 
 **Decision: HS-mode delivery mirrors supervisor-mode delivery for every inherited cause.** A cause
 that is not one of the four Phase-3 extension causes below is delivered to HS mode at *exactly the
-same offset from `VBR_HYP`* that it uses from `VBR` — general exception `+0x100`, TLB miss/protection
-`+0x400`/`+0x420`/`+0x440` by access type, interrupt `+0x600` — and the hypervisor demultiplexes by
+same offset from `VBR_HYP`* that it uses from `VBR` — general exception `+0x100`, **all** TLB
+miss/protection faults `+0x400` (a single vector; see [../mmu/hardware-spec.md §5](../mmu/hardware-spec.md)),
+interrupt `+0x600` — and the hypervisor demultiplexes by
 `EXPEVT` / `INTEVT` exactly as a supervisor kernel already does. The four Phase-3 extension causes
 keep dedicated offsets.
 
@@ -423,9 +426,8 @@ Every offset below has a bound cause, and every cause of §2.3.1 has an offset:
 ```
 Offset  Cause(s) delivered here                              EXPEVT / INTEVT
 ------  ---------------------------------------------------  ---------------
-0x100   HCALL                                        (P3)    0x180
-        general illegal instruction                          0x180 (sup. case)
-        slot illegal instruction                             0x1A0 (sup. case)
+0x100   general illegal instruction                          0x180
+        slot illegal instruction                             0x1A0
         unconditional TRAPA                                  0x160
         address error (read / write)                         0x0E0 / 0x100
         initial page write (dirty trap)                      0x5C0
@@ -433,15 +435,16 @@ Offset  Cause(s) delivered here                              EXPEVT / INTEVT
         FPU exception / FPU slot exception                   0x800 / 0x820
         EXC_FPU_DISABLED                                     0x1B0
         EXC_SIMD_DISABLED                                    0x1C0
+0x180   HCALL                                        (P3)    0x1D0
 0x190   guest LDTLB / LDTLB.RN trap                  (P3)    0x190
 0x200   guest emulated-MMIO trap (aperture, §4.5)    (P3)    0x1E0
-0x300   hyperprivileged-register access from non-HS  (P3)    0x1A0
+0x300   hyperprivileged-register access from non-HS  (P3)    0x1F0
         mode / sensitive-instruction trap (§3.4)
 0x400   TLB miss, instruction fetch                          0x040
+        TLB miss, data load                                  0x060
+        TLB miss, data store                                 0x080
         TLB protection violation, instruction fetch          0x0A0
-0x420   TLB miss, data load                                  0x060
         TLB protection violation, data load                  0x0C0
-0x440   TLB miss, data store                                 0x080
         TLB protection violation, data store                 0x0C0
 0x600   external IRL interrupt                               0x600
         NMI                                                  0x620
@@ -452,7 +455,9 @@ Offset  Cause(s) delivered here                              EXPEVT / INTEVT
         IOMMU fault forwarded as exception                   0x740
 ```
 
-**Note on the TLB `EXPEVT` values above.** The three TLB rows quote the codes of
+**The four Phase-3 extension causes form a contiguous block: `+0x180`, `+0x190`, `+0x200`, `+0x300`.** Each has a dedicated vector *and* a dedicated EXPEVT (`0x1D0`, `0x190`, `0x1E0`, `0x1F0`), none of which collides with any SH-4-inherited code point. Every other cause reaches HS mode through the mirror rule and is demultiplexed by `EXPEVT`/`INTEVT`.
+
+**Note on the TLB `EXPEVT` values above.** The TLB rows quote the codes of
 [../mmu/hardware-spec.md §5](../mmu/hardware-spec.md), which is the authority on TLB fault delivery:
 `0x040`/`0x060`/`0x080` for I-fetch/load/store miss, and `0x0A0` (I-fetch) / `0x0C0` (both data
 directions) for protection violation. §2.3.1 of this document labels its HEDR bits slightly
@@ -461,20 +466,36 @@ differently (bit 4 `0x040` "read", bit 5 `0x060` "write"; bit 6 `0x0A0` "read", 
 which HEDR bit gates which fault, not which vector the fault lands on, and the mirror rule is
 independent of it. It is recorded as an open item in §12.
 
-The `0x400`/`0x420`/`0x440` split by access type is J-Core's supervisor TLB vector layout
-([../mmu/hardware-spec.md §5](../mmu/hardware-spec.md)); the mirror rule carries it over unchanged,
-so the row that earlier drafts called "hyperprivileged TLB miss (`0x400`)" is now simply the
-instruction-fetch member of that family. A hyperprivileged TLB miss — an HS-mode access that misses
-— is delivered at the same three offsets, since HS mode is where `SR.HPRIV = 1` and §4.1's first
-branch applies.
+The single `0x400` TLB vector is J-Core's supervisor TLB vector layout
+([../mmu/hardware-spec.md §5](../mmu/hardware-spec.md)); the mirror rule carries it over unchanged.
+A hyperprivileged TLB miss — an HS-mode access that misses — is delivered at that same offset, since
+HS mode is where `SR.HPRIV = 1` and §4.1's first branch applies.
 
-**`0x100` is deliberately shared between HCALL and the inherited general exceptions.** This is not a
-collision bug. `HCALL` raises `EXPEVT = 0x180`, which is the same code point the SH-4 general
-illegal-instruction cause uses, and both are delivered at `+0x100` — exactly as stock SH-4 already
-delivers many distinct causes at `VBR + 0x100` and expects the handler to read `EXPEVT`. The
-hypervisor's `0x100` entry point reads `EXPEVT`, and distinguishes HCALL from illegal-instruction by
-the same context rule §2.3.1's notes give for the `HEDR` bit-0-versus-bit-12 split. `linux-spec.md`
-§3.3 names that entry `jcore_hyp_entry_0x100` for this reason.
+**Reconciliation note.** Earlier revisions of this specification gave `HCALL` `EXPEVT = 0x180` and
+delivered it at `VBR_HYP + 0x100`, and gave the hyperprivileged-register access trap `EXPEVT = 0x1A0`
+at `VBR_HYP + 0x300`. Both values squatted on SH-4-inherited code points (`0x180` general illegal
+instruction, `0x1A0` slot illegal instruction), and the spec claimed hardware "distinguishes them by
+context" or by which `HEDR` bit is set. **That rationale was wrong and is withdrawn.** `HEDR` is a
+delegation-policy register the hypervisor writes; it is not exception status, so a handler cannot
+read it to learn which cause fired. Under the mirror rule, HCALL therefore arrived at `+0x100` with
+`EXPEVT = 0x180` — bit-identical to a guest executing a bad opcode arriving at `+0x100` with
+`EXPEVT = 0x180`. The two need opposite handling (service the hypercall vs reflect an illegal-instruction
+fault into the guest), and no architectural state distinguished them. The merge of the three TLB
+vectors into one (Group D, [../mmu/hardware-spec.md §5](../mmu/hardware-spec.md)) removed the last
+slack in the layout and made the collision unrecoverable rather than merely awkward.
+
+**Decision:** HCALL moves to its own vector `VBR_HYP + 0x180` with `EXPEVT = 0x1D0`, and the
+hyperprivileged-register access trap keeps `VBR_HYP + 0x300` but moves to `EXPEVT = 0x1F0`. `0x180`
+and `0x1A0` revert to their stock SH-4 meanings and nothing else. **Rationale:** `0x1D0` and `0x1F0`
+were the two unallocated code points in the `0x1x0` extension range (`0x1B0` is `EXC_FPU_DISABLED`,
+`0x1C0` is `EXC_SIMD_DISABLED`, `0x1E0` is emulated-MMIO), so the fix costs no renumbering of anything
+already assigned. Giving a distinct cause a distinct vector *and* a distinct cause code is stock SH-4
+practice — SH-4 gives `TRAPA`, illegal instruction and slot illegal instruction separate `EXPEVT`
+values precisely so a shared vector's handler can dispatch (Renesas/Hitachi SH-4 hardware manual,
+1998). A unique vector with an ambiguous `EXPEVT` would have been a half-fix: the vector alone cannot
+survive a future hypervisor that consolidates entry points. `HEDR` bit positions are unchanged
+(§2.3.1). `linux-spec.md` §3.3 renames the entry symbol `jcore_hyp_entry_0x100` to
+`jcore_hyp_entry_0x180` accordingly.
 
 **The former `0x500` "external interrupt" row is withdrawn**; interrupts are delivered at `+0x600`,
 per the mirror rule and SH-4's own interrupt vector. The former separate `0x600` "IPI" row folds
@@ -485,7 +506,7 @@ These offsets are fixed by this specification and are relied on throughout: §3.
 note pins the guest LDTLB trap at `VBR_HYP + 0x190` (correcting an earlier draft's `0x300`), §3.4
 and §5 pin the hyperprivileged-register access trap at `VBR_HYP + 0x300`, §4.5 pins the
 emulated-MMIO trap at `VBR_HYP + 0x200`, [linux-spec.md §3.3](linux-spec.md) names its entry symbols
-`jcore_hyp_entry_0x100` / `_0x190` / `_0x200` / `_0x300` after these numbers, and §9's verification
+`jcore_hyp_entry_0x180` / `_0x190` / `_0x200` / `_0x300` after these numbers, and §9's verification
 points 2, 4, 10, 17 and 18 check them by value. An earlier draft of this section called the offsets
 "illustrative" and left them to the implementer; that disclaimer is withdrawn — it was inconsistent
 with every other use of the table, and a hypervisor binary cannot be portable across implementations
@@ -503,14 +524,16 @@ The hyperprivileged-mode extension adds five new EXPEVT codes on top of the exis
 
 | Code  | Cause                                                          | HEDR bit | Delegatable? |
 |-------|----------------------------------------------------------------|---------:|:------------:|
-| 0x180 | HCALL instruction (new)                                        | 0        | no           |
 | 0x190 | Guest LDTLB/LDTLB.RN trap (new)                                | 1        | no           |
-| 0x1A0 | Hyperprivileged register access from non-HS mode (new)         | 2        | no           |
 | 0x1B0 | `EXC_FPU_DISABLED` — SR.FD trap (Tier 2 FPU, new)              | 3        | yes          |
 | 0x1C0 | `EXC_SIMD_DISABLED` — SR.VD trap (Tier 2 SIMD, new)            | 24       | yes          |
+| 0x1D0 | HCALL instruction (new)                                        | 0        | no           |
 | 0x1E0 | Guest emulated-MMIO access (aperture, new, §4.5)               | 25       | no           |
+| 0x1F0 | Hyperprivileged register access from non-HS mode (new)         | 2        | no           |
 
-Each of these is delivered at a vector given by §4.2: `0x180` HCALL at `VBR_HYP + 0x100`, `0x190` at `+0x190`, `0x1A0` (hyp-register access) at `+0x300`, `0x1B0` and `0x1C0` at `+0x100` (they are general exceptions), `0x1E0` at `+0x200`. The full cause-to-vector column for every cause, inherited ones included, is in [§2.3.1](#231-expevt-to-hedr-bit-mapping-normative).
+None of these codes is an SH-4-inherited value; in particular `0x180` (general illegal instruction) and `0x1A0` (slot illegal instruction) are **not** in this table and retain their stock SH-4 meanings only.
+
+Each of these is delivered at a vector given by §4.2: `0x190` at `+0x190`, `0x1B0` and `0x1C0` at `+0x100` (they are general exceptions), `0x1D0` (HCALL) at `+0x180`, `0x1E0` at `+0x200`, `0x1F0` (hyp-register access) at `+0x300`. The full cause-to-vector column for every cause, inherited ones included, is in [§2.3.1](#231-expevt-to-hedr-bit-mapping-normative).
 
 Existing SH-4 EXPEVT codes (`0x040`–`0x130`, `0x500`–`0x740`) retain their meanings; their HEDR-bit assignments are in §2.3.1.
 
@@ -777,8 +800,8 @@ The 32-byte store-queue burst triggered by PREF (§4.4.3, ../sq/spec.md §4):
 
 **Decision:** any *other* access that resolves to a physical address inside the aperture is an
 **unrepresentable aperture access**. Hardware does **not** raise the emulated-MMIO trap for it.
-It raises the general illegal-instruction / reserved-instruction path instead (EXPEVT `0x180`
-supervisor case, HEDR bit 12), which is delegatable and therefore lands wherever the guest's own
+It raises the general illegal-instruction / reserved-instruction path instead (EXPEVT `0x180`,
+HEDR bit 12), which is delegatable and therefore lands wherever the guest's own
 illegal-instruction handling is configured to land. Concretely, the unrepresentable classes are:
 
 - read-modify-write accesses: `TAS.B @Rn` (reads, sets bit 7, writes back, and also writes `T`);
@@ -827,7 +850,7 @@ Operations that are valid only when SR.HPRIV=1:
 3. **LDTLB / LDTLB.RN** without trapping (in supervisor mode, these trap; in hyperprivileged mode, they execute).
 4. **Setting SR.HPRIV via LDC** — only possible to clear it (transitioning down via HRTE), never to set it directly; setting requires hyperprivileged-mode trap entry.
 
-Attempts to execute hyperprivileged-only operations outside SR.HPRIV=1 raise the hyperprivileged-register access exception of §3.4 (`EXPEVT = 0x1A0`, HEDR bit 2), delivered at `VBR_HYP + 0x300` (§4.2), which always delivers to the hypervisor and is not delegatable.
+Attempts to execute hyperprivileged-only operations outside SR.HPRIV=1 raise the hyperprivileged-register access exception of §3.4 (`EXPEVT = 0x1F0`, HEDR bit 2), delivered at `VBR_HYP + 0x300` (§4.2), which always delivers to the hypervisor and is not delegatable.
 
 ## 6. Reset State
 
@@ -877,10 +900,10 @@ Critical RTL verification:
 1. **SR.HPRIV behavior:** Bit can be set only by hyp-trap entry; cannot be set by LDC from S or U mode.
 2. **LDTLB trap from S mode:** When HPRIV=0 and MD=1, LDTLB traps to VBR_HYP+0x190 with correct HSPC/HSSR/EXPEVT.
 3. **LDTLB direct from HS mode:** When HPRIV=1, LDTLB executes normally (no trap).
-4. **HCALL from any mode:** Traps to VBR_HYP+0x100 regardless of HPRIV. Behaviour of `HCALL` executed at HPRIV=1 is implementer-defined per §3.1 (no-op or illegal-instruction trap); verify whichever the implementation documents.
+4. **HCALL from any mode:** Traps to VBR_HYP+0x180 with `EXPEVT = 0x1D0`, regardless of HPRIV. Behaviour of `HCALL` executed at HPRIV=1 is implementer-defined per §3.1 (no-op or illegal-instruction trap); verify whichever the implementation documents.
 5. **HRTE:** Correctly restores SR (including HPRIV bit) and PC.
 6. **HEDR delegation:** Exceptions with HEDR[cause]=1 deliver to VBR (S-mode); with HEDR[cause]=0 deliver to VBR_HYP (HS-mode). Always-to-hyp exceptions ignore HEDR.
-7. **Hyperprivileged register protection:** Access to any §2.2 hyperprivileged register (HSPC, HSSR, VBR_HYP, HEDR, HEMUB, HEMUM, HPAR, HMDR, HMCR, HSQCR) from S or U mode raises the hyperprivileged-register access exception with `EXPEVT = 0x1A0`, delivered to the hypervisor regardless of HEDR (bit 2 is non-delegatable).
+7. **Hyperprivileged register protection:** Access to any §2.2 hyperprivileged register (HSPC, HSSR, VBR_HYP, HEDR, HEMUB, HEMUM, HPAR, HMDR, HMCR, HSQCR) from S or U mode raises the hyperprivileged-register access exception with `EXPEVT = 0x1F0`, delivered to the hypervisor regardless of HEDR (bit 2 is non-delegatable).
 8. **Backward compatibility:** With HPRIV never set (Phase 1 binary), all behavior matches Phase 1 exactly.
 9. **Vector dispatch:** Correct offset selected based on EXPEVT and delivery destination.
 10. **Emulated-MMIO trap on aperture match:** A guest access (`MMUCR.AT = 0` bare-metal or `MMUCR.AT = 1`) whose translated PA satisfies `(PA & HEMUM) == HEMUB` traps to `VBR_HYP + 0x200` with `EXPEVT = 0x1E0`, `HPAR` holding the faulting **physical** address (bit-identical to the PA presented to the aperture comparator), and `HMCR` correctly capturing `{SQ, DIR, SIZE, BANK, REGN}` for every access in the **representable set of §4.6** — that is, for each addressing mode (`@Rn`, `@Rn+`/`@-Rn`, `@(disp,Rn)`, `@(R0,Rn)`, `@(disp,GBR)`) and each access width (byte, word, longword) of the plain `MOV.{B,W,L}` load and store family, and for the 32-byte store-queue burst. Accesses outside that set are covered by verification point 16 instead. A translated PA one byte outside the aperture on either boundary does not trap and reaches the bus normally.
@@ -897,14 +920,23 @@ Critical RTL verification:
     guest at `VBR` and the hypervisor is not entered. Fail-closed behaviour (no bus access, no
     aperture register capture) must hold identically in both.
 
+19. **HCALL and general illegal instruction are distinguishable on both axes (§3.1, §4.2):** a guest
+    `HCALL` and a guest general-illegal-instruction, taken under otherwise identical conditions,
+    must differ in **both** the delivered vector and `EXPEVT`. The `HCALL` lands at
+    `VBR_HYP + 0x180` with `EXPEVT = 0x1D0`; the illegal instruction lands at `+0x100` (or at
+    `VBR + 0x100` if `HEDR` bit 12 is set) with `EXPEVT = 0x180`. Neither value nor offset may be
+    shared. Check the same pairing for a hyperprivileged-register access (`+0x300` / `0x1F0`)
+    against a slot illegal instruction (`+0x100` / `0x1A0`). This is a regression guard against the
+    collision described in §4.2's reconciliation note.
+
 17. **Hyp-register-access trap vector (§3.4, §4.2):** an access to any §2.2 hyperprivileged register
     executed in supervisor mode (`SR.MD = 1`, `SR.HPRIV = 0`) lands at `VBR_HYP + 0x300` with
-    `EXPEVT = 0x1A0`, `HSPC`/`HSSR` correctly captured, and does so regardless of `HEDR` bit 2 or
+    `EXPEVT = 0x1F0`, `HSPC`/`HSSR` correctly captured, and does so regardless of `HEDR` bit 2 or
     bit 13. Check the same from user mode. This offset previously had no bound cause; verifying it
     by value is what keeps `0x300` from drifting back into being a placeholder.
 18. **Inherited cause delegated to HS mode arrives at its mirrored offset (§4.2):** for a
     representative inherited cause of each vector class — a `TRAPA` (`EXPEVT 0x160`, `+0x100`), a
-    data-load TLB miss (`+0x420`), and an external IRL interrupt (`INTEVT 0x600`, `+0x600`) — taken
+    data-load TLB miss (`EXPEVT 0x060`, `+0x400` — the single TLB vector), and an external IRL interrupt (`INTEVT 0x600`, `+0x600`) — taken
     while a guest is running with the corresponding `HEDR` bit **clear**, the trap is delivered at
     `VBR_HYP` **plus the same offset the supervisor path uses from `VBR`**, not at any dedicated
     hypervisor offset. Then set the `HEDR` bit and confirm the identical cause arrives at
