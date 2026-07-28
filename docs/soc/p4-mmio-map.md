@@ -83,6 +83,8 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 
 | Offset      | Register   | Description                          |
 |-------------|------------|--------------------------------------|
+| `0x000`     | reserved   | freed — see "Registers with no P4 address" below |
+| `0x004`     | reserved   | freed — see "Registers with no P4 address" below |
 | `0x008`     | TTB        | Translation table base (software)     |
 | `0x00C`     | TEA        | TLB exception address                 |
 | `0x010`     | MMUCR      | MMU control                           |
