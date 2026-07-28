@@ -32,7 +32,7 @@ Conventions:
 
 ### 2.1 PTEH — Page Table Entry High
 
-Inherited from SH-4 in spirit, but **VPN-only** in this revision. Accessed via `LDC Rm, PTEH` / `STC PTEH, Rn` (see §3.1) — LDC/STC only, no MMIO alias (`datapath.vhm:970`). The 16-bit `ASID_TAG` lives in the separate **ASIDR** register (see §2.1a) — a deliberate alignment with UltraSPARC's `PRIMARY_CONTEXT` model (sun4u, 1995). This decoupling lets J-Core support the full SH-4-plus-PageMask page-size set down to **4 KB** without sacrificing ASID width.
+Inherited from SH-4 in spirit, but **VPN-only** in this revision. Accessed via `LDC Rm, PTEH` / `STC PTEH, Rn` (see §3.1) — LDC/STC only, no MMIO alias (decoder comment `datapath.vhm:1141-1147`; LDC write path `datapath.vhm:1335-1342`, whose `others` arm reads `-- SEL_MMUCR/TTB/TEA handled via P4 MMIO`). The 16-bit `ASID_TAG` lives in the separate **ASIDR** register (see §2.1a) — a deliberate alignment with UltraSPARC's `PRIMARY_CONTEXT` model (sun4u, 1995). This decoupling lets J-Core support the full SH-4-plus-PageMask page-size set down to **4 KB** without sacrificing ASID width.
 
 **J32 layout (32 bits):**
 ```
@@ -57,7 +57,7 @@ The PTEH layout no longer carries ASID bits. SH-4 binary compatibility is preser
 
 ### 2.1a ASIDR — Address Space Identifier Register
 
-New in this revision. Holds the 16-bit `ASID_TAG` that hardware compares on every TLB lookup. Accessed via `LDC Rm, ASIDR` / `STC ASIDR, Rn` (new LDC/STC encoding — see §3) — LDC/STC only, no MMIO alias (`datapath.vhm:970`).
+New in this revision. Holds the 16-bit `ASID_TAG` that hardware compares on every TLB lookup. Accessed via `LDC Rm, ASIDR` / `STC ASIDR, Rn` (new LDC/STC encoding — see §3) — LDC/STC only, no MMIO alias (decoder comment `datapath.vhm:1141-1147`; LDC write path `datapath.vhm:1335-1342`, whose `others` arm reads `-- SEL_MMUCR/TTB/TEA handled via P4 MMIO`).
 
 **J32 layout (32 bits):**
 ```
