@@ -91,25 +91,27 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 | `0x014`     | TSBBR      | TSB base register                     |
 | `0x018`     | TSBCFG     | TSB configuration                     |
 | `0x01C`     | TSBPTR     | TSB pointer (read-only)               |
-| `0x020`     | TRA        | TRAPA immediate — stock SH-4 placement; **allocated, NOT implemented in current RTL** |
-| `0x024`     | EXPEVT     | Exception event code — stock SH-4 placement; **allocated, NOT implemented in current RTL** |
-| `0x028`     | INTEVT     | Interrupt event code — stock SH-4 placement; **allocated, NOT implemented in current RTL** |
-| `0x02C`     | CPUINFO    | Per-CPU hart ID + capability flags — **allocated, NOT implemented in current RTL** (see note below) |
-| `0x030`–`0x038` | reserved | future registers                              |
+| `0x020`     | TRA        | TRAPA immediate — stock SH-4 placement; **decoded in RTL** (also `STC TRA,Rn`) |
+| `0x024`     | EXPEVT     | Exception event code — stock SH-4 placement; **decoded in RTL**, read-only (also `STC EXPEVT,Rn`) |
+| `0x028`     | INTEVT     | Interrupt event code — stock SH-4 placement; **decoded in RTL**, read-only (also `STC INTEVT,Rn`) |
+| `0x02C`     | MMUFSR     | Fault-status snapshot, read-only; **decoded in RTL** (see [mmu/hardware-spec.md §2.11](../mmu/hardware-spec.md)) |
+| `0x030`     | CPUINFO    | Per-CPU hart ID + capability flags — **allocated, NOT implemented in current RTL** (see note below) |
+| `0x034`–`0x038` | reserved | future registers                              |
 | `0x03C`     | QACR0      | Store-queue 0 area register (`0xFF00003C`), see [../sq/spec.md §3](../sq/spec.md) |
 | `0x040`     | QACR1      | Store-queue 1 area register (`0xFF000040`), see [../sq/spec.md §3](../sq/spec.md) |
 | `0x044`–`0xFFC` | reserved | future registers                                  |
 
 **Decision: `0x020`/`0x024`/`0x028` are TRA / EXPEVT / INTEVT.** This closes the three-way
-conflict formerly recorded as §7 open question 4, and CPUINFO moves from `0x020` to `0x02C`.
+conflict formerly recorded as §7 open question 4. CPUINFO moves from `0x020` to `0x030`, and
+MMUFSR takes `0x02C` — it had been specified at `0x028`, i.e. on top of INTEVT.
 
 **Rationale:** these three offsets are the stock SH-4 architectural placement of TRA, EXPEVT and
 INTEVT (SH-4 hardware manual, Renesas/Hitachi, 1998 — pre-2006). Matching the architecture *is* the
 rationale: it is what an SH-4-aware kernel, debugger and simulator already assume, and it is what
 Linux `arch/sh/include/cpu-jcore/cpu/mmu_context.h` already defines (`TRA 0xff000020`,
 `EXPEVT 0xff000024`, `INTEVT 0xff000028`). Nothing is displaced by adopting it: the RTL
-(`jcore-cpu/core/datapath.vhm:1136-1155`) decodes none of `0x020`/`0x024`/`0x028`, so there is no
-implemented register to move; `0x024` was freed when ASIDR was removed from MMIO (below); and
+(`jcore-cpu/core/datapath.vhm`) decoded none of `0x020`/`0x024`/`0x028` when this was decided, so
+there was no implemented register to move — and it decodes all three at those addresses now; `0x024` was freed when ASIDR was removed from MMIO (below); and
 CPUINFO at `0x020` was a paper allocation only — there are zero occurrences of `cpuinfo` in any
 `jcore-cpu` or `jcore-soc` source. Moving a never-implemented allocation costs nothing, while
 diverging from SH-4 would cost every future port.
@@ -118,8 +120,8 @@ diverging from SH-4 would cost every future port.
 relocate EXPEVT/INTEVT/TRA to `0x028`/`0x02C`/`0x030`. That proposal existed solely to dodge
 CPUINFO at `0x020` and ASIDR at `0x024`. ASIDR has since been removed from MMIO entirely (it is
 LDC/STC-only), and CPUINFO has moved here, so the reason for the relocation has dissolved. The
-relocated addresses `0x028`/`0x02C`/`0x030` are **not** allocated to those registers; do not use
-them.
+relocated addresses are **not** allocated to those registers; `0x02C` is MMUFSR and `0x030` is
+CPUINFO. Do not use them for the cause registers.
 
 **CPUINFO overlaps `jcore,cpuid-mmio` — a future implementer must pick one.** CPUINFO's `HART_ID`
 field ([mmu/hardware-spec.md §2.9](../mmu/hardware-spec.md)) duplicates a facility jcore-soc already
@@ -156,12 +158,13 @@ the decoder's `when others => null` arm (`datapath.vhm:1174`) and are discarded;
 `m_en` still asserted so the access completes normally from the pipeline's point of view. Software
 that uses a phantom P4 address therefore observes a register that is permanently zero and never
 faults — a failure mode that is easy to mistake for "the feature is disabled". Any address in this
-sub-block marked *reserved*, or marked *allocated but not implemented* (TRA `0x020`, EXPEVT `0x024`,
-INTEVT `0x028`, CPUINFO `0x02C`), behaves this way today. There are zero occurrences of `cpuinfo` in
+sub-block marked *reserved*, or marked *allocated but not implemented* (CPUINFO `0x030`), behaves
+this way today. TRA/EXPEVT/INTEVT and MMUFSR are no longer in that category — the RTL decodes all
+four. There are zero occurrences of `cpuinfo` in
 any `.vhd`/`.vhm` source; its allocation is a valid reservation, but reading it returns zero rather
 than a hart ID. The same holds for the Linux `TRA`/`EXPEVT`/`INTEVT` defines: they now name the
 correct architectural addresses, but until `datapath.vhm` decodes them a kernel reading them through
-MMIO reads a constant zero.
+MMIO now reads the real register.
 
 ### 3.3 SoC-wide control (`0xFF00F000`–`0xFF00FFFF`)
 

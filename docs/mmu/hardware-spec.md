@@ -257,6 +257,57 @@ Present only when the core is built for **wide physical addressing** (PAE; [desi
 
 **Prior art (pre-2006).** A dedicated register holding the *high* physical-address bits of a wide-physical translation is the **PowerPC Book E `MAS7`** register (Freescale e500v2, ~2004), which extends the e500's real address from 32 to 36 bits exactly as `PTEU` extends J32's from 32 to 40. The broader 64-bit-PTE wide-physical paging technique is Intel x86 **PAE** (Pentium Pro, 1995); a 32-bit-virtual → 36-bit-physical software-managed MMU is the **SPARC V8 SRMMU** (sun4m, 1992); and the narrow-virtual / wide-physical concept itself dates to the **DEC PDP-11/70** (1975). See [design-spec.md §3.8](design-spec.md) for the full lineage.
 
+### 2.11 MMUFSR — MMU Fault-Status Register (NEW, read-only)
+
+Read-only MMIO register at `0xFF000028`, latched on every TLB exception (I-fetch or D-access, miss or protection, and multi-hit). Writes are silently ignored. Exists to resolve a real ambiguity in the `EXPEVT`-based fault model: DPROT_R (data-load protection violation) and DPROT_W (data-store protection violation) both raise `EXPEVT = 0x0C0` through the single shared vector `VBR + 0x400` (see §5), so a page-fault handler reading only `EXPEVT` cannot tell a write fault from a read fault. This matters for kernels implementing copy-on-write: misclassifying a write-protect fault as read-protect can livelock the fault handler (it never triggers the CoW break-and-retry path). MMUFSR gives software a second, independent signal to disambiguate. It is purely a software convenience register — it duplicates state the TLB already computes internally for the miss/protection decision — and does not change `EXPEVT`, the vector layout, or any decoder/opcode encoding.
+
+**Layout (32 bits, low byte matters, upper bits read as zero except bit 12):**
+```
+[31:13]  reserved (0)
+[12]     VALID    1 = MMUFSR holds a fault snapshot (set on every TLB exception
+                  capture; there is no way to observe MMUFSR before the first
+                  TLB exception other than at cold reset, where it reads 0).
+[11:8]   KIND      Fault kind (see table below).
+[7:5]    reserved (read-as-zero). Linux's fault handler derives an SH-style
+                  error_code with a bare `extu.b` on this register, so these
+                  bits MUST read zero unconditionally -- never repurpose them
+                  without also updating that extraction path.
+[4]      USER      1 if the faulting access was made in user mode (SR.MD=0
+                  at the moment of the fault), 0 if supervisor. Sampled at
+                  fault-capture time, not from SSR (which is not yet written
+                  when the capture logic runs). Left 0 for MULTI_HIT (KIND=7)
+                  -- see below.
+[3]      PROT      1 if the fault was a protection violation (IPROT/DPROT_R/
+                  DPROT_W), 0 if it was a miss (IMISS/DMISS_R/DMISS_W). Read
+                  as 0 and not meaningful for MULTI_HIT.
+[2]      ITLB      1 if the fault was on the instruction side (IMISS/IPROT),
+                  0 if on the data side. Read as 0 and not meaningful for
+                  MULTI_HIT.
+[1]      INITIAL   Always 0. Reserved for a possible future distinction
+                  (e.g. "first touch" vs. "re-fault"); no current hardware
+                  path sets it.
+[0]      WRITE     1 if the faulting access was a store (DMISS_W/DPROT_W),
+                  0 for a load or instruction fetch. Read as 0 and not
+                  meaningful for MULTI_HIT.
+```
+
+**KIND encoding:**
+
+| KIND | Fault |
+|------|-------|
+| 0 | none (no TLB exception has been captured since reset) |
+| 1 | IMISS — instruction-fetch TLB miss |
+| 2 | DMISS_R — data-load TLB miss |
+| 3 | DMISS_W — data-store TLB miss |
+| 4 | IPROT — instruction-fetch protection violation |
+| 5 | DPROT_R — data-load protection violation |
+| 6 | DPROT_W — data-store protection violation |
+| 7 | MULTI_HIT — multiple TLB entries matched (see §2.6/§4.5) |
+
+**MULTI_HIT is a special case.** When KIND=7, the entire low byte (`[7:0]`, including USER at bit 4) reads 0 — only `VALID` (bit 12) and `KIND` (bits `[11:8]`) are meaningful. This mirrors the fact that a multi-hit is a configuration error detected during TLB lookup, before the normal miss/protection classification (direction, privilege) has been computed for a specific access.
+
+**Relationship to EXPEVT (§5).** MMUFSR is latched by the same fault-capture logic that latches `TEA`/`PTEH`/`SPC`/`SSR` on a TLB exception (§5 steps 2-4), so by the time the handler is entered at `VBR + 0x400`, `STC EXPEVT, Rn` and a read of `0xFF000028` are both immediately valid and describe the same fault. A handler that needs to distinguish DPROT_R from DPROT_W reads `EXPEVT` first (both cheap and sufficient to route to the generic MMU-fault path) and then reads MMUFSR only when it needs the WRITE bit — e.g. to select the CoW-break-and-retry path from the generic-protection-fault path.
+
 ## 3. Instruction Encodings
 
 The SH ISA reserves the LDC/STC family for control register transfers via the pattern:
@@ -426,7 +477,7 @@ Exception priorities and ordering relative to other interrupts follow SH-4 conve
 
 **One vector, six causes.** Every row above vectors to `VBR + 0x400`. `EXPEVT` is the only discriminator, and software must read it to classify the fault.
 
-**Known limitation — protection-fault direction is not recoverable.** DPROT_R and DPROT_W both write EXPEVT `0x0C0`. With a single TLB vector there is no second axis left, so on a protection fault **software cannot determine whether the faulting access was a read or a write from architectural state.** An earlier revision recovered the direction from the vector offset (`0x420` vs `0x440`); that information is gone. Software that needs the direction (e.g. to distinguish a write-to-read-only page from a read-of-no-read page when reporting `SIGSEGV`) must re-decode the faulting instruction at `SPC`, which is unambiguous because the D-side `SPC` is the faulting instruction's own restart PC. This is a deliberate accepted cost, not an oversight.
+**Protection-fault direction — recovered via MMUFSR.** DPROT_R and DPROT_W both write EXPEVT `0x0C0`, so with one TLB vector `EXPEVT` alone cannot say whether the faulting access was a read or a write. An earlier revision recovered that from the vector offset (`0x420` vs `0x440`); merging the vectors removed it. Rather than leave software to re-decode the instruction at `SPC`, **MMUFSR** (§2.11, MMIO `0xFF00002C`) supplies the direction directly: it is latched on every TLB exception and carries an explicit `WRITE` bit, so a handler recovers read-vs-write regardless of the vector-dispatch strategy in use. This matters most for copy-on-write, where misclassifying a write-protect fault as a read fault livelocks the fault handler.
 
 **MULTI_HIT is delivered out-of-band.** A multiple-TLB-match (S-I5, `tlb.vhd` `i_multihit`/`d_multihit`) does **not** use the TLB vector. It is routed to the existing General Illegal register-model exception: `PC <- VBR + 0x100`, `EXPEVT <- 0x180`. **Rationale:** the decoder's system-plane immediate-value field (ROM imm-value selector, 5 bits) is at capacity — 32 of 32 distinct constants are used — so minting a dedicated MULTI_HIT vector/EXPEVT pair would require widening the field to 6 bits and regenerating the ROM template (guarded by `romImmFieldBits` in the decoder generator). Reusing General Illegal costs zero new immediate literals and zero new opcodes. Software distinguishes a multi-hit from a real illegal instruction with the sticky multi-hit status flag, not with EXPEVT.
 
