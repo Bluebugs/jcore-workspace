@@ -355,7 +355,6 @@ The choice between an in-core `LDC`/`STC` register and an uncached-MMIO register
 | `STC TSBPTR, Rn` (read-only)      | `0000 nnnn 0100 1011` | `0x004B` |
 | `CMP/EQ PTEH, Rn`                 | `0000 nnnn 1100 1011` | `0x00CB` |
 | `CMP/EQ ASIDR, Rn`                | `0000 nnnn 1101 1011` | `0x00DB` |
-| `CMP/MISS EXPEVT`                 | `0000 0000 1110 1011` | `0x00EB` |
 | `LDTLB.RN Rm`                     | `0000 mmmm 1111 1011` | `0x00FB` |
 
 `TSBPTR` is read-only: it is hardware-computed on every TLB miss (§2.8) and has **no** `LDC` encoding (decoding one raises illegal-instruction).
@@ -368,7 +367,7 @@ The choice between an in-core `LDC`/`STC` register and an uncached-MMIO register
 | `STC ASIDR, Rn` `0x0073` | SH-4A `movco.l R0,@Rn` — the **SC** of LL/SC |
 | `CMP/EQ PTEH, Rn` `0x00D3` | SH-4/SH-4A `prefi @Rn` |
 
-`0000 nnnn xxxx 0011` has only two slots left that are clean against the target set, so the whole read side moved to `0000 nnnn xxxx 1011`, which had seven — enough for all six plus `CMP/MISS`, and it already hosted `LDTLB.RN Rm`. That block is now **full**; the next reserve for J4-only `0000 nnnn`-shaped instructions is `0000 nnnn xxxx 1000` (8 virgin slots). Re-check with:
+`0000 nnnn xxxx 0011` has only two slots left that are clean against the target set, so the whole read side moved to `0000 nnnn xxxx 1011`, which had seven, and it already hosted `LDTLB.RN Rm`. Six are used; `1110` is free again since `CMP/MISS EXPEVT` was withdrawn (§3.2a). The next reserve for J4-only `0000 nnnn`-shaped instructions is `0000 nnnn xxxx 1000` (8 virgin slots). Re-check with:
 
 ```
 go run ./cmd/cpugen freespace --avoid j2,sh2a,sh4,sh4a,dsp \
@@ -406,32 +405,50 @@ New single-cycle instruction that fuses LDTLB and RTE. Equivalent to executing L
 
 The existing LDTLB (encoding `0x0038`) is preserved for compatibility; the only difference is LDTLB.RN also returns.
 
-### 3.2a CMP/MISS EXPEVT — fused fault-class test
+### 3.2a Fault-class separation: why there is no CMP/MISS instruction
 
-**Encoding:** `0000 0000 1110 1011` = `0x00EB`. **Privileged.**
+A note for anyone who finds `CMP/MISS EXPEVT` referenced in older material: it
+existed, briefly, and was withdrawn. The history is worth keeping because the
+tempting fix was the wrong one.
 
-**Semantics:** `T := (EXPEVT <= 0x080)`, i.e. `T=1` iff the latched exception is a TLB **miss** and `T=0` iff it is a **protection** fault. No register operand; no register is written.
+All six TLB causes originally shared the vector `VBR + 0x400`. A **protection**
+fault against a VPN/ASID that still has a valid TSB entry therefore TSB-hits on
+the miss fast path; reinstalling that entry and retrying livelocks, because
+`do_page_fault()` is never reached to fix the pte up. The handler consequently
+had to separate miss from protection on **every TSB hit** -- the hottest path in
+the kernel -- first as three instructions
+(`stc expevt,rN` / `add #-128,rN` / `cmp/pl rN`), then as a purpose-built fused
+instruction, `CMP/MISS EXPEVT`.
 
-**Why it exists.** All six TLB causes share the single vector `VBR + 0x400` (§5). A *protection* fault against a VPN/ASID that still has a valid TSB slot therefore TSB-hits on the miss fast path; reinstalling that entry and retrying livelocks, because `do_page_fault()` is never reached to fix the pte up. The handler must consequently separate miss from protection on **every TSB hit** — the hottest path in the kernel. In plain SH that costs three instructions and a scratch register:
+Both were treating a symptom. **SH-4 does not merge these vectors** (SH7750
+hardware manual Rev 2.0, 02/99, exception table):
 
-```asm
-        stc     expevt, r2      ! r2 = EXPEVT
-        add     #-128, r2       ! (mov #0x80 would sign-extend to 0xFFFFFF80)
-        cmp/pl  r2              ! T = EXPEVT > 0x80  ->  protection fault
-```
+| Exception | Vector |
+|---|---|
+| Instruction TLB miss | `VBR + H'400` |
+| Data TLB miss (read / write) | `VBR + H'400` |
+| Instruction TLB protection | `VBR + H'100` |
+| Data TLB protection (read / write) | `VBR + H'100` |
 
-`CMP/MISS EXPEVT` collapses all three into one and frees the scratch register.
+J4 now matches that. Protection faults vector to `VBR + 0x100`, the general
+exception vector, alongside Error / Slot Illegal / General Illegal / TRAPA.
+The fast path needs no fault-class test at all, so it dropped from 11
+instructions to 9, and `CMP/MISS EXPEVT` lost its only caller and was removed
+rather than left as dead ISA surface -- its encoding (`0x00EB`) is back in the
+free pool. Measured effect: a TSB-hit miss went from 27 to 25 cycles (D-side)
+and 26 to 24 (I-side), *and* the livelock class is now excluded by
+construction instead of by a software check.
 
-**Sense is inverted** relative to that sequence — `T=1` means *miss*, so the handler branches with `BF`, not `BT`. That inversion is what makes the instruction free in hardware: `ybus` already has `SEL_EXPEVT` and `xbus` already reaches `buses.imm_val`, but `xbus` has **no** `SEL_EXPEVT` input, so `EXPEVT` must be the right-hand operand and `CMP/HS`-shaped microcode computes `xbus >= ybus`, i.e. `128 >= EXPEVT`. Microcode is `arith=SUB`, `arith_sr=">="` (unsigned), `sr=ARITH`, `xbus=128`, `ybus=EXPEVT` — **no new datapath**, single cycle.
+**Prior art.** The miss/protection split is not an SH-4 idiosyncrasy; it is the
+standard arrangement for software-managed TLBs. MIPS R2000/R3000 (1985) sends
+TLB **refill** to a dedicated fast vector and TLB Invalid / Modified /
+protection to the general vector, explicitly so the refill path never tests a
+cause. PowerPC 603 (1993) goes further, giving instruction-miss, data-load-miss
+and data-store-miss three separate vectors.
 
-**Threshold is 128 (`0x080`) inclusive, not 127:**
-
-| Class | EXPEVT values | vs `0x080` |
-|---|---|---|
-| miss | `IMISS 0x040`, `DMISS_R 0x060`, `DMISS_W 0x080` | all ≤ |
-| protection | `IPROT 0x0A0`, `DPROT_R/W 0x0C0` | all > |
-
-`DMISS_W` sits exactly **on** the boundary, so a `>= 0x07F` test would misclassify every store miss as a protection fault. `MULTI_HIT` (`0x180`) never reaches this vector — it goes to `VBR+0x100` — so it does not constrain the threshold. `EXPEVT`'s known `DPROT_R`/`DPROT_W` lossiness (§2.11) is irrelevant here: both are protection faults and take the same branch. The compare is **unsigned** because `EXPEVT` is a 12-bit field zero-extended onto `ybus`.
+*Guard: `mmuvecsplit` -- each vector writes a distinct marker and every
+sub-test asserts the one it expects, so a silent regression of the split fails
+sub-test D with its own result code rather than passing quietly.*
 
 ### 3.3 PTEU encoding (PAE only)
 
