@@ -206,7 +206,7 @@ For most kernels, software writes HASH_MODE=1 and HASH_SHIFT=TSB_SIZE_LOG at boo
 
 Hardware-populated on every TLB miss. Holds the address (in physical memory) of the TSB slot where the missing translation, if cached, would be found.
 
-**Access:** `STC TSBPTR, Rn` (`0x0043`, read-only; the hot-path read — see §3.1) and MMIO at `0xFF00001C` (also read-only). There is no `LDC TSBPTR`.
+**Access:** `STC TSBPTR, Rn` (`0x004B`, read-only; the hot-path read — see §3.1) and MMIO at `0xFF00001C` (also read-only). There is no `LDC TSBPTR`.
 
 **Computation (hardware, on TLB miss):**
 ```
@@ -219,9 +219,9 @@ The `<< 4` is because each TSB entry is 16 bytes. TSBPTR is therefore naturally 
 
 ### 2.9 CPUINFO — CPU Information (NEW, MMIO only)
 
-Read-only MMIO register, per-CPU-distinct. Each CPU reading address `0xFF00002C` sees its own hart ID and capability flags.
+Read-only MMIO register, per-CPU-distinct. Each CPU reading address `0xFF000030` sees its own hart ID and capability flags.
 
-**Address:** `0xFF00002C`. CPUINFO formerly sat at `0xFF000020`; that offset and the two following it are the stock SH-4 placement of `TRA`/`EXPEVT`/`INTEVT` (SH-4 hardware manual, Renesas/Hitachi, 1998) and have been returned to those registers. See [soc/p4-mmio-map.md §3.2](../soc/p4-mmio-map.md) for the decision and rationale. CPUINFO is **allocated but not implemented** in current RTL: `jcore-cpu/core/datapath.vhm:1136-1155` decodes no offset above `0x1C`, and an undecoded P4 read returns zero without faulting, so a CPU reading CPUINFO today gets `0` rather than its hart ID.
+**Address:** `0xFF000030`. CPUINFO formerly sat at `0xFF000020`; that offset and the two following it are the stock SH-4 placement of `TRA`/`EXPEVT`/`INTEVT` (SH-4 hardware manual, Renesas/Hitachi, 1998) and have been returned to those registers; `0xFF00002C` then went to MMUFSR (§2.11), which the RTL decodes. See [soc/p4-mmio-map.md §3.2](../soc/p4-mmio-map.md) for the decision and rationale. CPUINFO is **allocated but not implemented** in current RTL, and an undecoded P4 read returns zero without faulting, so a CPU reading CPUINFO today gets `0` rather than its hart ID.
 
 **Overlap with `jcore,cpuid-mmio` (unresolved, flagged).** The `HART_ID` field duplicates a facility jcore-soc already implements: `cpumreg` (`jcore-soc/targets/cpumreg.vhm`, decoded at `jcore-soc/targets/cpu_core_pkg.vhd:132-137`) exposes per-core identity at `0xABCD0600`, published to every board device tree as `jcore,cpuid-mmio`, and SMP boot reads it today (`jcore-soc/boot/main.c:414-432`). Whoever implements CPUINFO must pick one of the two rather than build both; this spec does not choose.
 
@@ -234,7 +234,7 @@ Read-only MMIO register, per-CPU-distinct. Each CPU reading address `0xFF00002C`
 [3:0]    HART_ID       This CPU's hart number (0–15)
 ```
 
-No new instruction is needed; standard `MOV.L @rA, Rn` from a register holding `0xFF00002C` reads it. The SoC's address decoder routes this access to a small per-core hard-wired register.
+No new instruction is needed; standard `MOV.L @rA, Rn` from a register holding `0xFF000030` reads it. The SoC's address decoder routes this access to a small per-core hard-wired register.
 
 ### 2.10 PTEU — Page Table Entry Upper (NEW, optional — PAE only)
 
@@ -259,7 +259,7 @@ Present only when the core is built for **wide physical addressing** (PAE; [desi
 
 ### 2.11 MMUFSR — MMU Fault-Status Register (NEW, read-only)
 
-Read-only MMIO register at `0xFF000028`, latched on every TLB exception (I-fetch or D-access, miss or protection, and multi-hit). Writes are silently ignored. Exists to resolve a real ambiguity in the `EXPEVT`-based fault model: DPROT_R (data-load protection violation) and DPROT_W (data-store protection violation) both raise `EXPEVT = 0x0C0` through the single shared vector `VBR + 0x400` (see §5), so a page-fault handler reading only `EXPEVT` cannot tell a write fault from a read fault. This matters for kernels implementing copy-on-write: misclassifying a write-protect fault as read-protect can livelock the fault handler (it never triggers the CoW break-and-retry path). MMUFSR gives software a second, independent signal to disambiguate. It is purely a software convenience register — it duplicates state the TLB already computes internally for the miss/protection decision — and does not change `EXPEVT`, the vector layout, or any decoder/opcode encoding.
+Read-only MMIO register at `0xFF00002C`, latched on every TLB exception (I-fetch or D-access, miss or protection, and multi-hit). Writes are silently ignored. Exists to resolve a real ambiguity in the `EXPEVT`-based fault model: DPROT_R (data-load protection violation) and DPROT_W (data-store protection violation) both raise `EXPEVT = 0x0C0` through the single shared vector `VBR + 0x400` (see §5), so a page-fault handler reading only `EXPEVT` cannot tell a write fault from a read fault. This matters for kernels implementing copy-on-write: misclassifying a write-protect fault as read-protect can livelock the fault handler (it never triggers the CoW break-and-retry path). MMUFSR gives software a second, independent signal to disambiguate. It is purely a software convenience register — it duplicates state the TLB already computes internally for the miss/protection decision — and does not change `EXPEVT`, the vector layout, or any decoder/opcode encoding.
 
 **Layout (32 bits, low byte matters, upper bits read as zero except bit 12):**
 ```
@@ -306,7 +306,7 @@ Read-only MMIO register at `0xFF000028`, latched on every TLB exception (I-fetch
 
 **MULTI_HIT is a special case.** When KIND=7, the entire low byte (`[7:0]`, including USER at bit 4) reads 0 — only `VALID` (bit 12) and `KIND` (bits `[11:8]`) are meaningful. This mirrors the fact that a multi-hit is a configuration error detected during TLB lookup, before the normal miss/protection classification (direction, privilege) has been computed for a specific access.
 
-**Relationship to EXPEVT (§5).** MMUFSR is latched by the same fault-capture logic that latches `TEA`/`PTEH`/`SPC`/`SSR` on a TLB exception (§5 steps 2-4), so by the time the handler is entered at `VBR + 0x400`, `STC EXPEVT, Rn` and a read of `0xFF000028` are both immediately valid and describe the same fault. The two are read in whichever order suits the handler; neither is more expensive than the other. Linux@jcore, for instance, reads MMUFSR *unconditionally* in the fault prologue (`arch/sh/kernel/cpu/jcore/entry.S`), before it knows the fault kind, and folds its WRITE bit straight into the `error_code` argument of `do_page_fault()` — a single unpredicated MMIO load is cheaper on this pipeline than branching on `EXPEVT` to decide whether to issue it. `STC EXPEVT, Rn` is then used to separate miss from protection. Software is free to read MMUFSR lazily instead, but nothing in the hardware rewards doing so.
+**Relationship to EXPEVT (§5).** MMUFSR is latched by the same fault-capture logic that latches `TEA`/`PTEH`/`SPC`/`SSR` on a TLB exception (§5 steps 2-4), so by the time the handler is entered at `VBR + 0x400`, `STC EXPEVT, Rn` and a read of `0xFF00002C` are both immediately valid and describe the same fault. The two are read in whichever order suits the handler; neither is more expensive than the other. Linux@jcore, for instance, reads MMUFSR *unconditionally* in the fault prologue (`arch/sh/kernel/cpu/jcore/entry.S`), before it knows the fault kind, and folds its WRITE bit straight into the `error_code` argument of `do_page_fault()` — a single unpredicated MMIO load is cheaper on this pipeline than branching on `EXPEVT` to decide whether to issue it. `STC EXPEVT, Rn` is then used to separate miss from protection. Software is free to read MMUFSR lazily instead, but nothing in the hardware rewards doing so.
 
 ## 3. Instruction Encodings
 
@@ -345,16 +345,37 @@ The choice between an in-core `LDC`/`STC` register and an uncached-MMIO register
 
 **Encoding-space reality.** The SH-4 control-register LDC family `0100 mmmm xxxx 1110` is *fully occupied* on J-Core: `xxxx` = `0000`–`0100` are `SR`/`GBR`/`VBR`/`SSR`/`SPC`, `0101`/`0110`/`0111` are `PTEH`/`PTEL`/`ASIDR`, and `1xxx` is `Rm_BANK`. There are **no** free control-register LDC slots, and the `0100 mmmm xxxx 1010` family is base `LDS` (MACH/MACL/PR/…) — so PTEH/PTEL/ASIDR cannot be relocated there. (Real SH-4 has *no* `LDC PTEH` either; its MMU registers are MMIO-only. The earlier draft of this section proposed an `xxxx 1010` relocation that is infeasible; it is corrected here.) This is exactly why the cold TSB-base/config registers are MMIO-only.
 
-**Hot-path registers — in-core (`xxxx 1110` LDC / `xxxx 0011` STC family):**
+**Hot-path registers — in-core (`xxxx 1110` LDC / `xxxx 1011` STC family):**
 
 | Mnemonic | Encoding | Hex Pattern |
 |----------|----------|-------------|
-| `LDC Rm, PTEH`  / `STC PTEH, Rn`  | `0100 mmmm 0101 1110` / `0000 nnnn 0101 0011` | `0x405E` / `0x0053` |
-| `LDC Rm, PTEL`  / `STC PTEL, Rn`  | `0100 mmmm 0110 1110` / `0000 nnnn 0110 0011` | `0x406E` / `0x0063` |
-| `LDC Rm, ASIDR` / `STC ASIDR, Rn` | `0100 mmmm 0111 1110` / `0000 nnnn 0111 0011` | `0x407E` / `0x0073` |
-| `STC TSBPTR, Rn` (read-only)      | `0000 nnnn 0100 0011` | `0x0043` |
+| `LDC Rm, PTEH`  / `STC PTEH, Rn`  | `0100 mmmm 0101 1110` / `0000 nnnn 1000 1011` | `0x405E` / `0x008B` |
+| `LDC Rm, PTEL`  / `STC PTEL, Rn`  | `0100 mmmm 0110 1110` / `0000 nnnn 1001 1011` | `0x406E` / `0x009B` |
+| `LDC Rm, ASIDR` / `STC ASIDR, Rn` | `0100 mmmm 0111 1110` / `0000 nnnn 1011 1011` | `0x407E` / `0x00BB` |
+| `STC TSBPTR, Rn` (read-only)      | `0000 nnnn 0100 1011` | `0x004B` |
+| `CMP/EQ PTEH, Rn`                 | `0000 nnnn 1100 1011` | `0x00CB` |
+| `CMP/EQ ASIDR, Rn`                | `0000 nnnn 1101 1011` | `0x00DB` |
+| `CMP/MISS EXPEVT`                 | `0000 0000 1110 1011` | `0x00EB` |
+| `LDTLB.RN Rm`                     | `0000 mmmm 1111 1011` | `0x00FB` |
 
-`TSBPTR` is read-only: it is hardware-computed on every TLB miss (§2.8) and has **no** `LDC` encoding (decoding one raises illegal-instruction). Its `STC` uses a free slot in the `xxxx 0011` family — the SH-4 `STC` control family `xxxx 0010` is fully occupied in base J-Core.
+`TSBPTR` is read-only: it is hardware-computed on every TLB miss (§2.8) and has **no** `LDC` encoding (decoding one raises illegal-instruction).
+
+**Why the read side is in `0000 nnnn xxxx 1011`.** J4 is targeted to be a superset of J2, SH-2A, SH-4 and SH-4A, so no J4-only instruction may occupy an encoding any of those four defines. The read side originally sat in `0000 nnnn xxxx 0011` (`STC PTEH` = `0x0053`, `PTEL` = `0x0063`, `ASIDR` = `0x0073`, `TSBPTR` = `0x0043`, `CMP/EQ PTEH` = `0x00D3`, `CMP/EQ ASIDR` = `0x00F3`), which fails that bar in three places:
+
+| Old encoding | Collides with |
+|---|---|
+| `STC PTEL, Rn` `0x0063` | SH-4A `movli.l @Rm,R0` — the **LL** of LL/SC |
+| `STC ASIDR, Rn` `0x0073` | SH-4A `movco.l R0,@Rn` — the **SC** of LL/SC |
+| `CMP/EQ PTEH, Rn` `0x00D3` | SH-4/SH-4A `prefi @Rn` |
+
+`0000 nnnn xxxx 0011` has only two slots left that are clean against the target set, so the whole read side moved to `0000 nnnn xxxx 1011`, which had seven — enough for all six plus `CMP/MISS`, and it already hosted `LDTLB.RN Rm`. That block is now **full**; the next reserve for J4-only `0000 nnnn`-shaped instructions is `0000 nnnn xxxx 1000` (8 virgin slots). Re-check with:
+
+```
+go run ./cmd/cpugen freespace --avoid j2,sh2a,sh4,sh4a,dsp \
+    --overlay sh4 --form "----nnnn----1011" --region 0
+```
+
+**Deliberate foreclosure: SH-DSP.** The `LDC` write side (`0100 mmmm 0101/0110/0111 1110`) overlays SH-DSP's `ldc Rm,MOD/RS/RE`, and `STC EXPEVT/INTEVT/TRA` likewise overlay `stc MOD/RS/RE,Rn`. This is unavoidable, not an oversight: after excluding j2/sh2a/sh4/sh4a the `LDC` control family has exactly three surviving slots and they are precisely the DSP ones. **J4 therefore forecloses SH-DSP permanently.**
 
 **Cold/config registers — MMIO only (no LDC/STC):**
 
@@ -366,7 +387,7 @@ The choice between an in-core `LDC`/`STC` register and an uncached-MMIO register
 
 These are written once at boot, so MMIO costs nothing at runtime and keeps three encodings off the Fmax-critical decoder.
 
-> **Binutils gap.** `binutils` `sh-opc.h` implements four `STC` MMU forms (`stc pteh,Rn` / `stc ptel,Rn` / `stc asidr,Rn` / `stc tsbptr,Rn`) plus `ldtlb.rn`, but does **not** yet implement `ldc Rm,{pteh,ptel,asidr}` — dependency SP1 must resolve.
+> **Binutils status.** `binutils` `sh-opc.h` implements all of these: the four `STC` MMU forms, `ldc Rm,{pteh,ptel,asidr}`, both `ldtlb.rn` forms, and both `cmp/eq {pteh,asidr},Rn`. (The former "does not yet implement `ldc Rm,{pteh,ptel,asidr}`" gap was closed and this note was stale.) Never hand-edit `sh-opc.h` — it is generated from `jcore-cpu/docs/insns.json` by `tools/insns2asm`.
 
 ### 3.2 LDTLB.RN — Load TLB and Return (No delay slot)
 
@@ -385,16 +406,43 @@ New single-cycle instruction that fuses LDTLB and RTE. Equivalent to executing L
 
 The existing LDTLB (encoding `0x0038`) is preserved for compatibility; the only difference is LDTLB.RN also returns.
 
+### 3.2a CMP/MISS EXPEVT — fused fault-class test
+
+**Encoding:** `0000 0000 1110 1011` = `0x00EB`. **Privileged.**
+
+**Semantics:** `T := (EXPEVT <= 0x080)`, i.e. `T=1` iff the latched exception is a TLB **miss** and `T=0` iff it is a **protection** fault. No register operand; no register is written.
+
+**Why it exists.** All six TLB causes share the single vector `VBR + 0x400` (§5). A *protection* fault against a VPN/ASID that still has a valid TSB slot therefore TSB-hits on the miss fast path; reinstalling that entry and retrying livelocks, because `do_page_fault()` is never reached to fix the pte up. The handler must consequently separate miss from protection on **every TSB hit** — the hottest path in the kernel. In plain SH that costs three instructions and a scratch register:
+
+```asm
+        stc     expevt, r2      ! r2 = EXPEVT
+        add     #-128, r2       ! (mov #0x80 would sign-extend to 0xFFFFFF80)
+        cmp/pl  r2              ! T = EXPEVT > 0x80  ->  protection fault
+```
+
+`CMP/MISS EXPEVT` collapses all three into one and frees the scratch register.
+
+**Sense is inverted** relative to that sequence — `T=1` means *miss*, so the handler branches with `BF`, not `BT`. That inversion is what makes the instruction free in hardware: `ybus` already has `SEL_EXPEVT` and `xbus` already reaches `buses.imm_val`, but `xbus` has **no** `SEL_EXPEVT` input, so `EXPEVT` must be the right-hand operand and `CMP/HS`-shaped microcode computes `xbus >= ybus`, i.e. `128 >= EXPEVT`. Microcode is `arith=SUB`, `arith_sr=">="` (unsigned), `sr=ARITH`, `xbus=128`, `ybus=EXPEVT` — **no new datapath**, single cycle.
+
+**Threshold is 128 (`0x080`) inclusive, not 127:**
+
+| Class | EXPEVT values | vs `0x080` |
+|---|---|---|
+| miss | `IMISS 0x040`, `DMISS_R 0x060`, `DMISS_W 0x080` | all ≤ |
+| protection | `IPROT 0x0A0`, `DPROT_R/W 0x0C0` | all > |
+
+`DMISS_W` sits exactly **on** the boundary, so a `>= 0x07F` test would misclassify every store miss as a protection fault. `MULTI_HIT` (`0x180`) never reaches this vector — it goes to `VBR+0x100` — so it does not constrain the threshold. `EXPEVT`'s known `DPROT_R`/`DPROT_W` lossiness (§2.11) is irrelevant here: both are protection faults and take the same branch. The compare is **unsigned** because `EXPEVT` is a 12-bit field zero-extended onto `ybus`.
+
 ### 3.3 PTEU encoding (PAE only)
 
-> **Note (PAE/J64, deferred).** `PTEU` is only needed on a wide-physical J64 build and is not implemented in the J32 MMU. The encoding below is a *proposal* for that future work. It must not reuse the `0100 mmmm xxxx 1010` LDC family — that family is base `LDS` (MACH/MACL/PR/…) on J-Core (see the §3.1 encoding-space note); PTEH/PTEL/ASIDR live in the `xxxx 1110` / `xxxx 0011` family per §3.1. A real `PTEU` encoding must be assigned from genuinely free slots when J64 is implemented.
+> **Note (PAE/J64, deferred).** `PTEU` is only needed on a wide-physical J64 build and is not implemented in the J32 MMU. The encoding below is a *proposal* for that future work. It must not reuse the `0100 mmmm xxxx 1010` LDC family — that family is base `LDS` (MACH/MACL/PR/…) on J-Core (see the §3.1 encoding-space note); PTEH/PTEL/ASIDR live in the `xxxx 1110` (LDC) / `xxxx 1011` (STC) families per §3.1. A real `PTEU` encoding must be assigned from genuinely free slots when J64 is implemented.
 
 `PTEU` would join the page-table register family alongside `PTEH`, `PTEL`, and `ASIDR` (§3.1):
 
 | Mnemonic | Encoding | Hex Pattern |
 |----------|----------|-------------|
 | `LDC Rm, PTEU` | `0100 mmmm 0010 1010` | `0x402A \| m<<8` |
-| `STC PTEU, Rn` | `0000 nnnn 0010 0011` | `0x0023 \| n<<8` |
+| `STC PTEU, Rn` | _unassigned_ (the old `0000 nnnn 0010 0011` proposal predates the §3.1 move to `xxxx 1011`) | — |
 
 `PTEU` is privileged and exists only on PAE (`ADDR_WIDTH=40`) builds; on a non-PAE core the encoding is unallocated and decodes to illegal-instruction. The `xxxx=0010` slot is **proposed** — confirm it is free against the generated decoder and against SH-4 `PTEA` usage (J-Core does not implement SH-4 `PTEA`, so its slot is reusable, exactly as ASIDR reused the SH-DSP `MOD` slot in §3.1).
 
@@ -631,7 +679,7 @@ Critical points to verify in RTL:
 5. **Register banking on TLB miss:** Bank 1 R0–R7 visible to handler, bank 0 preserved.
 6. **ASIDR preservation across miss:** ASIDR is not touched by miss-vector entry; hardware writes only PTEH.VPN. Handler can read ASIDR directly and trust it reflects the current context.
 7. **STALE bit preservation:** LDTLB carries the STALE bit from PTEL into the TLB entry intact.
-8. **Per-CPU CPUINFO routing:** Each CPU reads a distinct HART_ID at `0xFF00002C`.
+8. **Per-CPU CPUINFO routing:** Each CPU reads a distinct HART_ID at `0xFF000030`.
 9. **Exception priority:** TLB miss vs. instruction-fetch fault vs. higher-priority interrupts handled correctly.
 10. **Reset state:** All MMU registers cleared, TLB invalidated, MMU disabled.
 11. **Multi-word-unit instruction-fetch miss (only if the SIMD or density extension is present, §5.1):** an instruction-fetch miss on the *interior* word of a multi-word unit must save the unit's **first-word PC** into SPC, and `RTE` must re-execute the whole unit. Verify both instances: (a) a SIMD block straddling a 16 KB boundary whose tail page misses → SPC = prefix PC, block re-opens with correct lane-wise semantics (test the prefix-time-validation probe path *and* a non-crossing block that takes no probe/stall); (b) a two-word `movi20`/`lea`/disp12 whose word1 lands on a missing page → SPC = word0 PC, instruction re-executes (not a resume into word1).
