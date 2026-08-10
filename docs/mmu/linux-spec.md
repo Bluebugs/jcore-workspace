@@ -247,96 +247,107 @@ Consequences for the `pgtable.h` plumbing:
 
 ## 4. TLB Miss Handler
 
+### 4.0 The vector page
+
+J4 uses SH-4-style **fixed** vectors: hardware branches to `VBR + offset` as
+CODE, with the cause in `EXPEVT`/`INTEVT` and the interrupted state in
+`SPC`/`SSR`. `jcore_vbr_base` (`ex.S`) is therefore a page of real code, not a
+table of pointers:
+
+| offset | contents |
+|---|---|
+| `+0x000` | not a J4 vector — spins, rather than running on into `+0x100` |
+| `+0x100` | general exceptions → `jcore_general_entry` |
+| `+0x400` | TLB **miss** fast path, inlined (§4.1) |
+| `+0x420` | `jcore_tlb_miss_slow` (§4.2) |
+| `+0x600` | interrupts → `jcore_irq_entry` |
+
+`jcore_general_entry` builds `pt_regs` from SPC/SSR and dispatches on `EXPEVT`:
+the TLB **protection** causes (`0x0A0` IPROT, `0x0C0` DPROT_R/W) are page faults
+by another name and go to `do_page_fault()` with the MMUFSR-derived
+`error_code`; everything else goes to `jcore_handle_exception()`
+(`exception.c`) with its raw `EXPEVT`.
+
+> **This replaced the SH-2 arrangement the port started from.** `jcore_vbr_base`
+> used to be a 256-entry *pointer table* in sh2/ex.S's layout, feeding
+> sh2/entry.S's `exception_handler` — correct for SH-2, which vectors through
+> the table and pushes PC/SR on the stack. J4 does neither. `VBR+0x100` landed
+> *inside that table* and executed a `.long` as instructions, and `VBR+0x600`
+> landed in whatever slow-path code followed the fast path. Only `VBR+0x400` was
+> ever right, because it was the only vector CI exercised. *Guards:
+> `mmulinuxexc` covers `+0x100` and `+0x600`; `mmulinux` covers `+0x400`.*
+
+**Layout constraint, not a preference.** `jcore_tlb_miss_slow` must stay in the
+`0x420..0x600` gap. The fast path reaches it with `BF`, whose range is ±256
+bytes; placed after the interrupt vector it goes out of reach and gas silently
+rewrites `bf slow` as `bt .+2; bra slow; nop` — inverting the sense, so a TSB
+**hit** starts taking two taken branches. `ex.S` carries an exact-size
+`.org jcore_vec_tlb + 0x12` assertion that fails the build if this happens; the
+older `+ 0x20` budget cannot catch it, because the relaxed macro is `0x1A`
+bytes and still fits.
+
 ### 4.1 Hot path (assembly)
 
-File: `arch/sh/kernel/cpu/jcore/tlbmiss.S`
+File: `arch/sh/kernel/cpu/jcore/ex.S` (the macro `JCORE_TLB_FASTPATH`, expanded
+**inline at the vector**, not jumped to).
+
+The fast path handles the three TLB **miss** causes only. Protection faults take
+`VBR + 0x100` with the other general exceptions — see §4.0 below — so this code
+does not test the cause at all.
 
 ```asm
-        .global jcore_tlb_miss
-        .align 4
-jcore_tlb_miss:
-        ! Entry from VBR + 0x400 — the single TLB vector shared by
-        ! all six TLB fault causes (I/D, miss/protection). EXPEVT
-        ! is the only discriminator; the hot path below does not
-        ! need it, and only the slow path reads it.
-        !
-        ! On entry: SR.RB=1 (bank 1 selected), SR.MD=1, SR.BL=1.
-        !           PTEH contains the faulting VPN (low bits zero).
-        !           ASIDR contains the current ASID_TAG (unchanged from
-        !             the last context switch).
-        !           TSBPTR contains pre-computed slot address.
-        !           Bank-1 R0-R7 are scratch.
-        !
-        ! The TSB tag word is split into two 32-bit halves (see
-        ! hardware-spec.md §7): tag_hi = expected VPN, tag_lo = expected
-        ! ASID_TAG. The handler does two CMP/EQ — VPN against PTEH,
-        ! then ASID_TAG against ASIDR. This avoids any small-page VPN-
-        ! vs-ASID-bit-overlap problem.
-
-        stc     tsbptr, r0
-        mov.l   @r0+, r1            ! r1 = tag_hi (expected VPN); r0 += 4
-        stc     pteh, r2            ! faulting VPN
-        cmp/eq  r1, r2              ! VPN match?
-        bf      jcore_tlb_miss_slow
-        mov.l   @r0+, r1            ! r1 = tag_lo (expected ASID_TAG); r0 += 4
-        stc     asidr, r2           ! current ASID_TAG
-        cmp/eq  r1, r2              ! ASID match?
-        bf      jcore_tlb_miss_slow
-        mov.l   @r0, r3             ! r3 = TTE data
-        ldc     r3, ptel
-        ldtlb.rn                    ! Install + return atomically
-         nop                        ! Padding only — not an architectural slot (§3.2)
-
-jcore_tlb_miss_slow:
-        ! r0 points into the TSB slot; faulting VPN and ASID_TAG are
-        ! re-read from PTEH and ASIDR by the slow-path code as needed.
-        !
-        ! Save additional registers since we may call into C.
-        mov.l   r4, @-r15
-        mov.l   r5, @-r15
-        mov.l   r6, @-r15
-        mov.l   r7, @-r15
-        mov.l   pr_save, r4
-        sts.l   pr, @-r15
-        stc     pteh, r2            ! faulting VPN
-        mov.l   r2, @-r15           ! pass faulting VPN on stack/arg
-
-        ! Walk the page table in C
-        mov.l   1f, r4              ! &current_pgd
-        mov.l   @r4, r4             ! pgd_t *
-        stc     tea, r5             ! faulting address
-        mov.l   2f, r6              ! &__jcore_tlb_walk
-        jsr     @r6
-         nop
-
-        ! r0 returns 0 on success (PTEL set, do LDTLB.RN), nonzero on fault
-        tst     r0, r0
-        bf      jcore_tlb_real_fault
-        ! restore PR and other saved registers
-        lds.l   @r15+, pr
-        mov.l   @r15+, r2
-        mov.l   @r15+, r7
-        mov.l   @r15+, r6
-        mov.l   @r15+, r5
-        mov.l   @r15+, r4
-        ldtlb.rn
-         nop
-
-jcore_tlb_real_fault:
-        ! Page table walk failed; call do_page_fault
-        mov.l   3f, r0
-        jmp     @r0
-         nop
-
-        .align 4
-1:      .long   current_pgd
-2:      .long   __jcore_tlb_walk
-3:      .long   do_page_fault
+	.macro	JCORE_TLB_FASTPATH
+	stc	tsbptr, r0
+	mov.l	@r0+, r1		/* r1 = tag_hi (expected VPN); r0 += 4 */
+	cmp/eq	pteh, r1		/* VPN match? -- fused CSR-vs-Rn compare */
+	bf	jcore_tlb_miss_slow
+	mov.l	@r0+, r1		/* r1 = tag_lo (expected ASID_TAG); r0 += 4 */
+	mov.l	@r0, r3			/* r3 = TTE data (PTEL); load-use latency
+					 * hides behind the compare + bf below */
+	cmp/eq	asidr, r1		/* ASID_TAG match? -- fused compare */
+	bf	jcore_tlb_miss_slow
+	ldtlb.rn r3			/* PTEL<-r3 + install + return, one insn */
+	.endm
 ```
 
-The hot path is 7 instructions. The slow path adds ~15 more plus the C walker.
+**Nine instructions, no taken branch on a hit.** On entry SR.RB=1 (bank 1),
+SR.MD=1, SR.BL=1; PTEH holds the faulting VPN, ASIDR the current ASID_TAG,
+TSBPTR the precomputed slot address, and bank-1 r0-r3 are scratch. The TSB tag
+is two 32-bit halves (hardware-spec.md §7): `tag_hi` = expected VPN, `tag_lo` =
+expected ASID_TAG, compared separately so no small-page VPN/ASID bit overlap can
+alias.
 
-**PAE (`CONFIG_JCORE_PAE`) hot path.** The TTE `Data` becomes the full 64-bit TSB `Data` word: the final `mov.l @r0, r3 ; ldc r3, ptel` is replaced by a two-stage load of the low word into `PTEL` and the high word into `PTEU` before `ldtlb.rn` (+2 instructions, no extra TSB traffic — both halves are in the already-loaded 16-byte entry). The exact sequence is in [hardware-spec.md §7 "PAE variant"](../mmu/hardware-spec.md); the file carries it under `#ifdef CONFIG_JCORE_PAE`.
+Three J4-only instructions carry the sequence, each replacing a pair:
+
+| instruction | replaces |
+|---|---|
+| `cmp/eq pteh, Rn` | `stc pteh, Rt` + `cmp/eq Rt, Rn` (and the scratch register) |
+| `cmp/eq asidr, Rn` | `stc asidr, Rt` + `cmp/eq Rt, Rn` |
+| `ldtlb.rn Rm` | `ldc Rm, ptel` + `ldtlb.rn` |
+
+`ldtlb.rn` has **no delay slot**. A trailing `nop` in any listing of it is
+padding, not an architectural slot.
+
+**Cost.** Measured on the cosim (`jcore-cpu/sim/bench_tlb_hotpath.sh`), fault to
+back-executing the faulting instruction:
+
+| | I-side (IMISS) | D-side (DMISS_R/W) |
+|---|---|---|
+| HW exception entry | 4 cyc | 5 cyc |
+| handler body (9 insns) | 15 cyc | 15 cyc |
+| `LDTLB.RN` install + redirect | 4 cyc | 4 cyc |
+| **TSB hit, total** | **22 cyc** | **23 cyc** |
+| cold (falls to the C walker) | 74 cyc | 75 cyc |
+
+The guards `mmubench` / `mmubenchi` carry a byte-faithful copy of this macro and
+are what those numbers are measured on; `jcore-cpu/sim/check_bench_fidelity.sh`
+fails the build if the copy ever drifts from this file.
+
+**PAE (`CONFIG_JCORE_PAE`).** The TTE becomes the full 64-bit TSB `Data` word:
+`ldtlb.rn r3` is replaced by a two-stage load of the low word into `PTEL` and the
+high word into `PTEU` before a parameterless `ldtlb.rn` (+2 instructions, no
+extra TSB traffic — both halves are already in the loaded 16-byte entry). See
+[hardware-spec.md §7 "PAE variant"](../mmu/hardware-spec.md).
 
 ### 4.2 The C walker
 
@@ -500,7 +511,7 @@ Kernel pages (P0 ASID 0 kernel mappings, P3 vmalloc) use `_PAGE_GLOBAL` so they 
 File: `arch/sh/kernel/cpu/jcore/smp.c`
 
 ```c
-#define JCORE_CPUINFO_MMIO   0xFF00002C
+#define JCORE_CPUINFO_MMIO   0xFF000030
 #define JCORE_SMP_RELEASE    0xFF00FF00
 
 static unsigned int read_cpuinfo(void)
@@ -577,7 +588,7 @@ jcore_secondary_entry:
         mov.l   sr_init, r0
         ldc     r0, sr
 
-        mov.l   cpuinfo_p4, r0      ! 0xFF00002C
+        mov.l   cpuinfo_p4, r0      ! 0xFF000030
         mov.l   @r0, r1
         mov     #0xF, r2
         and     r2, r1              ! r1 = hart_id
@@ -615,7 +626,7 @@ jcore_secondary_entry:
 
         .align 4
 sr_init:      .long 0x500000F0
-cpuinfo_p4:   .long 0xFF00002C
+cpuinfo_p4:   .long 0xFF000030
 boot_data_p1: .long boot_data + 0x80000000
 mmucr_p4:     .long 0xFF000010
 ti_at_bits:   .long 0x00000005     /* AT=1 | TI=1 */
@@ -840,7 +851,9 @@ arch/sh/kernel/cpu/jcore/                       (new directory)
     head_smp.S                                  (new, ~80 lines asm)
     smp.c                                       (new, ~200 lines C)
     pm.c                                        (new, ~150 lines C)
-    tlbmiss.S                                   (new, ~120 lines asm)
+    ex.S                                        (vector page + TLB fast path, asm)
+    entry.S                                     (pt_regs save/restore + the three entries, asm)
+    exception.c                                 (general-exception dispatch on EXPEVT)
 arch/sh/kernel/machine_kexec-jcore.c            (new, ~100 lines C)
 arch/sh/mm/tlb-jcore.c                          (new, ~250 lines C)
 arch/sh/mm/context-jcore.c                      (new, ~200 lines C)
@@ -878,9 +891,9 @@ The same source tree compiles for both. Differences:
 | TLB entry width | ~95 bits | ~135 bits |
 | Asm `mov.l` | 32-bit loads | becomes `mov.q` for 64-bit fields |
 
-The TLB miss assembly uses `mov.l` on J32 and `mov.q` on J64 (or just `MOVL` with macro). One `#ifdef CONFIG_64BIT` block in `tlbmiss.S` handles this.
+The TLB miss assembly uses `mov.l` on J32 and `mov.q` on J64 (or just `MOVL` with macro). One `#ifdef CONFIG_64BIT` block in `ex.S` handles this.
 
-**J32-PAE is a third column** (`CONFIG_JCORE_PAE`, §3.4): `unsigned long`/VA stay 32-bit and the page table stays 2-level, but `phys_addr_t`/`pte_t` become 64-bit, `PA bits` = 40, and `CONFIG_HIGHMEM` is forced on. It shares J32's virtual machinery and J64's 40-bit physical width — i.e. "J64 physical under a J32 virtual MMU." The `tlbmiss.S` PAE path adds the `PTEU` load under `#ifdef CONFIG_JCORE_PAE`.
+**J32-PAE is a third column** (`CONFIG_JCORE_PAE`, §3.4): `unsigned long`/VA stay 32-bit and the page table stays 2-level, but `phys_addr_t`/`pte_t` become 64-bit, `PA bits` = 40, and `CONFIG_HIGHMEM` is forced on. It shares J32's virtual machinery and J64's 40-bit physical width — i.e. "J64 physical under a J32 virtual MMU." The `ex.S` PAE path adds the `PTEU` load under `#ifdef CONFIG_JCORE_PAE`.
 
 ## 13. Test Plan
 

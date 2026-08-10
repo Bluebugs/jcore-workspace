@@ -252,7 +252,7 @@ The hypercall numbering and parameter convention mirror the sun4v hypervisor API
 ### 4.5 Guest TLB miss flow
 
 1. Guest user code touches a VA; TLB miss.
-2. Hardware traps to guest's TLB miss vector (`VBR + 0x400`), delegated via HEDR.
+2. Hardware traps to guest's TLB **miss** vector (`VBR + 0x400`), delegated via HEDR. (Protection violations take `VBR + 0x100` instead — see [mmu/hardware-spec.md §5](../mmu/hardware-spec.md) — so a delegating hypervisor must forward BOTH vectors, not just `0x400`.)
 3. Guest's miss handler reads its TSB (registered with hypervisor at boot).
 4. On TSB hit: build PTEL with HPA from TSB entry, execute LDTLB.RN.
 5. LDTLB.RN traps to hyperprivileged trap vector (LDTLB always traps in S mode under virt).
