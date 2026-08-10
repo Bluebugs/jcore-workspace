@@ -247,6 +247,37 @@ Consequences for the `pgtable.h` plumbing:
 
 ## 4. TLB Miss Handler
 
+> **Amendment — hardware TSB walker ([hardware-spec.md §5.0](hardware-spec.md)).**
+> **Status: DESIGNED, partially implemented** (`jcore-cpu` branch
+> `mmu/tsb-hw-walker`). §4.0–§4.2 below describe what linux@jcore runs
+> **today** and remain accurate; this note records what changes and when.
+>
+> **§4.1's assembly hot path is deleted.** The nine-instruction TSB probe
+> becomes hardware. `VBR + 0x400` is reached only on a walk failure, and its
+> handler becomes save-regs / call `__jcore_tlb_walk()` / restore / `RTE`.
+> Three constraints in §4.0 disappear with it: the `bf` ±256-byte reach, the
+> `.org jcore_vec_tlb + 0x12` exact-size assert, and the requirement that the
+> slow path live in the `0x420..0x600` gap. **§4.2's C walker survives
+> unchanged** and becomes the only software path.
+>
+> **TSB store order must be reversed — and this is a live defect today,
+> independent of the walker.** The walker compares `tag_hi` first, so
+> `tag_hi` must be the **commit point**. `arch/sh/mm/tlb-jcore.c` writes it
+> **first** (both in `__jcore_tlb_walk()` and in `__update_tlb()`), so a
+> reader can observe a torn entry: correct VPN, stale `ASID_TAG` and `PTEL`.
+> Correct order is `data`, then `tag_lo`, then `tag_hi`, with a barrier before
+> the last store.
+>
+> **Also flagged for repair:** `__update_tlb()` executes `ldtlb.rn` in
+> ordinary process context, outside any exception, where its `SR ← SSR`
+> is not obviously correct. Likely should be plain `LDTLB`.
+>
+> **Phase 2 only:** the TSB becomes 2-way with 32-byte sets, so the fill path
+> gains way selection (software policy — replace the way whose tag matches,
+> else alternate on a per-CPU counter) and `jcore_tsb_slot_offset()` becomes a
+> set offset. **None of this is in the tree; Phase 1 keeps today's 1-way
+> 16-byte format.**
+
 ### 4.0 The vector page
 
 J4 uses SH-4-style **fixed** vectors: hardware branches to `VBR + offset` as

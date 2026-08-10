@@ -123,6 +123,34 @@ This is the SH-4 layout exactly (SH7750 hardware manual Rev 2.0 02/99: misses `H
 
 A core built **without** the MMU still uses this vector layout; the `0x400` vector simply never fires until translation is enabled.
 
+> **Amendment — the hardware TSB walker makes `VBR + 0x400` a *slow-path*
+> vector ([mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md)).**
+> **Status: DESIGNED, partially implemented** on `jcore-cpu` branch
+> `mmu/tsb-hw-walker`. The vector layout above is **unchanged** and remains
+> correct; what changes is how often `0x400` is reached and what privileged
+> state a TLB miss touches.
+>
+> A TLB miss is resolved first by a hardware TSB walk, as a pipeline **stall**
+> rather than an exception. That has one consequence this document owns:
+>
+> **On a TSB hit, no exception is taken at all** — `SPC`, `SSR` and `EXPEVT`
+> are **not** written, `SR` is not modified (no `MD`/`RB`/`BL`/`IMASK`
+> change), no register bank switch occurs (§4.2, §6), and no vector is
+> fetched. The privileged-architecture machinery of §4.3 is simply not
+> engaged. `VBR + 0x400` is entered only when the walk fails, and when it is,
+> every rule in §4.3 and §4.5 applies unchanged.
+>
+> This is also the sharpest available test that the mechanism works, and the
+> Phase-1 guards use it: seed `SPC`/`SSR`/`EXPEVT` with sentinels, take a
+> TSB-hitting miss, and assert all three are untouched. If any moved, an
+> exception was taken and stall-and-walk did not happen.
+>
+> Note the interaction with §4.7 and the `SR.RB` re-entry gate
+> ([mmu/hardware-spec.md §5.1](../mmu/hardware-spec.md), implementation note):
+> because a walker hit never sets `RB`, it never consumes the single-level
+> save state, so a TSB hit is transparent to the nesting constraint that
+> section describes rather than competing with it.
+
 `EXPEVT`, `INTEVT`, and `TRA` are added as P4 MMIO (and readable via the CCN path Linux expects).
 
 **Decision (RESOLVED — collision closed):** `TRA` = `0xFF000020`, `EXPEVT` = `0xFF000024`, `INTEVT` = `0xFF000028` — the stock SH-4 addresses, unchanged.
