@@ -103,6 +103,39 @@ Earlier drafts of this spec, of the Phase 1 MMU spec, and of the Phase 2 IOMMU s
 
 **Rationale:** Sun4v's TSB registration API (`hv_mmu_tsb_ctx0`, `hv_mmu_tsb_ctxnon0`) is the precedent. The TSB hot path remains fast (no page-table walk in the guest), and the verification step on LDTLB is a quick cryptographic-cookie or pointer-range check.
 
+> **Amendment — hardware TSB walker ([../mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md)).**
+> **Status: DESIGNED, not yet implemented.** Read this before changing
+> anything in this section.
+>
+> **The guest's TSB must be mapped read-only to the guest. This becomes a
+> security requirement, not a preference.**
+>
+> Today a guest-writable TSB is survivable: a guest that forged an HPN into
+> its own TSB would have its handler build a `PTEL`, `LDTLB.RN` would trap,
+> and the verification step above would reject it. **The walker installs
+> directly from the TSB with no trap and therefore no verification step.** A
+> guest-writable TSB then becomes a direct guest→host escape.
+>
+> Read-only rather than unmapped, because the guest's software fallback still
+> reaches `VBR + 0x400` on a walker miss and re-probes the slot.
+>
+> **What replaces the verification step** is ownership of `TSBBR`: the
+> walker's only data source is the set at `TSBBR | hash`, `TSBBR` is
+> hypervisor-owned and P4-trapped, and §3.8 already has the hypervisor
+> pre-populating the TSB with HPAs. So the walker can only install what the
+> hypervisor wrote. §5's observation that trapping `TSBBR`/`TSBCFG` is
+> "load-bearing, not merely tolerable" becomes literally the isolation root —
+> see §6.
+>
+> **This is consistent with §3.2 (no hardware nested translation)**: the TSB
+> already holds HPAs, so the walker installs them verbatim with no nesting.
+> The walker is only viable *because* §3.8 chose HPA-in-TSB; a design holding
+> RAs there would have needed a nested walk.
+>
+> **Benefit:** the per-refill `LDTLB` trap disappears on the TSB-hit path —
+> see the §5 cost table. §3.8's cookie/range verification becomes dead code
+> for hits, retained only for the software fallback.
+
 ### 3.9 Untranslated guests are translated
 
 **Decision:** When virtualization is active for a guest (`SR.HPRIV=0` in that context), all of the guest's P0-P3 accesses are translated through the TLB, regardless of what value the guest's own `MMUCR.AT` holds. A guest may believe it is running with translation off; the hardware translates it anyway. See [hardware-spec.md §4.4.1](hardware-spec.md).
@@ -274,7 +307,7 @@ Realistic estimates for a Linux guest under a paravirtualized hypervisor on 100 
 | Scenario | Cost |
 |----------|------|
 | Guest user-space steady-state (TLB hit) | 0 added overhead |
-| Guest TLB miss, TSB hit, fast LDTLB trap | ~30 cycles |
+| Guest TLB miss, TSB hit, fast LDTLB trap | ~30 cycles (**→ 0 with the hardware TSB walker**, §3.8 amendment — no trap at all on this path) |
 | Guest TLB miss, TSB miss, hypercall + walk | ~150 cycles |
 | Guest hypercall (HCALL_HV_*) | ~25 cycles trap + service |
 | Guest context switch | ~50 cycles (hypercall to update ASID/TSB) |
@@ -330,7 +363,9 @@ The overhead is higher than hardware-walked nested-paging designs (EPT/NPT achie
 
 With the hypervisor active and all guests confined to their assigned ASID ranges and RA maps:
 
-- **Guest-to-host isolation:** Guest can never construct an HPA. All addresses the guest manipulates are RAs; only the hypervisor's RA-to-HPA map can produce HPAs.
+- **Guest-to-host isolation:** Guest can never construct an HPA. All addresses the guest manipulates are RAs; only the hypervisor's RA-to-HPA map can produce HPAs. **Enforcement differs before and after the hardware TSB walker, and the guarantee is only as good as its enforcement:**
+  - *Today (procedural):* every `LDTLB`/`LDTLB.RN` traps, and the hypervisor verifies the entry against one it wrote (§3.8). A guest-writable TSB is therefore survivable.
+  - *With the walker (structural, DESIGNED not implemented):* the walker installs without a trap, so verification is gone. The argument becomes: **the walker's only data source is the set at `TSBBR | hash`; `TSBBR` is hypervisor-owned and P4-trapped; therefore the walker can only install entries the hypervisor wrote.** This holds **only if the guest cannot write its own TSB** — hence the read-only mapping mandated in §3.8. A guest-writable TSB under a walker is a direct guest→host escape.
 - **Guest-to-guest isolation:** Different guests get different ASID ranges. A TLB lookup with the wrong ASID misses, falls into the trap handler. Hypervisor's TSB management ensures no cross-guest TSB entries exist.
 - **Hypervisor protection:** Hypervisor's own memory is mapped only in HS-mode mappings, with no TLB entries accessible from S or U. Even a malicious guest kernel cannot reach hypervisor memory.
 - **Device-to-guest isolation:** Phase 2 IOMMU's per-BMID enforcement, with BMID ranges assigned per guest.

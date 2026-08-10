@@ -30,6 +30,26 @@ The MMU does not walk page tables in hardware. On a TLB miss, hardware vectors t
 
 **Rationale:** A hardware page-table walker costs significant gates and bakes the page-table format into the ISA, which is exactly what makes 32→64-bit transitions painful on architectures like PowerPC and ARM. With a software-loaded TLB, the page-table layout is entirely an OS decision — Linux uses one format on J32 and a wider variant on J64 from the same source tree, with no hardware change.
 
+> **This decision stands, and the hardware TSB walker does not weaken it.**
+> (Walker status: DESIGNED, partially implemented on `jcore-cpu` branch
+> `mmu/tsb-hw-walker` — see [hardware-spec.md §5.0](hardware-spec.md) for
+> what is and is not in the tree.)
+> The walker of [hardware-spec.md §5.0](hardware-spec.md) probes the **TSB**,
+> never the page tables. The distinction is the whole point: the TSB is a flat
+> hash array whose format this specification defines, while `pgd`/`pmd`/`pte`
+> remain entirely private to the OS. A TSB miss still vectors to software,
+> which walks the page tables in whatever layout it likes and fills the TSB.
+> J32 and J64 therefore still share one Linux source tree with no hardware
+> knowledge of the page-table format — precisely the property the paragraph
+> above is protecting.
+>
+> Prior art for hardware-walks-a-software-defined-structure is older and
+> firmer than for the software-trap arrangement it replaces: PowerPC 601/603/604
+> (1993–94) walked a software-maintained hashed page table in hardware,
+> probing a PTEG of 8 entries in one aligned block, with a software fallback.
+> The relationship there — hardware walks a hash-indexed structure the OS
+> maintains, software handles the miss — is the same one here.
+
 ### 3.2 Hardware TSB pointer assist
 
 Although the hardware does not walk page tables, it computes — on every TLB miss — the address of the cache slot in a software-managed Translation Storage Buffer (TSB) where the translation, if cached, would reside. The trap handler reads this pre-computed pointer and is one load away from the candidate TTE (Translation Table Entry).
@@ -277,7 +297,7 @@ The following are noted but not specified in detail in this document:
 - **I/O MMU:** Not addressed. If needed for DMA isolation, a separate IOMMU design is required.
 - **Cache coherency:** Inherited from existing J-Core SMP design. Multi-CPU cache coherence is orthogonal to MMU design.
 - **Fast parallel SMP resume:** The serial primary-then-secondary resume model is specified. A future fast-parallel variant requiring always-on persistent registers is deferred.
-- **Multi-word-unit instruction-fetch validation:** When this MMU is paired, on an in-order core, with any extension that adds a *multi-word instruction unit*, one extra hardware behavior is required: an instruction-fetch miss on an interior word must report the unit's **first-word PC** so the unit restarts cleanly rather than resuming inside an instruction. Two extensions trigger this — the SIMD prefix block ([../simd/spec.md §6.5](../simd/spec.md)) and the two-word density instructions `movi20`/`lea`/disp12 ([../isa-density/spec.md §5](../isa-density/spec.md)). The SIMD case uses prefix-time block-fetch validation; the two-word case just pins the architectural PC at word0. Both are specified in [hardware-spec.md §5.1](hardware-spec.md); J32-OOO gets the equivalent guarantee for free from its reorder buffer. Called out here because it is work the MMU + extension *combination* — not the MMU alone — incurs.
+- **Multi-word-unit instruction-fetch validation:** When this MMU is paired, on an in-order core, with any extension that adds a *multi-word instruction unit*, one extra hardware behavior is required: an instruction-fetch miss on an interior word must report the unit's **first-word PC** so the unit restarts cleanly rather than resuming inside an instruction. Two extensions trigger this — the SIMD prefix block ([../simd/spec.md §6.5](../simd/spec.md)) and the two-word density instructions `movi20`/`lea`/disp12 ([../isa-density/spec.md §5](../isa-density/spec.md)). The SIMD case uses prefix-time block-fetch validation; the two-word case just pins the architectural PC at word0. Both are specified in [hardware-spec.md §5.2](hardware-spec.md); J32-OOO gets the equivalent guarantee for free from its reorder buffer. Called out here because it is work the MMU + extension *combination* — not the MMU alone — incurs.
 
 ## 9. References
 

@@ -606,6 +606,36 @@ The TLB itself remains shared and unpartitioned — entries are already `ASID_TA
 
 Everything else in the MMU spec — `PTEH` VPN-only, generation-tagged `ASID_TAG`, `STALE` enforcement, the TSB miss path, `LDTLB.RN` — is unaffected.
 
+> **Correction: `ASIDR` is not the only per-thread MMU register.** The
+> sentence above understates what FGMT requires. Four threads can have faults
+> outstanding simultaneously, so the following are **per-fault** state and
+> must be replicated per thread, not merely `ASIDR`:
+>
+> | register | per-thread? | if shared |
+> |---|---|---|
+> | `ASIDR` | ✅ specified above | — |
+> | `PTEH` (VPN, hardware-set on miss) | **required** | thread B's miss overwrites the VPN thread A is about to `LDTLB` → wrong translation installed |
+> | `TSBPTR` | **required** | thread A's handler reads thread B's TSB slot |
+> | `TEA` | **required** | wrong fault address reported to `do_page_fault` |
+> | `MMUFSR` | **required** | wrong fault cause |
+> | `TSBBR` | **required** | only if threads may run different guests under a hypervisor; otherwise shared is fine |
+> | `PTEL` | **required** for plain `LDTLB` | `LDTLB.RN Rm` sources `PTEL` from a GPR, which is already per-thread, so the hot path is already safe |
+> | `EXPEVT`, `SPC`, `SSR` | **required** | implied by §6.5's "precise per thread" but not stated here |
+> | `MMUCR`, `TTB`, `TSBCFG` | correctly shared | cold, set once at boot |
+>
+> Cost is roughly 6 registers × 3 extra copies (~600 flops against ~220k
+> gates) — the same order as the period-floor cost §2.5 already accepts. The
+> hazard if omitted is silent installation of cross-thread translations.
+>
+> **The hardware TSB walker ([../mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md)
+> — DESIGNED, partially implemented on J4, not shipped)
+> reduces the exposure but does not remove it:** on a walker hit no
+> architectural fault state is written at all, so only the walk-failure path
+> needs the per-thread copies. It also changes the cost calculus in LT's
+> favour — §3.7's argument that a redirect costs the faulting thread ~1.75 of
+> its own issue opportunities while the other three lose nothing means the
+> walker's benefit here is latency, not throughput.
+
 ---
 
 ## 12. Cost and validation

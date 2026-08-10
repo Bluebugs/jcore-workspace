@@ -217,6 +217,20 @@ TSBPTR = (TSBBR.TSB_BASE) | ((hash & mask) << 4)
 
 The `<< 4` is because each TSB entry is 16 bytes. TSBPTR is therefore naturally aligned to a 16-byte boundary within the TSB.
 
+> **Planned change (Phase 2 of the hardware-walker work, §5.0) — NOT yet in
+> effect.** The TSB becomes **2-way, one 32-byte set per cache line**: entries
+> stay 16 bytes, `TSB_SIZE_LOG` comes to count **sets rather than entries**,
+> and this computation becomes `(TSBBR & ~0x1F) | ((hash & mask) << 5)`,
+> producing a 32-byte-aligned **set** address. Same total TSB bytes for the
+> same entry count, one line fill per probe, but 1-way → 2-way associativity;
+> conflict misses are what send a fault down the ~150-cycle slow path.
+> `jcore_tsb_slot_offset()` in `arch/sh/mm/tlb-jcore.c`, which mirrors this
+> function bit-for-bit, changes with it.
+>
+> **Today, and throughout Phase 1, the `<< 4` above is exactly what the RTL
+> does and what Linux assumes.** The walker's first phase probes today's
+> 1-way 16-byte slot unchanged.
+
 ### 2.9 CPUINFO — CPU Information (NEW, MMIO only)
 
 Read-only MMIO register, per-CPU-distinct. Each CPU reading address `0xFF000030` sees its own hart ID and capability flags.
@@ -327,7 +341,7 @@ The new encodings in §3.1–§3.2 extend a family that **J2 does not currently 
 | -------- | -------- | -------------------- |
 | `LDTLB` | `0000000000111000` (0x0038) | The TLB-fill primitive. Latches `{ASIDR, PTEH.VPN, PTEL}` into a TLB entry. §3.2's `LDTLB.RN` is the fused-with-RTE variant; both are required. |
 | `LDC Rm,SSR` / `STC SSR,Rn` (+`.l`) | `0100mmmm00111110` / `0000nnnn00110010` | Saved-SR. Exception entry does `SR→SSR` (§5 step 4); the slow path and any nested fault must save/restore it. `LDTLB.RN`/`RTE` restore it on the way out. |
-| `LDC Rm,SPC` / `STC SPC,Rn` (+`.l`) | `0100mmmm01001110` / `0000nnnn01000010` | Saved-PC. Exception entry does `PC→SPC`; the multi-word-fetch restart contract (§5.1) is defined in terms of what gets latched here. |
+| `LDC Rm,SPC` / `STC SPC,Rn` (+`.l`) | `0100mmmm01001110` / `0000nnnn01000010` | Saved-PC. Exception entry does `PC→SPC`; the multi-word-fetch restart contract (§5.2) is defined in terms of what gets latched here. |
 | `LDC Rm,Rn_BANK` / `STC Rm_BANK,Rn` (+`.l`) | `0100mmmm1nnn1110` / `0000nnnn1mmm0010` | Alternate-bank register access. The zero-save/restore scratch the hot path relies on (design-spec §4.4, §6 here) is the banked R0–R7; explicit `BANK` moves ferry values across banks and save both banks at `switch_mm`. |
 
 **Privilege.** All four groups are privileged (illegal-instruction trap if `SR.MD=0`), consistent with their SH-4 definitions.
@@ -335,6 +349,26 @@ The new encodings in §3.1–§3.2 extend a family that **J2 does not currently 
 **Not required by the MMU.** Three further SH-4-only instructions surface in the same J2 gap but are *orthogonal* to translation and may be deferred or dropped: `LDC/STC DBR` (debug base register — UBC, not MMU), `STC SGR` (saved R15 — redundant here, since scratch comes from register banking, not an SGR shadow), and `CLRS`/`SETS` (the MAC saturation `S` bit). The operand-cache-maintenance instructions (`ocbi`/`ocbp`/`ocbwb`/`pref`/`movca.l`) are also in this gap but belong to the cache milestone, not the MMU core — see [cache/l2-spec.md §17.5](../cache/l2-spec.md). `pref` is additionally useful in the miss hot path (§7) to prefetch the `TSBPTR` slot.
 
 ### 3.1 Register access: in-core vs MMIO (by access frequency)
+
+> **Retirement notice (2026-08-10) — NOT yet in effect.** The hardware TSB
+> walker (§5.0) removes the last hot-path user of seven of these encodings, so
+> they are slated for **hard removal** in Phase 3 of that work:
+> `STC TSBPTR,Rn` (`0x?4B`), `CMP/EQ PTEH,Rn` (`0x?CB`),
+> `CMP/EQ ASIDR,Rn` (`0x?DB`), `LDTLB.RN Rm` (`0x?FB`), `STC PTEH,Rn`
+> (`0x?8B`), `STC PTEL,Rn` (`0x?9B`), `STC ASIDR,Rn` (`0x?BB`). Family
+> `0000 nnnn xxxx 1011` then goes from 6 used / 1 free to **0 used / 7 free**.
+>
+> **Every one of them still exists and still works today** — in `mmu.toml`,
+> in `insns.json`, in binutils `sh-opc.h`, and in the RTL. Do not write code
+> that assumes they are gone, and do not remove them ahead of Phase 3.
+>
+> The three `LDC` writes — `LDC Rm,{PTEH, PTEL, ASIDR}` — are **kept
+> permanently**. That is deliberate: it preserves the hypervisor's one-trap
+> guest-refill path ([../hypervisor/design-spec.md §5](../hypervisor/design-spec.md))
+> and avoids having to define that `LDTLB` observes prior P4 stores. The
+> retired `STC` reads are replaced by read-only MMIO aliases at the stock
+> SH-4 offsets — `PTEH` `0xFF000000`, `PTEL` `0xFF000004` — plus `ASIDR` at
+> `0xFF000038` ([../soc/p4-mmio-map.md](../soc/p4-mmio-map.md)).
 
 The choice between an in-core `LDC`/`STC` register and an uncached-MMIO register is made **by access frequency**, not by aesthetics, because the two mechanisms have opposite cost profiles:
 
@@ -518,7 +552,56 @@ If more than one matches: behavior undefined — software must not write duplica
 
 ## 5. TLB Miss Exception Sequence
 
-When a memory access misses the TLB and translation is enabled (MMUCR.AT=1):
+### 5.0 A hardware TSB walk precedes the exception
+
+> **Implementation status (2026-08-10): DESIGNED, PARTIALLY IMPLEMENTED.**
+> The walker is being built on `jcore-cpu` branch `mmu/tsb-hw-walker` in
+> phases. **What is true of the RTL today is stated per-item below; do not
+> read this subsection as describing shipped hardware.** The full design is
+> `docs/superpowers/specs/2026-08-09-hardware-tsb-walker-design.md`.
+
+A TLB **miss** is no longer an exception in the first instance. It is a
+**stall**, the way a cache miss is a stall. On a miss the pipeline holds and a
+hardware FSM (`core/tlb_walk.vhd`) probes the TSB set addressed by `TSBPTR`:
+
+- **On a tag match** it installs the entry through the same `tlb_wr` port
+  `LDTLB` uses and releases the hold. The faulting access replays and
+  translates. **No exception is raised** — `SPC`, `SSR`, `EXPEVT`, `PTEH`,
+  `TEA` and `MMUFSR` are *not* written, and no vector is fetched.
+- **On no match**, or on an entry with `V=0` or `STALE=1`, the walker stops.
+  The miss condition is still true, so the sequence in §5.1 below runs
+  **exactly as it did before the walker existed** — same vector, same
+  `EXPEVT`, same `TEA`/`PTEH`/`TSBPTR`/`MMUFSR` capture. There is deliberately
+  no separate "walk failed" signal.
+
+The walker is **architecturally mandatory** on a J4-class MMU: there is no
+`MMUCR` enable bit and no software TSB probe. `VBR + 0x400` still means "TLB
+miss", but its handler is now the page-table walk, not a TSB probe.
+
+**A walk cannot itself fault.** `TSBBR` is a physical address, so the walker's
+reads bypass translation entirely — no nesting, no recursion, no new exception
+class. A malformed `TSBBR` hangs the walk, exactly as it would hang the
+software handler's `mov.l`.
+
+**The walk must be self-terminating.** The miss condition is a *level* that
+stays true until the miss is resolved, so a walker that re-arms on that level
+never yields a cycle in which the exception can fire, and the core waits
+forever for an ack. The FSM carries a one-shot for this. (Established
+empirically by the Phase-1 feasibility spike, `jcore-cpu` commit `90e6cbc`.)
+
+**Per-item implementation status:**
+
+| item | status |
+|---|---|
+| Stall-and-walk mechanism (ack withheld, external `db_o` borrowed) | proven on RTL by spike `90e6cbc`; walker FSM in progress |
+| Exception path on walk failure (§5.1) | unchanged and shipped |
+| TSB entry format | **Phase 1 keeps today's format**: 16-byte slot, 1-way, `tag_hi`/`tag_lo`/`data` at `+0`/`+4`/`+8`, `tsb_ptr()` scaling by `<< 4`. The 2-way 32-byte set of §4.4 is **Phase 2, not yet implemented.** |
+| Instruction retirement (§3.1) | **Phase 3, not yet started.** All seven instructions still exist and still work. |
+
+### 5.1 Exception sequence (when the walk does not resolve the miss)
+
+When a memory access misses the TLB, translation is enabled (MMUCR.AT=1), and
+the hardware TSB walk of §5.0 did not install a translation:
 
 1. Compute hash and TSBPTR (see §2.8). Store result in TSBPTR register.
 2. Latch the faulting effective address into TEA.
@@ -554,7 +637,7 @@ Exception priorities and ordering relative to other interrupts follow SH-4 conve
 
 **Implementation note (exception re-entry gate).** Architecturally, `SR.BL=1` blocks a second exception from overwriting `SPC`/`SSR` during entry. The reference core instead gates re-entry on **`SR.RB`** (the in-handler bank-select), because the single-level save model means the bare-metal/early-boot environment can leave `BL=1` from reset, which would make `BL` useless as the in-handler discriminator. Consequence: a context **legitimately** running with `RB=1` cannot itself take a TLB fault. This is acceptable for the kernel's miss-handler model (the handler runs entirely in P1/untranslated and is provably non-faulting — see [design-spec.md §4.3](design-spec.md)), but it is a deviation from stock SH-4 `BL` semantics worth noting for anyone porting a different handler model.
 
-### 5.1 Instruction-fetch miss inside a multi-word instruction or SIMD block
+### 5.2 Instruction-fetch miss inside a multi-word instruction or SIMD block
 
 This subsection applies when the implementation pairs this MMU with an extension that introduces a **multi-word instruction unit** — i.e. an architectural instruction whose fetch spans more than one 16-bit word. Two such extensions exist in the J-Core roadmap: the two-word density instructions `movi20`/`movi20s`/`lea`/disp12-`mov.l` ([../isa-density/spec.md](../isa-density/spec.md)) and the SIMD prefix block ([../simd/spec.md](../simd/spec.md)). It imposes one additional requirement on the instruction-fetch miss path (the `VBR + 0x400` vector of §5 step 6); cores with neither extension are unaffected.
 
@@ -580,7 +663,43 @@ Inherited from SH-3/SH-4 unchanged. On any exception (including TLB miss):
 
 The TLB-miss handler's hot path (described in §7) uses only R0–R3 of bank 1, requiring no register saves. The hot path is ~10 instructions (two CMP/EQ pairs for VPN and ASID_TAG plus the LDTLB.RN) — slightly longer than the SH-4-style single-comparison handler because of the ASID split, but still well under the ~30–50 of a pure software walker.
 
-## 7. Recommended TLB Miss Handler
+## 7. TLB Miss Handling
+
+> **Implementation status (2026-08-10).** §7.0 is the design going forward and
+> is **partially implemented** (`jcore-cpu` branch `mmu/tsb-hw-walker`). §7.1
+> is what the RTL and linux@jcore run **today** and remains the shipped
+> behaviour until Phase 3 completes. Both are accurate; they describe
+> different points in time. If you are changing code right now, §7.1 is what
+> you will find in the tree.
+
+### 7.0 The hardware TSB walk (design; see §5.0)
+
+The nine-instruction sequence of §7.1 is replaced by hardware. The FSM
+performs exactly the same probe — same TSB slot, same two tag comparisons,
+same `PTEL` install — with two additional checks the software handler never
+made (`V=1` and `STALE=0`, see §5.0), and without taking an exception at all
+on a hit.
+
+**Software's remaining role** is the slow path only: on a walk failure the
+handler at `VBR + 0x400` walks the page tables, fills the TSB slot, and
+installs via `LDC PTEH` / `LDC PTEL` / `LDTLB.RN`. That is
+`__jcore_tlb_walk()` in `arch/sh/mm/tlb-jcore.c`, which already exists.
+
+**TSB store order is now load-bearing.** The walker compares `tag_hi` first,
+so `tag_hi` must be the **commit point**: software writes `data`, then
+`tag_lo`, then `tag_hi` last, with a barrier before the final store.
+Otherwise a walk can observe a torn entry — correct VPN, stale `ASID`/`PTEL` —
+and install a wrong translation *silently*, with no exception.
+`tlb-jcore.c` currently writes `tag_hi` **first**; that is a defect
+independent of the walker and is fixed as part of this work.
+
+**Expected cost:** ~5–6 cycles fault-to-resumed-execution for a warm TSB hit,
+against the 22 (IMISS) / 23 (DMISS) measured for §7.1. The saving is the two
+pipeline redirects (~9 cycles) and the fetch/decode of nine instructions
+(~15 cycles) — **not** fewer memory accesses; the walker issues the same three
+loads.
+
+### 7.1 The software handler (current shipped behaviour)
 
 For reference. Implementation in software, but documenting the expected sequence:
 
@@ -716,7 +835,7 @@ Critical points to verify in RTL:
 8. **Per-CPU CPUINFO routing:** Each CPU reads a distinct HART_ID at `0xFF000030`.
 9. **Exception priority:** TLB miss vs. instruction-fetch fault vs. higher-priority interrupts handled correctly.
 10. **Reset state:** All MMU registers cleared, TLB invalidated, MMU disabled.
-11. **Multi-word-unit instruction-fetch miss (only if the SIMD or density extension is present, §5.1):** an instruction-fetch miss on the *interior* word of a multi-word unit must save the unit's **first-word PC** into SPC, and `RTE` must re-execute the whole unit. Verify both instances: (a) a SIMD block straddling a 16 KB boundary whose tail page misses → SPC = prefix PC, block re-opens with correct lane-wise semantics (test the prefix-time-validation probe path *and* a non-crossing block that takes no probe/stall); (b) a two-word `movi20`/`lea`/disp12 whose word1 lands on a missing page → SPC = word0 PC, instruction re-executes (not a resume into word1).
+11. **Multi-word-unit instruction-fetch miss (only if the SIMD or density extension is present, §5.2):** an instruction-fetch miss on the *interior* word of a multi-word unit must save the unit's **first-word PC** into SPC, and `RTE` must re-execute the whole unit. Verify both instances: (a) a SIMD block straddling a 16 KB boundary whose tail page misses → SPC = prefix PC, block re-opens with correct lane-wise semantics (test the prefix-time-validation probe path *and* a non-crossing block that takes no probe/stall); (b) a two-word `movi20`/`lea`/disp12 whose word1 lands on a missing page → SPC = word0 PC, instruction re-executes (not a resume into word1).
 
 ## 12. Estimated Hardware Cost
 

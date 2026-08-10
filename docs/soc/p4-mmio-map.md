@@ -83,8 +83,8 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 
 | Offset      | Register   | Description                          |
 |-------------|------------|--------------------------------------|
-| `0x000`     | reserved   | freed — see "Registers with no P4 address" below |
-| `0x004`     | reserved   | freed — see "Registers with no P4 address" below |
+| `0x000`     | reserved → **PTEH** (planned) | freed — see "Registers with no P4 address" below. **Reserved for a read-only `PTEH` alias**, the stock SH-4 offset, when `STC PTEH,Rn` retires (Phase 3 of [mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md); see §3.1 retirement notice). **Not decoded today.** |
+| `0x004`     | reserved → **PTEL** (planned) | freed — as above. **Reserved for a read-only `PTEL` alias**, stock SH-4 offset, when `STC PTEL,Rn` retires. **Not decoded today.** |
 | `0x008`     | TTB        | Translation table base (software)     |
 | `0x00C`     | TEA        | TLB exception address                 |
 | `0x010`     | MMUCR      | MMU control                           |
@@ -96,7 +96,9 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 | `0x028`     | INTEVT     | Interrupt event code — stock SH-4 placement; **decoded in RTL**, read-only (also `STC INTEVT,Rn`) |
 | `0x02C`     | MMUFSR     | Fault-status snapshot, read-only; **decoded in RTL** (see [mmu/hardware-spec.md §2.11](../mmu/hardware-spec.md)) |
 | `0x030`     | CPUINFO    | Per-CPU hart ID + capability flags — **allocated, NOT implemented in current RTL** (see note below) |
-| `0x034`–`0x038` | reserved | future registers                              |
+| `0x034`     | reserved   | proposed `PTEU` (PAE only, [mmu/hardware-spec.md §2.10](../mmu/hardware-spec.md)) |
+| `0x038`     | reserved → **ASIDR** (planned) | **Reserved for a read-only `ASIDR` alias** when `STC ASIDR,Rn` retires (Phase 3, see §3.1 retirement notice). `ASIDR` is a J-core addition with no stock SH-4 offset, hence `0x038` rather than a low address. **Not decoded today.** |
+| `0xF00`     | walker counters (debug) | Read-only walk/hit counters exported by `core/tlb_walk.vhd` for the anti-vacuity guards. **Scaffolding**, removed with the `MMU_WALKER` generic in Phase 3. Inside the reserved `0x044`–`0xFFC` range below. |
 | `0x03C`     | QACR0      | Store-queue 0 area register (`0xFF00003C`), see [../sq/spec.md §3](../sq/spec.md) |
 | `0x040`     | QACR1      | Store-queue 1 area register (`0xFF000040`), see [../sq/spec.md §3](../sq/spec.md) |
 | `0x044`–`0xFFC` | reserved | future registers                                  |
