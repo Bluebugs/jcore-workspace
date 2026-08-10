@@ -112,12 +112,16 @@ Adopt SH-4 fixed VBR-relative offsets, aligned with the values the MMU spec alre
 |---|---|---|
 | Power-on reset | `0xA0000000` (P2, fixed) | `VBR` reset = 0 |
 | General exception | `VBR + 0x100` | illegal insn, `TRAPA`, address error |
-| TLB miss / protection (I-fetch, load, store) | `VBR + 0x400` (single vector, all six causes; EXPEVT discriminates) | per [mmu/hardware-spec.md §5](../mmu/hardware-spec.md) |
+| TLB **miss** (I-fetch / load / store) | `VBR + 0x400` | `EXPEVT` distinguishes; per [mmu/hardware-spec.md §5](../mmu/hardware-spec.md) |
+| TLB **protection** (IPROT / DPROT_R / DPROT_W) | `VBR + 0x100` | with the other general exceptions, as on SH-4 |
 | Interrupt | `VBR + 0x600` | level in `INTEVT` |
 
-A core built **without** the MMU still uses this vector layout; the `0x400` family simply never fires until translation is enabled.
+This is the SH-4 layout exactly (SH7750 hardware manual Rev 2.0 02/99: misses `H'400`, protection `H'100`). Two earlier arrangements are retired and should not be reintroduced:
 
-### 4.6 Cause registers and the MMIO-map collision
+- **Per-access-type miss vectors `0x400/0x420/0x440`.** The handler was byte-identical for all three, so the split only triplicated the hot path's I-cache footprint.
+- **All six TLB causes on `0x400`.** A protection fault against a VPN/ASID that still has a valid TSB entry TSB-hits on the miss fast path; reinstalling that entry livelocks, because `do_page_fault()` never runs to repair the pte. Avoiding that needed a cause test on *every* TSB hit. Splitting protection back out to `0x100` excludes the hazard by construction and removed two instructions from the hot path. *Guard: `mmuvecsplit`.*
+
+A core built **without** the MMU still uses this vector layout; the `0x400` vector simply never fires until translation is enabled.
 
 `EXPEVT`, `INTEVT`, and `TRA` are added as P4 MMIO (and readable via the CCN path Linux expects).
 
@@ -125,9 +129,9 @@ A core built **without** the MMU still uses this vector layout; the `0x400` fami
 
 **Rationale:** matching the architecture is the point. This is where the SH-4 hardware manual (Renesas/Hitachi, 1998) puts them, and where Linux `arch/sh/include/cpu-jcore/cpu/mmu_context.h` already defines them; adopting anything else would make every SH-4-aware kernel, debugger and simulator wrong for no gain. See [soc/p4-mmio-map.md §3.2](../soc/p4-mmio-map.md) for the canonical allocation.
 
-**Superseded proposal (recorded, not silently dropped).** An earlier revision of this section proposed relocating `EXPEVT`/`INTEVT`/`TRA` to `0xFF000028`/`0x2C`/`0x30` to dodge two conflicting claims on `0xFF000020` (`CPUINFO`) and `0xFF000024` (`ASIDR`). That proposal is **superseded** and those relocated addresses are **not** allocated to these registers. Both obstacles have since dissolved: `ASIDR` was removed from the P4 map entirely (it is an LDC/STC-only control register with no MMIO alias, [mmu/hardware-spec.md §2.1a](../mmu/hardware-spec.md)), and `CPUINFO` — a paper allocation with zero occurrences in `jcore-cpu` or `jcore-soc` RTL — has moved to `0xFF00002C` ([mmu/hardware-spec.md §2.9](../mmu/hardware-spec.md)).
+**Superseded proposal (recorded, not silently dropped).** An earlier revision of this section proposed relocating `EXPEVT`/`INTEVT`/`TRA` to `0xFF000028`/`0x2C`/`0x30` to dodge two conflicting claims on `0xFF000020` (`CPUINFO`) and `0xFF000024` (`ASIDR`). That proposal is **superseded** and those relocated addresses are **not** allocated to these registers. Both obstacles have since dissolved: `ASIDR` was removed from the P4 map entirely (it is an LDC/STC-only control register with no MMIO alias, [mmu/hardware-spec.md §2.1a](../mmu/hardware-spec.md)), and `CPUINFO` — a paper allocation with zero occurrences in `jcore-cpu` or `jcore-soc` RTL — has moved to `0xFF000030` ([mmu/hardware-spec.md §2.9](../mmu/hardware-spec.md)); `0xFF00002C` went to `MMUFSR`, which the RTL does decode.
 
-**Implementation status:** allocation only. `jcore-cpu/core/datapath.vhm:1136-1155` decodes no P4 offset above `0x1C`, so all three addresses currently read as zero without faulting; PM3 must add the decode.
+**Implementation status:** decoded. `jcore-cpu/core/datapath.vhm` decodes `0x20`/`0x24`/`0x28` (and `0x2C` for MMUFSR); `TRA` is read/write, `EXPEVT`/`INTEVT` read-only. They remain readable in-core via `STC TRA/EXPEVT/INTEVT, Rn` as well.
 
 ### 4.7 Single-level save state constrains the VM design (TSB in P1)
 

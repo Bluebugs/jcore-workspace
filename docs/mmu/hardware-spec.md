@@ -525,7 +525,9 @@ When a memory access misses the TLB and translation is enabled (MMUCR.AT=1):
 3. Latch the faulting VPN into PTEH. The page size is not yet known at miss time (it is decided by the PTE the handler eventually loads), so hardware captures the VPN at the **finest** supported granularity — 4 KB, i.e. `PTEH[31:12] = VA[31:12]`, low bits `[11:0]` zeroed — and the handler masks coarser as needed at `LDTLB` time. (Capturing only `VA[31:14]` would alias 4 KB pages that differ in `VA[13:12]`.) **ASIDR is not touched** — the kernel has set ASIDR at context switch and it remains valid for the miss handler to read.
 4. Save PC → SPC and SR → SSR. The exception is a **re-execute** type: SPC must be the faulting instruction's own PC so `LDTLB.RN`/`RTE` re-runs the access (critical for stores — a faulting load's destination register is already written, but a dropped store write is lost). I-fetch faults capture the live PC (detected at the fetch pointer); **D-access faults are detected in the MA stage, where the live PC has run a variable distance ahead**, so hardware latches the faulting instruction's restart-PC and SR on the first fault cycle (alongside TEA/PTEH) and sources SPC/SSR from those latches.
 5. Update SR: set MD=1, RB=1, BL=1, IMASK=0xF.
-6. Jump to `VBR + 0x400`. **All six TLB fault causes share this one vector**, exactly as stock SH-4 does (Renesas/Hitachi SH-4 hardware manual, 1998); `EXPEVT` is the sole discriminator between them.
+6. Jump to the vector for the fault CLASS: **`VBR + 0x400` for a miss**, **`VBR + 0x100` for a protection violation** (the general-exception vector, shared with Error / Slot Illegal / General Illegal / TRAPA). `EXPEVT` discriminates within each class, and `MMUFSR` (§2.11) additionally separates `DPROT_R` from `DPROT_W`, which share `EXPEVT = 0x0C0`.
+
+   This is the SH-4 layout (SH7750 hardware manual Rev 2.0 02/99). Two earlier arrangements are retired: the per-access-type miss split at `+0x420`/`+0x440` (the handler was byte-identical for all three, so it only triplicated the hot path's I-cache footprint), and putting all six causes on `+0x400` (commit `a8ab8d0`), which forced the fast path to test the cause on every TSB hit — see §3.2a for why that was a livelock guard rather than a preference. *Guard: `mmuvecsplit`.*
 
 Exception priorities and ordering relative to other interrupts follow SH-4 conventions.
 
@@ -536,17 +538,17 @@ Exception priorities and ordering relative to other interrupts follow SH-4 conve
 | TLB IMISS (instruction-fetch miss) | `+0x400` | `0x040` | `TLBPC` (delay-slot-aware I-fetch restart PC) | live `SR` |
 | TLB DMISS_R (data-load miss) | `+0x400` | `0x060` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
 | TLB DMISS_W (data-store miss) | `+0x400` | `0x080` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
-| TLB IPROT (instruction protection violation) | `+0x400` | `0x0A0` | `TLBPC` (delay-slot-aware I-fetch restart PC) | live `SR` |
-| TLB DPROT_R (data-load protection violation) | `+0x400` | `0x0C0` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
-| TLB DPROT_W (data-store protection violation) | `+0x400` | `0x0C0` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
+| TLB IPROT (instruction protection violation) | `+0x100` | `0x0A0` | `TLBPC` (delay-slot-aware I-fetch restart PC) | live `SR` |
+| TLB DPROT_R (data-load protection violation) | `+0x100` | `0x0C0` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
+| TLB DPROT_W (data-store protection violation) | `+0x100` | `0x0C0` | `TLBPC-4` (faulting-instruction restart PC) | latched `TLBSR` |
 
-**One vector, six causes.** Every row above vectors to `VBR + 0x400`. `EXPEVT` is the only discriminator, and software must read it to classify the fault.
-
-**Protection-fault direction — recovered via MMUFSR.** DPROT_R and DPROT_W both write EXPEVT `0x0C0`, so with one TLB vector `EXPEVT` alone cannot say whether the faulting access was a read or a write. An earlier revision recovered that from the vector offset (`0x420` vs `0x440`); merging the vectors removed it. Rather than leave software to re-decode the instruction at `SPC`, **MMUFSR** (§2.11, MMIO `0xFF00002C`) supplies the direction directly: it is latched on every TLB exception and carries an explicit `WRITE` bit, so a handler recovers read-vs-write regardless of the vector-dispatch strategy in use. This matters most for copy-on-write, where misclassifying a write-protect fault as a read fault livelocks the fault handler.
+**Note:** the VBR-offset column now DOES discriminate — misses at `+0x400`, protection at `+0x100` — which is why the miss handler no longer tests the cause. `EXPEVT` separates the three causes within each class, but DPROT_R and DPROT_W both report `0x0C0`, so `EXPEVT` alone cannot recover the direction of a protection fault. **MMUFSR** (§2.11, MMIO `0xFF00002C`) exists specifically to resolve that: it is latched on every TLB exception and carries an explicit `WRITE` bit. (This note previously read "every row above shares the one vector ... it discriminates nothing", which was true of the merged-vector arrangement and is not true now.)
 
 **MULTI_HIT is delivered out-of-band.** A multiple-TLB-match (S-I5, `tlb.vhd` `i_multihit`/`d_multihit`) does **not** use the TLB vector. It is routed to the existing General Illegal register-model exception: `PC <- VBR + 0x100`, `EXPEVT <- 0x180`. **Rationale:** the decoder's system-plane immediate-value field (ROM imm-value selector, 5 bits) is at capacity — 32 of 32 distinct constants are used — so minting a dedicated MULTI_HIT vector/EXPEVT pair would require widening the field to 6 bits and regenerating the ROM template (guarded by `romImmFieldBits` in the decoder generator). Reusing General Illegal costs zero new immediate literals and zero new opcodes. Software distinguishes a multi-hit from a real illegal instruction with the sticky multi-hit status flag, not with EXPEVT.
 
-**Reconciliation note.** An earlier revision of this specification (and of the implementation) gave each TLB access type its own vector: I-fetch `VBR + 0x400`, data-load `VBR + 0x420`, data-store `VBR + 0x440` — the "Option-A" layout — so that the miss handler could branch on access type without reading EXPEVT. The implementation merged all six causes onto the single `VBR + 0x400` vector (commit `a8ab8d0`, "mmu: merge the three TLB-miss vectors into a single VBR+0x400"; design note at `jcore-cpu/decode/gen-go/spec/sh4/exceptions.toml:386-392`). **Rationale:** the real handler turned out to be byte-identical across all three entries — access type only matters on the slow `do_page_fault` path, which reads EXPEVT anyway — so the split merely triplicated the hot path's I-cache footprint. The merged layout also matches stock SH-4, which has always used one TLB vector (Renesas/Hitachi SH-4 hardware manual, 1998). EXPEVT codes and the SPC/SSR capture rules are unchanged by the merge.
+**Reconciliation note.** An earlier revision of this specification (and of the implementation) gave each TLB access type its own vector: I-fetch `VBR + 0x400`, data-load `VBR + 0x420`, data-store `VBR + 0x440` — the "Option-A" layout — so that the miss handler could branch on access type without reading EXPEVT. The implementation merged all six causes onto the single `VBR + 0x400` vector (commit `a8ab8d0`, "mmu: merge the three TLB-miss vectors into a single VBR+0x400"; design note at `jcore-cpu/decode/gen-go/spec/sh4/exceptions.toml:386-392`). **Rationale:** the real handler turned out to be byte-identical across all three entries — access type only matters on the slow `do_page_fault` path, which reads EXPEVT anyway — so the split merely triplicated the hot path's I-cache footprint. The merged layout also matches stock SH-4, which has always used one TLB vector (Renesas/Hitachi SH-4 hardware manual, 1998). EXPEVT codes and the SPC/SSR capture rules are unchanged by the merge. 
+
+**Second reversal (current).** The merge above was itself partly undone: the three MISS causes keep `VBR + 0x400`, but the three PROTECTION causes moved to `VBR + 0x100`. The merge's rationale — one byte-identical handler — held only for the misses. Protection faults are not handled by the miss path at all, and routing them through it created a livelock: a protection fault against a VPN/ASID with a still-valid TSB entry TSB-hits, gets its entry reinstalled, and retries forever without ever reaching `do_page_fault()`. Avoiding that cost a cause test on every TSB hit. Splitting protection back out excludes it by construction, restores the SH-4 layout exactly (SH7750 manual Rev 2.0 02/99: misses `H'400`, protection `H'100`), and took the hot path from 11 instructions to 9. *Guard: `mmuvecsplit`.*
 
 **SPC/SSR semantics.** I-fetch faults (IMISS/IPROT) save a delay-slot-aware restart PC (`TLBPC`) and take `SSR` from the live `SR`. D-access faults (DMISS_R/DMISS_W/DPROT_R/DPROT_W) save the faulting-instruction's own restart PC (`TLBPC-4`) so that `LDTLB.RN`/`RTE` re-executes the faulting instruction, and take `SSR` from the latched `TLBSR` (captured on the first fault cycle, alongside `TEA`/`PTEH`), because by the MA stage the live PC has already run ahead of the faulting instruction.
 
@@ -590,25 +592,40 @@ TSB tag word (8 bytes, two 32-bit halves):
   tag_lo (offset 4, 4 bytes)  = expected ASID_TAG  (matches ASIDR)
 ```
 
-The kernel writes both halves at TSB-fill time. The miss handler compares both halves against PTEH (VPN) and ASIDR (ASID_TAG) — two `CMP/EQ` operations.
+The kernel writes both halves at TSB-fill time. The miss handler compares both halves against PTEH (VPN) and ASIDR (ASID_TAG) — two compares, each done in ONE instruction by the fused `CMP/EQ PTEH,Rn` / `CMP/EQ ASIDR,Rn` (§3.1), which read the CSR onto ybus and set T without a `STC` or a scratch register.
+
+Only the three **miss** causes arrive here; protection faults take `VBR+0x100` (§5), so the handler does not test the cause.
 
 ```asm
-        ! At VBR+0x400, SR.RB=1, bank 1 selected.
+        ! Inlined AT VBR+0x400 (not jumped to). SR.RB=1, bank 1 selected.
 tlb_miss:
-        stc     tsbptr, r0      ! Read pre-computed TSB slot address
-        mov.l   @r0+, r1        ! Load expected VPN (tag_hi); r0 += 4
-        stc     pteh, r2        ! Load faulting VPN
-        cmp/eq  r1, r2          ! VPN match?
-        bf      tsb_miss_slow   ! No: slow path
-        mov.l   @r0+, r1        ! Load expected ASID_TAG (tag_lo); r0 += 4
-        stc     asidr, r2       ! Load current ASID_TAG
-        cmp/eq  r1, r2          ! ASID match?
-        bf      tsb_miss_slow   ! No: slow path
-        mov.l   @r0, r3         ! Load TTE data
-        ldc     r3, ptel        ! Stage data into PTEL
-        ldtlb.rn                ! Install entry, return from exception (no delay slot)
-         nop                    ! Padding only — not an architectural slot (§3.2)
+        stc      tsbptr, r0     ! Read pre-computed TSB slot address
+        mov.l    @r0+, r1       ! Load expected VPN (tag_hi); r0 += 4
+        cmp/eq   pteh, r1       ! VPN match?  (fused CSR-vs-Rn compare)
+        bf       tsb_miss_slow  ! No: slow path
+        mov.l    @r0+, r1       ! Load expected ASID_TAG (tag_lo); r0 += 4
+        mov.l    @r0, r3        ! Load TTE data -- issued here so its load-use
+                                !   latency hides behind the compare + bf below
+        cmp/eq   asidr, r1      ! ASID match?  (fused compare)
+        bf       tsb_miss_slow  ! No: slow path
+        ldtlb.rn r3             ! PTEL <- r3, install, and return -- one insn,
+                                !   no delay slot, no staging through the CSR
 ```
+
+**Nine instructions, and no taken branch on a TSB hit.** Measured fault → back
+executing the faulting instruction: **22 cycles** (IMISS) / **23 cycles**
+(DMISS_R/W), of which ~9 is fixed hardware exception entry and `LDTLB.RN`
+redirect. See `jcore-cpu/sim/bench_tlb_hotpath.sh` and
+`sim/profile_tlb_hotpath.py` for the per-instruction attribution.
+
+Three earlier shapes of this sequence are retired, and it is worth knowing why
+none of them come back:
+
+| retired | why |
+|---|---|
+| `stc pteh,r2` + `cmp/eq r1,r2` per compare | the fused compares removed 2 insns and freed a scratch register |
+| `ldc r3,ptel` + `ldtlb.rn` | `LDTLB.RN Rm` installs straight from the GPR |
+| `stc expevt` + `add #-128` + `cmp/pl` (or the short-lived `CMP/MISS EXPEVT`) | only needed while misses and protection shared a vector; §3.2a |
 
 Hot path: ~10 instructions (VPN compare + ASID compare + LDTLB.RN). With the slow path inlined, the full handler fits in ~30 instructions.
 

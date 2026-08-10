@@ -110,14 +110,29 @@ A user-mode (or P0/P3 kernel) memory access proceeds:
 1. Virtual address presented to MMU.
 2. MMU consults TLB. Match on `{ASID_TAG, VPN}` returns the PFN, page size, and permissions. The ASID_TAG is compared against the dedicated ASIDR register; the VPN is compared against PTEH. (`ASID_TAG` is 16 bits = 12-bit ASID + 4-bit gen_low, per the kernel's encoding.) The ASID lives in the dedicated ASIDR register, not PTEH (RTL: `tlb.vhd:52,59`).
 3. On hit: physical address forms, access proceeds.
-4. On miss: hardware computes `TSBPTR = TSBBR | (hash(VPN) & mask) << 4`, stores it in the TSBPTR register, latches the faulting VPN into PTEH, stores the faulting effective address in TEA, and traps to the TLB-miss vector at `VBR + 0x400`.
+4. On miss: hardware computes `TSBPTR = TSBBR | (hash(VPN) & mask) << 4`, stores it in the TSBPTR register, latches the faulting VPN into PTEH, stores the faulting effective address in TEA, and traps to the TLB-**miss** vector at `VBR + 0x400`.
+5. On a **protection violation** (the entry is resident but the access is not permitted): traps to `VBR + 0x100` instead, with the other general exceptions, as on SH-4. Miss and protection are deliberately *not* the same vector — see §4.1a.
+
+### 4.1a Why miss and protection take different vectors
+
+The handler above is reached only for a **miss**. That separation is load-bearing, not cosmetic.
+
+While all six TLB causes shared `VBR + 0x400`, a *protection* fault against a VPN/ASID that still had a valid TSB entry would TSB-hit on the fast path above. Step 2 would then reinstall the identical (say, read-only) entry and the faulting instruction would retry forever: `do_page_fault()` is never reached, so the pte is never repaired. The fast path had to test `EXPEVT` on **every** TSB hit purely to avoid that — a cost paid by every miss to guard against a case that only arises because the vectors were merged.
+
+Routing protection to `VBR + 0x100` excludes the livelock by construction and removes the test. This is also what SH-4 itself does (SH7750 hardware manual Rev 2.0 02/99: misses `H'400`, protection `H'100`), and it matches the standard arrangement for software-managed TLBs — MIPS R2000/R3000 (1985) sends TLB refill to a dedicated fast vector and TLB Invalid/Modified/protection to the general vector for exactly this reason; PowerPC 603 (1993) goes further with three separate miss vectors.
+
+*Guard: `mmuvecsplit` — each vector writes a distinct marker, so a silent regression of the split fails rather than passing quietly.*
 
 ### 4.2 TLB-miss software flow
 
 The handler runs in supervisor mode with `SR.RB=1` (bank 1 selected, providing 8 scratch registers without save/restore):
 
 1. Read TSBPTR. Load the TTE tag and data from that address.
-2. Compare tag against PTEH (VPN) and ASIDR (ASID_TAG). If match: load the data into PTEL, execute LDTLB.RN to install in the TLB and return atomically (no delay slot).
+2. Compare tag against PTEH (VPN) and ASIDR (ASID_TAG), using the fused
+   `CMP/EQ PTEH,Rn` / `CMP/EQ ASIDR,Rn` compares so neither needs a `STC` and a
+   scratch register. If match: `LDTLB.RN Rm` installs the TTE straight from the
+   GPR holding it and returns atomically (no delay slot), without staging
+   through the PTEL CSR.
 3. If mismatch: fall through to the slow-path page-table walker. Find the translation by walking the OS page table from `current_pgd`. Install in both the TSB (for next time) and the TLB.
 4. If the walker also fails: vector to the page-fault handler, which signals SIGSEGV or grows the stack or pages in the file, per standard Linux semantics.
 
