@@ -357,8 +357,8 @@ have very different reach:
 
 | Guest miss-handler step | Mechanism | Traps? |
 |-------------------------|-----------|:------:|
-| `STC TSBPTR, Rn` — read the hardware-computed TSB slot pointer | in-core `STC` (`0x0043`), [mmu/hardware-spec.md §2.8](../mmu/hardware-spec.md), [§3.1](../mmu/hardware-spec.md) | no |
-| Load the candidate TTE from the TSB | ordinary memory load, into the guest's pinned P1 window (§4.4.5) | no |
+| ~~`STC TSBPTR, Rn`~~ — **retired in Phase 3**; the hardware TSB walker consumes the slot pointer internally, and the MMIO mirror at `0xFF00001C` traps like any P4 access | — | n/a |
+| Load the candidate TTE from the TSB | ordinary memory load, into the guest's pinned P1 window (§4.4.5) — **on the walker path this is hardware's load, not the guest's** | no |
 | `LDC Rm, PTEH` / `LDC Rm, PTEL` / `LDC Rm, ASIDR` | in-core `LDC` only — **these registers have no MMIO alias** ([mmu/hardware-spec.md §2.1](../mmu/hardware-spec.md), [§2.1a](../mmu/hardware-spec.md), [§3.1](../mmu/hardware-spec.md)) | no |
 | `LDTLB` / `LDTLB.RN` | traps to `VBR_HYP + 0x190` by §3.4 | **yes — 1** |
 
@@ -377,9 +377,9 @@ cold-path row added to the table above. A guest that flushes its whole TLB on ev
 pays one extra ~60-cycle trap there, not one per mapping.
 
 Note also that `TSBBR`/`TSBCFG` being trapped is load-bearing, not merely tolerable: it is how the
-hypervisor keeps ownership of the guest's TSB placement (§3.8) while the guest's own
-`STC TSBPTR` still returns a pointer into that TSB, computed by hardware from the base the
-hypervisor programmed.
+hypervisor keeps ownership of the guest's TSB placement (§3.8) while the hardware walker still
+resolves against that TSB, from the base the hypervisor programmed. (The guest's own
+`STC TSBPTR` read is retired; `0xFF00001C` remains as a trapped P4 mirror.)
 
 > **Amendment — the "cold path only" characterisation of `TSBBR` is wrong once a
 > guest partitions its TSB by trust domain (§3.8a).** The reasoning above — a
@@ -439,6 +439,28 @@ With the hypervisor active and all guests confined to their assigned ASID ranges
     its current domain's sub-range — not merely be covered incidentally by
     tests that exercise the happy path. Both properties fail together and
     silently; neither produces a fault of its own.
+- **The walker counters at `0xFF000054` are guest-observable state and MUST be
+  virtualized or denied.** *(Implementation status: decoded in RTL, jcore-cpu
+  `mmu/tsb-hw-walker`; `[31:16]` = `cnt_walks`, `[15:0]` = `cnt_hits`,
+  [../soc/p4-mmio-map.md](../soc/p4-mmio-map.md).)* The TSB is **per-CPU and
+  shared across guests**, so a guest reading `cnt_hits` observes TSB behaviour
+  caused by **other guests**. This is *strictly worse* than the 7-vs-79-cycle
+  timing channel it summarises: that channel requires prime+probe and
+  measurement, whereas the counter simply states the answer, at one load, with
+  no timing apparatus and no noise.
+  - The counters were placed at a **P4** address for exactly this reason.
+    Guest P4 is trapped wholesale ([hardware-spec.md §4.4.3](hardware-spec.md)),
+    so the read arrives at the hypervisor, which may **virtualize** it —
+    returning per-guest counts it maintains itself, or the delta attributable to
+    that guest — or **deny** it, returning zero or injecting an exception.
+    Passing the raw hardware value through is a defect, not a default.
+  - This belongs with the `TSBBR` bounds check above: both are P4 traps whose
+    *content* carries a security property, not merely whose *existence* does.
+    Neither fails loudly. A hypervisor that forwards `0xFF000054` verbatim
+    leaks cross-guest TSB behaviour continuously and silently.
+  - Denial is the safe default; virtualization is the useful one, since the
+    counters are the TSB hit-rate signal a guest kernel wants for sizing its own
+    TSB ([mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md)).
 - **Guest-to-guest isolation:** Different guests get different ASID ranges. A TLB lookup with the wrong ASID misses, falls into the trap handler. Hypervisor's TSB management ensures no cross-guest TSB entries exist.
 - **Hypervisor protection:** Hypervisor's own memory is mapped only in HS-mode mappings, with no TLB entries accessible from S or U. Even a malicious guest kernel cannot reach hypervisor memory.
 - **Device-to-guest isolation:** Phase 2 IOMMU's per-BMID enforcement, with BMID ranges assigned per guest.

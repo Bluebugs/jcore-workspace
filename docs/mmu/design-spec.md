@@ -145,6 +145,12 @@ Routing protection to `VBR + 0x100` excludes the livelock by construction and re
 
 ### 4.2 TLB-miss software flow
 
+> **HISTORICAL.** *(Implementation status: superseded. The hardware TSB walker
+> does steps 1–2 (hardware-spec.md §5.0), and Phase 3 retired the four
+> instructions this flow used: jcore-cpu `09304a3`, `linux@jcore`
+> `a9417bda9766`.)* Software now enters `VBR + 0x400` only on a walk failure,
+> and goes straight to step 3.
+
 The handler runs in supervisor mode with `SR.RB=1` (bank 1 selected, providing 8 scratch registers without save/restore):
 
 1. Read TSBPTR. Load the TTE tag and data from that address.

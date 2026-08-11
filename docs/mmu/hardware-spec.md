@@ -32,7 +32,7 @@ Conventions:
 
 ### 2.1 PTEH — Page Table Entry High
 
-Inherited from SH-4 in spirit, but **VPN-only** in this revision. Accessed via `LDC Rm, PTEH` / `STC PTEH, Rn` (see §3.1) — LDC/STC only, no MMIO alias (decoder comment `datapath.vhm:1141-1147`; LDC write path `datapath.vhm:1335-1342`, whose `others` arm reads `-- SEL_MMUCR/TTB/TEA handled via P4 MMIO`). The 16-bit `ASID_TAG` lives in the separate **ASIDR** register (see §2.1a) — a deliberate alignment with UltraSPARC's `PRIMARY_CONTEXT` model (sun4u, 1995). This decoupling lets J-Core support the full SH-4-plus-PageMask page-size set down to **4 KB** without sacrificing ASID width.
+Inherited from SH-4 in spirit, but **VPN-only** in this revision. Written via `LDC Rm, PTEH`; read via the **read-only P4 alias at `0xFF000000`** (`STC PTEH,Rn` is retired — see §3.1). The write side is `LDC`-only: there is no MMIO write path, by design (D7). The 16-bit `ASID_TAG` lives in the separate **ASIDR** register (see §2.1a) — a deliberate alignment with UltraSPARC's `PRIMARY_CONTEXT` model (sun4u, 1995). This decoupling lets J-Core support the full SH-4-plus-PageMask page-size set down to **4 KB** without sacrificing ASID width.
 
 **J32 layout (32 bits):**
 ```
@@ -57,7 +57,7 @@ The PTEH layout no longer carries ASID bits. SH-4 binary compatibility is preser
 
 ### 2.1a ASIDR — Address Space Identifier Register
 
-New in this revision. Holds the 16-bit `ASID_TAG` that hardware compares on every TLB lookup. Accessed via `LDC Rm, ASIDR` / `STC ASIDR, Rn` (new LDC/STC encoding — see §3) — LDC/STC only, no MMIO alias (decoder comment `datapath.vhm:1141-1147`; LDC write path `datapath.vhm:1335-1342`, whose `others` arm reads `-- SEL_MMUCR/TTB/TEA handled via P4 MMIO`).
+New in this revision. Holds the 16-bit `ASID_TAG` that hardware compares on every TLB lookup. Written via `LDC Rm, ASIDR`; read via the **read-only P4 alias at `0xFF000038`** (`STC ASIDR,Rn` is retired — see §3.1). The write side is `LDC`-only: no MMIO write path (D7).
 
 **J32 layout (32 bits):**
 ```
@@ -77,7 +77,7 @@ Hardware does not interpret the split; only the kernel does. The Linux ASID allo
 
 **ASIDR is per-thread-context on FGMT implementations.** On a single-threaded core there is one ASIDR per CPU, as described above. On a core with `n_tc` hardware thread contexts ([glossary §4](../glossary.md)) each thread runs an independent address space, so the core holds **`n_tc` copies of ASIDR**:
 
-- `LDC Rm, ASIDR` / `STC ASIDR, Rn` write and read **the issuing thread's copy**. No encoding change, no new instruction, no software-visible difference from the single-threaded case — a kernel running on logical CPU *t* simply sees its own register.
+- `LDC Rm, ASIDR` and the `0xFF000038` read alias write and read **the issuing thread's copy**. No encoding change, no new instruction, no software-visible difference from the single-threaded case — a kernel running on logical CPU *t* simply sees its own register.
 - The TLB compare of §4 selects by the issuing thread's TC_ID:
 
   ```
@@ -113,7 +113,7 @@ must arrange them before issuing the instruction.
 
 ### 2.2 PTEL — Page Table Entry Low
 
-Inherited from SH-4, extended with PageMask. Accessed via `LDC Rm, PTEL` / `STC PTEL, Rn` (see §3.1).
+Inherited from SH-4, extended with PageMask. Written via `LDC Rm, PTEL`; read via the **read-only P4 alias at `0xFF000004`** (`STC PTEL,Rn` is retired — see §3.1).
 
 **J32 layout (32 bits) — canonical, matches the J4 reference implementation (`tlb.vhd:190-202`):**
 ```
@@ -244,7 +244,7 @@ For most kernels, software writes HASH_MODE=1 and HASH_SHIFT=TSB_SIZE_LOG at boo
 
 Hardware-populated on every TLB miss. Holds the address (in physical memory) of the TSB **set** where the missing translation, if cached, would be found. A set is one 32-byte cache line holding two contiguous 16-byte entries — way 0 at `+0`, way 1 at `+16`.
 
-**Access:** `STC TSBPTR, Rn` (`0x004B`, read-only; the hot-path read — see §3.1) and MMIO at `0xFF00001C` (also read-only). There is no `LDC TSBPTR`.
+**Access:** MMIO at `0xFF00001C`, read-only. (`STC TSBPTR,Rn` `0x004B` existed until Phase 3 and is retired — see §3.1; there was never an `LDC TSBPTR`.) Nothing on the miss path reads it any more: the hardware walker consumes the value internally.
 
 **Computation (hardware, on TLB miss):**
 ```
@@ -582,25 +582,44 @@ The new encodings in §3.1–§3.2 extend a family that **J2 does not currently 
 
 ### 3.1 Register access: in-core vs MMIO (by access frequency)
 
-> **Retirement notice (2026-08-10) — NOT yet in effect.** The hardware TSB
-> walker (§5.0) removes the last hot-path user of seven of these encodings, so
-> they are slated for **hard removal** in Phase 3 of that work:
-> `STC TSBPTR,Rn` (`0x?4B`), `CMP/EQ PTEH,Rn` (`0x?CB`),
-> `CMP/EQ ASIDR,Rn` (`0x?DB`), `LDTLB.RN Rm` (`0x?FB`), `STC PTEH,Rn`
-> (`0x?8B`), `STC PTEL,Rn` (`0x?9B`), `STC ASIDR,Rn` (`0x?BB`). Family
-> `0000 nnnn xxxx 1011` then goes from 6 used / 1 free to **0 used / 7 free**.
+> **Retirement — IN EFFECT.** *(Implementation status: **done**, branch
+> `mmu/tsb-hw-walker`, jcore-cpu `09304a3` (RTL + spec) and `957e940`;
+> binutils-gdb `mmu/retire-seven`; MMU guard suite 98 PASS / 0 FAIL.)*
+> The hardware TSB walker (§5.0) removed the last hot-path user of seven of
+> these encodings, and they are **gone**:
 >
-> **Every one of them still exists and still works today** — in `mmu.toml`,
-> in `insns.json`, in binutils `sh-opc.h`, and in the RTL. Do not write code
-> that assumes they are gone, and do not remove them ahead of Phase 3.
+> | Retired encoding | Was | Now |
+> |---|---|---|
+> | `STC TSBPTR,Rn` | `0x?4B` | General Illegal |
+> | `STC PTEH,Rn` | `0x?8B` | General Illegal |
+> | `STC PTEL,Rn` | `0x?9B` | General Illegal |
+> | `STC ASIDR,Rn` | `0x?BB` | General Illegal |
+> | `CMP/EQ PTEH,Rn` | `0x?CB` | General Illegal |
+> | `CMP/EQ ASIDR,Rn` | `0x?DB` | General Illegal |
+> | `LDTLB.RN Rm` | `0x?FB` | General Illegal |
+>
+> They are removed from `decode/gen-go/spec/sh4/mmu.toml`, from
+> `docs/insns.json`, and from binutils `sh-opc.h` (with the now-unused
+> `A_TSBPTR` operand type). Family `0000 nnnn xxxx 1011` is **0 used /
+> 8 free** — every slot virgin, and it is the natural first reserve for
+> future J4-only `0000 nnnn`-shaped instructions.
+>
+> **Kept:** `LDTLB` (`0x0038`) and the parameterless `LDTLB.RN`
+> (`0x0078`) — only the `Rm` form of `LDTLB.RN` went.
 >
 > The three `LDC` writes — `LDC Rm,{PTEH, PTEL, ASIDR}` — are **kept
-> permanently**. That is deliberate: it preserves the hypervisor's one-trap
-> guest-refill path ([../hypervisor/design-spec.md §5](../hypervisor/design-spec.md))
-> and avoids having to define that `LDTLB` observes prior P4 stores. The
-> retired `STC` reads are replaced by read-only MMIO aliases at the stock
-> SH-4 offsets — `PTEH` `0xFF000000`, `PTEL` `0xFF000004` — plus `ASIDR` at
-> `0xFF000038` ([../soc/p4-mmio-map.md](../soc/p4-mmio-map.md)).
+> permanently** (design D7). That is deliberate: it preserves the
+> hypervisor's one-trap guest-refill path
+> ([../hypervisor/design-spec.md §5](../hypervisor/design-spec.md))
+> and avoids having to define that `LDTLB` observes prior P4 stores. There is
+> no MMIO write path to these registers, by design.
+>
+> The retired `STC` reads are replaced by **read-only MMIO aliases**, decoded
+> in `core/datapath.vhm` (`P4_PTEH`/`P4_PTEL`/`P4_ASIDR`), at the stock SH-4
+> offsets — `PTEH` `0xFF000000`, `PTEL` `0xFF000004` — plus `ASIDR` at
+> `0xFF000038`, which SH-4 leaves free (`0xFF000034` stays reserved for the
+> proposed `PTEU`, §2.10). See
+> [../soc/p4-mmio-map.md](../soc/p4-mmio-map.md).
 
 The choice between an in-core `LDC`/`STC` register and an uncached-MMIO register is made **by access frequency**, not by aesthetics, because the two mechanisms have opposite cost profiles:
 
@@ -611,21 +630,23 @@ The choice between an in-core `LDC`/`STC` register and an uncached-MMIO register
 
 **Encoding-space reality.** The SH-4 control-register LDC family `0100 mmmm xxxx 1110` is *fully occupied* on J-Core: `xxxx` = `0000`–`0100` are `SR`/`GBR`/`VBR`/`SSR`/`SPC`, `0101`/`0110`/`0111` are `PTEH`/`PTEL`/`ASIDR`, and `1xxx` is `Rm_BANK`. There are **no** free control-register LDC slots, and the `0100 mmmm xxxx 1010` family is base `LDS` (MACH/MACL/PR/…) — so PTEH/PTEL/ASIDR cannot be relocated there. (Real SH-4 has *no* `LDC PTEH` either; its MMU registers are MMIO-only. The earlier draft of this section proposed an `xxxx 1010` relocation that is infeasible; it is corrected here.) This is exactly why the cold TSB-base/config registers are MMIO-only.
 
-**Hot-path registers — in-core (`xxxx 1110` LDC / `xxxx 1011` STC family):**
+**In-core writes — the surviving `xxxx 1110` LDC family:**
 
 | Mnemonic | Encoding | Hex Pattern |
 |----------|----------|-------------|
-| `LDC Rm, PTEH`  / `STC PTEH, Rn`  | `0100 mmmm 0101 1110` / `0000 nnnn 1000 1011` | `0x405E` / `0x008B` |
-| `LDC Rm, PTEL`  / `STC PTEL, Rn`  | `0100 mmmm 0110 1110` / `0000 nnnn 1001 1011` | `0x406E` / `0x009B` |
-| `LDC Rm, ASIDR` / `STC ASIDR, Rn` | `0100 mmmm 0111 1110` / `0000 nnnn 1011 1011` | `0x407E` / `0x00BB` |
-| `STC TSBPTR, Rn` (read-only)      | `0000 nnnn 0100 1011` | `0x004B` |
-| `CMP/EQ PTEH, Rn`                 | `0000 nnnn 1100 1011` | `0x00CB` |
-| `CMP/EQ ASIDR, Rn`                | `0000 nnnn 1101 1011` | `0x00DB` |
-| `LDTLB.RN Rm`                     | `0000 mmmm 1111 1011` | `0x00FB` |
+| `LDC Rm, PTEH`  | `0100 mmmm 0101 1110` | `0x405E` |
+| `LDC Rm, PTEL`  | `0100 mmmm 0110 1110` | `0x406E` |
+| `LDC Rm, ASIDR` | `0100 mmmm 0111 1110` | `0x407E` |
+
+The matching `STC` reads (`0x008B` / `0x009B` / `0x00BB`), `STC TSBPTR,Rn`
+(`0x004B`), `CMP/EQ PTEH,Rn` (`0x00CB`), `CMP/EQ ASIDR,Rn` (`0x00DB`) and
+`LDTLB.RN Rm` (`0x00FB`) are **retired** — see the notice above. Read
+`PTEH`/`PTEL`/`ASIDR` through their P4 aliases and `TSBPTR` at `0xFF00001C`.
 
 `TSBPTR` is read-only: it is hardware-computed on every TLB miss (§2.8) and has **no** `LDC` encoding (decoding one raises illegal-instruction).
 
-**Why the read side is in `0000 nnnn xxxx 1011`.** J4 is targeted to be a superset of J2, SH-2A, SH-4 and SH-4A, so no J4-only instruction may occupy an encoding any of those four defines. The read side originally sat in `0000 nnnn xxxx 0011` (`STC PTEH` = `0x0053`, `PTEL` = `0x0063`, `ASIDR` = `0x0073`, `TSBPTR` = `0x0043`, `CMP/EQ PTEH` = `0x00D3`, `CMP/EQ ASIDR` = `0x00F3`), which fails that bar in three places:
+**Why the read side *was* in `0000 nnnn xxxx 1011`** (history — the family is
+now empty; kept because it records why the family is a safe reserve). J4 is targeted to be a superset of J2, SH-2A, SH-4 and SH-4A, so no J4-only instruction may occupy an encoding any of those four defines. The read side originally sat in `0000 nnnn xxxx 0011` (`STC PTEH` = `0x0053`, `PTEL` = `0x0063`, `ASIDR` = `0x0073`, `TSBPTR` = `0x0043`, `CMP/EQ PTEH` = `0x00D3`, `CMP/EQ ASIDR` = `0x00F3`), which fails that bar in three places:
 
 | Old encoding | Collides with |
 |---|---|
@@ -633,7 +654,7 @@ The choice between an in-core `LDC`/`STC` register and an uncached-MMIO register
 | `STC ASIDR, Rn` `0x0073` | SH-4A `movco.l R0,@Rn` — the **SC** of LL/SC |
 | `CMP/EQ PTEH, Rn` `0x00D3` | SH-4/SH-4A `prefi @Rn` |
 
-`0000 nnnn xxxx 0011` has only two slots left that are clean against the target set, so the whole read side moved to `0000 nnnn xxxx 1011`, which had seven, and it already hosted `LDTLB.RN Rm`. Six are used; `1110` is free again since `CMP/MISS EXPEVT` was withdrawn (§3.2a). The next reserve for J4-only `0000 nnnn`-shaped instructions is `0000 nnnn xxxx 1000` (8 virgin slots). Re-check with:
+`0000 nnnn xxxx 0011` has only two slots left that are clean against the target set, so the whole read side moved to `0000 nnnn xxxx 1011`, which had seven, and it already hosted `LDTLB.RN Rm`. **All of that is now unwound: the family has 8 free slots, all virgin** — the six reads plus `LDTLB.RN Rm` were retired, and `1110` had already come free when `CMP/MISS EXPEVT` was withdrawn (§3.2a). `0000 nnnn xxxx 1011` is therefore the first reserve for J4-only `0000 nnnn`-shaped instructions, ahead of `0000 nnnn xxxx 1000`. Re-check with:
 
 ```
 go run ./cmd/cpugen freespace --avoid j2,sh2a,sh4,sh4a,dsp \
@@ -652,7 +673,16 @@ go run ./cmd/cpugen freespace --avoid j2,sh2a,sh4,sh4a,dsp \
 
 These are written once at boot, so MMIO costs nothing at runtime and keeps three encodings off the Fmax-critical decoder.
 
-> **Binutils status.** `binutils` `sh-opc.h` implements all of these: the four `STC` MMU forms, `ldc Rm,{pteh,ptel,asidr}`, both `ldtlb.rn` forms, and both `cmp/eq {pteh,asidr},Rn`. (The former "does not yet implement `ldc Rm,{pteh,ptel,asidr}`" gap was closed and this note was stale.) Never hand-edit `sh-opc.h` — it is generated from `jcore-cpu/docs/insns.json` by `tools/insns2asm`.
+> **Binutils status.** *(Implementation status: **done**, `mmu/retire-seven`.)*
+> `sh-opc.h` now knows only the surviving set: `ldc Rm,{pteh,ptel,asidr}`,
+> `ldtlb`, parameterless `ldtlb.rn`, and `stc {expevt,intevt,tra},Rn`. The
+> four `STC` MMU-register forms, both `cmp/eq {pteh,asidr},Rn` and
+> `ldtlb.rn Rm` were removed, along with the `A_TSBPTR` operand type. Never
+> hand-edit `sh-opc.h` — it is generated from `jcore-cpu/docs/insns.json` by
+> `tools/insns2asm` (`-emit gas` is the authoritative J-core-only line set).
+> The CI toolchain image pins `BINUTILS_JCORE_COMMIT` in
+> `jcore-cpu/.github/ci/Dockerfile`; that ARG only refreshes on a
+> `build-ci-image` workflow dispatch, never on a branch push.
 
 ### 3.2 LDTLB.RN — Load TLB and Return (No delay slot)
 
@@ -950,9 +980,18 @@ pipeline redirects (~9 cycles) and the fetch/decode of nine instructions
 (~15 cycles) — **not** fewer memory accesses; the walker issues the same three
 loads.
 
-### 7.1 The software handler (current shipped behaviour)
+### 7.1 The software handler (HISTORICAL — retired in Phase 3)
 
-For reference. Implementation in software, but documenting the expected sequence:
+> *(Implementation status: **removed**. `linux@jcore` `a9417bda9766` deleted
+> `JCORE_TLB_FASTPATH` from `arch/sh/kernel/cpu/jcore/ex.S`; jcore-cpu
+> `09304a3` retired the four instructions it depended on. The sequence below
+> **no longer assembles** — `stc tsbptr`, `cmp/eq pteh`, `cmp/eq asidr` and
+> `ldtlb.rn Rm` are all General Illegal now.)*
+
+Kept as the record of what the hardware walker replaced, and of the cost
+baseline the walker is measured against. `VBR + 0x400` today is
+save-regs / call `__jcore_tlb_walk()` / restore / `RTE`, reached only on a
+walk failure.
 
 **TSB tag format.** The 64-bit tag word is laid out as two 32-bit halves to avoid VPN/ASID-bit overlap (which would otherwise occur for small pages where VPN extends down into bit positions also covered by ASID_TAG):
 
@@ -994,7 +1033,7 @@ none of them come back:
 | retired | why |
 |---|---|
 | `stc pteh,r2` + `cmp/eq r1,r2` per compare | the fused compares removed 2 insns and freed a scratch register |
-| `ldc r3,ptel` + `ldtlb.rn` | `LDTLB.RN Rm` installs straight from the GPR |
+| `ldc r3,ptel` + `ldtlb.rn` | `LDTLB.RN Rm` installed straight from the GPR |
 | `stc expevt` + `add #-128` + `cmp/pl` (or the short-lived `CMP/MISS EXPEVT`) | only needed while misses and protection shared a vector; §3.2a |
 
 Hot path: ~10 instructions (VPN compare + ASID compare + LDTLB.RN). With the slow path inlined, the full handler fits in ~30 instructions.
