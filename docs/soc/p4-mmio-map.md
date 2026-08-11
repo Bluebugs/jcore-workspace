@@ -146,10 +146,20 @@ matching `STC`, and they are never P4-MMIO selected. See
 [../mmu/hardware-spec.md §2.1](../mmu/hardware-spec.md) (PTEH), §2.1a (ASIDR) and §2.2 (PTEL).
 PTEU ([mmu/hardware-spec.md §2.10](../mmu/hardware-spec.md), PAE-only) is likewise LDC/STC-only.
 
-The RTL is the ground truth here: `jcore-cpu/core/datapath.vhm:1136-1155` decodes exactly six P4
-offsets — `0x08` TTB, `0x0C` TEA, `0x10` MMUCR, `0x14` TSBBR, `0x18` TSBCFG, `0x1C` TSBPTR
-(read-only) — and the comment at `datapath.vhm:1147` states that "PTEH/PTEL/ASIDR are never P4-MMIO
-selected (handled via LDC)". The LDC write path for those three is `datapath.vhm:1335-1342`.
+The RTL is the ground truth here: `jcore-cpu/core/datapath.vhm` (the `p4_sel_v` decode, around
+`:1697` and following) decodes `0x08` TTB, `0x0C` TEA, `0x10` MMUCR, `0x14` TSBBR, `0x18` TSBCFG,
+`0x1C` TSBPTR (read-only), `0x20` TRA, `0x24` EXPEVT, `0x28` INTEVT, `0x2C` MMUFSR and `0x048`
+TSBSLOT. `PTEH`/`PTEL`/`ASIDR` are never P4-MMIO selected (handled via LDC); their LDC write path is
+elsewhere in the same file.
+
+> **Do not read this paragraph as a count.** It said "exactly six offsets" with pinned line numbers
+> long after the RTL had grown past six, and that staleness directly caused a defect: an
+> implementer concluded from it that P4 could not carry a new register, put a production helper at a
+> P2 debug address, and Linux shipped a `#define` pointing there (fixed 2026-08-11). **P4 works for
+> reads and writes; new MMU registers are decoded here, in `datapath.vhm`, alongside `TSBPTR`.** The
+> only true limitation is that P4 accesses never reach `cpu.vhd`'s *return path*, because
+> `datapath.vhm` consumes them first — which is why genuinely debug-only windows (the walker
+> counters) sit at P2 `0xABCD0F00` instead. Line numbers here are indicative; grep for `p4_sel_v`.
 Linux agrees independently: `arch/sh/include/cpu-jcore/cpu/mmu_context.h` defines MMIO addresses for
 the six decoded registers only and documents that "PTEH/PTEL/PTEU and ASIDR are LDC/STC-only control
 registers"; `arch/sh/mm/tlb-jcore.c` uses `ldc %0, pteh`.
