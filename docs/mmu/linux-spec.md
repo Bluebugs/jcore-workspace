@@ -248,17 +248,33 @@ Consequences for the `pgtable.h` plumbing:
 ## 4. TLB Miss Handler
 
 > **Amendment — hardware TSB walker ([hardware-spec.md §5.0](hardware-spec.md)).**
-> **Status: DESIGNED, partially implemented** (`jcore-cpu` branch
-> `mmu/tsb-hw-walker`). §4.0–§4.2 below describe what linux@jcore runs
-> **today** and remain accurate; this note records what changes and when.
+> *(Implementation status: **DONE**. `linux@jcore` `a9417bda9766`; `jcore-cpu`
+> branch `mmu/tsb-hw-walker` `09304a3`/`957e940`; MMU guard suite 98 PASS /
+> 0 FAIL. Not merged to master.)* **§4.1 below is HISTORICAL** — read it for
+> what the walker replaced, not for what the kernel runs.
 >
-> **§4.1's assembly hot path is deleted.** The nine-instruction TSB probe
-> becomes hardware. `VBR + 0x400` is reached only on a walk failure, and its
-> handler becomes save-regs / call `__jcore_tlb_walk()` / restore / `RTE`.
-> Three constraints in §4.0 disappear with it: the `bf` ±256-byte reach, the
-> `.org jcore_vec_tlb + 0x12` exact-size assert, and the requirement that the
-> slow path live in the `0x420..0x600` gap. **§4.2's C walker survives
-> unchanged** and becomes the only software path.
+> **§4.1's assembly hot path is deleted.** The nine-instruction TSB probe is
+> hardware now. `VBR + 0x400` is reached only on a walk failure, and its
+> handler is save-regs / call `__jcore_tlb_walk()` / restore / `RTE`.
+> Three constraints in §4.0 went with it, and are **gone, not relaxed**: the
+> `bf` ±256-byte reach, the `.org jcore_vec_tlb + 0x12` exact-size assert, and
+> the requirement that the slow path live in the `0x420..0x600` gap.
+> **§4.2's C walker survives unchanged** and is the only software path.
+>
+> **The instructions the fast path used no longer exist.** `stc tsbptr,Rn`,
+> `cmp/eq pteh,Rn`, `cmp/eq asidr,Rn` and `ldtlb.rn Rm` decode to General
+> Illegal (hardware-spec.md §3.1). Anything in the tree that still emits them
+> is a build break, not a slow path.
+>
+> **`get_asid()` still reads hardware — now through the P4 alias
+> `0xFF000038`** (`arch/sh/include/asm/mmu_context_32.h`), because `STC ASIDR`
+> is retired. It must read hardware and **not** `asid_cache(cpu)`: `set_asid()`
+> composes the *passed* ASID with `asid_cache(cpu)`'s **current** `gen_low`,
+> and `set_asid()`'s own comment records the `tlbflush_32.c` save/restore case
+> where the saved tag came from a *different* mm — so `ASIDR` and
+> `asid_cache(cpu)` provably diverge there. `set_asid()` keeps using
+> `LDC Rm,ASIDR`; the write side is kept permanently (D7) and has no MMIO
+> equivalent.
 >
 > **TSB store order must be reversed — and this is a live defect today,
 > independent of the walker.** The walker compares `tag_hi` first, so
@@ -290,8 +306,7 @@ table of pointers:
 |---|---|
 | `+0x000` | not a J4 vector — spins, rather than running on into `+0x100` |
 | `+0x100` | general exceptions → `jcore_general_entry` |
-| `+0x400` | TLB **miss** fast path, inlined (§4.1) |
-| `+0x420` | `jcore_tlb_miss_slow` (§4.2) |
+| `+0x400` | ALL TLB faults → save regs, call `__jcore_tlb_walk()`, `RTE`. *(Was: an inlined miss fast path at `+0x400` with `jcore_tlb_miss_slow` at `+0x420`; both deleted with the hardware walker.)* |
 | `+0x600` | interrupts → `jcore_irq_entry` |
 
 `jcore_general_entry` builds `pt_regs` from SPC/SSR and dispatches on `EXPEVT`:
@@ -309,7 +324,10 @@ by another name and go to `do_page_fault()` with the MMUFSR-derived
 > ever right, because it was the only vector CI exercised. *Guards:
 > `mmulinuxexc` covers `+0x100` and `+0x600`; `mmulinux` covers `+0x400`.*
 
-**Layout constraint, not a preference.** `jcore_tlb_miss_slow` must stay in the
+**Layout constraint, not a preference** — *and now retired; see the amendment
+at the head of §4. With the fast path deleted there is no `bf` at the vector,
+so `jcore_tlb_miss_slow`, the `0x420..0x600` gap rule and the `.org` assert are
+all gone. Kept here because the failure mode is instructive.* `jcore_tlb_miss_slow` must stay in the
 `0x420..0x600` gap. The fast path reaches it with `BF`, whose range is ±256
 bytes; placed after the interrupt vector it goes out of reach and gas silently
 rewrites `bf slow` as `bt .+2; bra slow; nop` — inverting the sense, so a TSB
@@ -318,10 +336,14 @@ rewrites `bf slow` as `bt .+2; bra slow; nop` — inverting the sense, so a TSB
 older `+ 0x20` budget cannot catch it, because the relaxed macro is `0x1A`
 bytes and still fits.
 
-### 4.1 Hot path (assembly)
+### 4.1 Hot path (assembly) — HISTORICAL, DELETED
 
-File: `arch/sh/kernel/cpu/jcore/ex.S` (the macro `JCORE_TLB_FASTPATH`, expanded
-**inline at the vector**, not jumped to).
+> *(Implementation status: **removed**, `linux@jcore` `a9417bda9766`. The
+> macro is gone from `ex.S` and three of the four instructions below no longer
+> assemble.)*
+
+Formerly `arch/sh/kernel/cpu/jcore/ex.S`, the macro `JCORE_TLB_FASTPATH`,
+expanded **inline at the vector**, not jumped to.
 
 The fast path handles the three TLB **miss** causes only. Protection faults take
 `VBR + 0x100` with the other general exceptions — see §4.0 below — so this code
@@ -371,9 +393,11 @@ back-executing the faulting instruction:
 | **TSB hit, total** | **22 cyc** | **23 cyc** |
 | cold (falls to the C walker) | 74 cyc | 75 cyc |
 
-The guards `mmubench` / `mmubenchi` carry a byte-faithful copy of this macro and
-are what those numbers are measured on; `jcore-cpu/sim/check_bench_fidelity.sh`
-fails the build if the copy ever drifts from this file.
+Those 22/23 cycles are the **baseline the walker is measured against**: with
+the walker a TSB hit costs **8 cycles (IMISS) / 7 (DMISS)**. `mmubench` / `mmubenchi` used to carry a
+byte-faithful copy of this macro, checked by
+`jcore-cpu/sim/check_bench_fidelity.sh`; with the macro gone both the copy and
+that script are gone, and the guards now measure the walker itself.
 
 **PAE (`CONFIG_JCORE_PAE`).** The TTE becomes the full 64-bit TSB `Data` word:
 `ldtlb.rn r3` is replaced by a two-stage load of the low word into `PTEL` and the

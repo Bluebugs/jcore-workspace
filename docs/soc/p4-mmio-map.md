@@ -83,8 +83,8 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 
 | Offset      | Register   | Description                          |
 |-------------|------------|--------------------------------------|
-| `0x000`     | reserved → **PTEH** (planned) | freed — see "Registers with no P4 address" below. **Reserved for a read-only `PTEH` alias**, the stock SH-4 offset, when `STC PTEH,Rn` retires (Phase 3 of [mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md); see §3.1 retirement notice). **Not decoded today.** |
-| `0x004`     | reserved → **PTEL** (planned) | freed — as above. **Reserved for a read-only `PTEL` alias**, stock SH-4 offset, when `STC PTEL,Rn` retires. **Not decoded today.** |
+| `0x000`     | PTEH       | Page-table-entry high, **read-only alias, decoded in RTL** (`core/datapath.vhm`, `P4_PTEH`). Stock SH-4 offset. This is now the *only* way to read `PTEH`: `STC PTEH,Rn` was retired in Phase 3 ([mmu/hardware-spec.md §3.1](../mmu/hardware-spec.md)). Writes are **not** decoded — `LDC Rm,PTEH` remains the sole write path (design D7). |
+| `0x004`     | PTEL       | Page-table-entry low, **read-only alias, decoded in RTL** (`P4_PTEL`). Stock SH-4 offset. Replaces the retired `STC PTEL,Rn`; write path stays `LDC Rm,PTEL` (D7). |
 | `0x008`     | TTB        | Translation table base (software)     |
 | `0x00C`     | TEA        | TLB exception address                 |
 | `0x010`     | MMUCR      | MMU control                           |
@@ -97,14 +97,14 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 | `0x02C`     | MMUFSR     | Fault-status snapshot, read-only; **decoded in RTL** (see [mmu/hardware-spec.md §2.11](../mmu/hardware-spec.md)) |
 | `0x030`     | CPUINFO    | Per-CPU hart ID + capability flags — **allocated, NOT implemented in current RTL** (see note below) |
 | `0x034`     | reserved   | proposed `PTEU` (PAE only, [mmu/hardware-spec.md §2.10](../mmu/hardware-spec.md)) |
-| `0x038`     | reserved → **ASIDR** (planned) | **Reserved for a read-only `ASIDR` alias** when `STC ASIDR,Rn` retires (Phase 3, see §3.1 retirement notice). `ASIDR` is a J-core addition with no stock SH-4 offset, hence `0x038` rather than a low address. **Not decoded today.** |
-| `0xF00`     | walker counters (debug) | Read-only walk/hit counters exported by `core/tlb_walk.vhd` for the anti-vacuity guards. **Scaffolding**, removed with the `MMU_WALKER` generic in Phase 3. Not in this block at all — the walker counters live at P2 `0xABCD0F00`; this row records the allocation so nobody re-uses `0xF00` here. |
+| `0x038`     | ASIDR      | Address-space identifier, **read-only alias, decoded in RTL** (`P4_ASIDR`). J-core addition with no stock SH-4 offset, hence `0x038` (`0x034` stays reserved for the proposed `PTEU`). Replaces the retired `STC ASIDR,Rn`; write path stays `LDC Rm,ASIDR` (D7). Linux's `get_asid()` reads this. |
 | `0x03C`     | QACR0      | Store-queue 0 area register (`0xFF00003C`), see [../sq/spec.md §3](../sq/spec.md) |
 | `0x040`     | QACR1      | Store-queue 1 area register (`0xFF000040`), see [../sq/spec.md §3](../sq/spec.md) |
 | `0x048`     | TSBSLOT    | TSB slot-address helper — **decoded in RTL** (`core/datapath.vhm`, `P4_TSBSLOT`, read/write alongside TSBBR/TSBCFG/TSBPTR). Write a VA, read the same address back to get `tsb_ptr(VA)` — the exact slot address the hardware TSB walker (`core/tlb_walk.vhd`) and TSBPTR-on-fault use. Only the VA is latched; the index function is evaluated on the read, so `core/datapath_pkg.vhd`'s `tsb_ptr()` remains the single implementation. Added in Phase-2 Task 2 so Linux's `jcore_tsb_slot_offset()` bit-for-bit C mirror could be deleted; kernel side is `JCORE_TSB_SLOT` (`0xFF000048`) in `arch/sh/include/cpu-jcore/cpu/mmu_context.h`. |
 | `0x04C`     | TSBVSEED   | TSB victim-selector seed — **decoded in RTL** (`core/datapath.vhm`, `P4_TSBVSEED`). **WRITE-ONLY**: there is no read case, so a read returns the decoder's hard zero *deliberately*, not by omission. Seeds the LFSR that nominates which way of a 2-way TSB set to replace when neither tag matches. The seed comes from the OS at MMU init precisely because it must not be public — this is an open-source core, so the polynomial and any constant seed compiled into the RTL are readable by anyone. If software could read the seed back, so could an attacker. Kernel side is `JCORE_TSB_VSEED`. See [mmu/hardware-spec.md §2.13](../mmu/hardware-spec.md). |
 | `0x050`     | TSBVICT    | TSB victim nomination — **decoded in RTL** (`core/datapath.vhm`, `P4_TSBVICT`). **READ-ONLY**, and only bit 0 is meaningful: the way to replace. **The read advances the LFSR**, so each read consumes one bit and no two reads observe the same state; neither the seed nor the LFSR state is ever readable. Kernel side is `JCORE_TSB_VICTIM`. |
-| `0x054`–`0xFFC` | reserved | future registers                                  |
+| `0x054`     | TSBCNT     | Walker counters, **read-only, decoded in RTL** (`core/datapath.vhm`, `P4_TSBCNT`): `[31:16]` = `cnt_walks`, `[15:0]` = `cnt_hits`, exported by `core/tlb_walk.vhd`. **Not scaffolding** — the pair is the TSB hit-rate signal used for TSB sizing and hash tuning, and nine anti-vacuity guards assert on it. They were moved here from the P2 debug window `0xABCD0F00` (**retired**) precisely because guest P4 is trapped wholesale, so a hypervisor can virtualize or deny them; a guest reading `cnt_hits` otherwise observes TSB behaviour caused by *other* guests. See [../hypervisor/design-spec.md](../hypervisor/design-spec.md) and [mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md). |
+| `0x058`–`0xFFC` | reserved | future registers                                  |
 
 **Decision: `0x020`/`0x024`/`0x028` are TRA / EXPEVT / INTEVT.** This closes the three-way
 conflict formerly recorded as §7 open question 4. CPUINFO moves from `0x020` to `0x030`, and
@@ -140,20 +140,22 @@ implements CPUINFO should decide whether to fold `cpuid-mmio` into it or drop CP
 field and keep `cpuid-mmio`; building both would give a core two disagreeing answers to "who am I?".
 This map does not make that choice — it flags it.
 
-**Registers with no P4 address: PTEH, PTEL, ASIDR.** Earlier revisions of this map listed
-PTEH at `0x000`, PTEL at `0x004` and ASIDR at `0x024`. **Those rows were wrong and have been
-removed.** PTEH, PTEL and ASIDR are **LDC/STC-only control registers with no P4 MMIO address**:
-they are written with `LDC Rm, PTEH` / `LDC Rm, PTEL` / `LDC Rm, ASIDR` and read with the
-matching `STC`, and they are never P4-MMIO selected. See
+**PTEH, PTEL and ASIDR are read-only at P4, write-only via `LDC`.** *(Implementation status:
+aliases decoded, Phase 3.)* Earlier revisions of this map listed PTEH at `0x000`, PTEL at `0x004`
+and ASIDR at `0x024`, as full registers; that was wrong, and the correction over-swung into
+"no P4 address at all", which is now also wrong. The settled shape: **read** through the P4
+aliases `0x000` / `0x004` / `0x038` (the matching `STC` forms are retired), **write** only with
+`LDC Rm, PTEH` / `LDC Rm, PTEL` / `LDC Rm, ASIDR` — the decoder has no write case for these
+offsets. See
 [../mmu/hardware-spec.md §2.1](../mmu/hardware-spec.md) (PTEH), §2.1a (ASIDR) and §2.2 (PTEL).
 PTEU ([mmu/hardware-spec.md §2.10](../mmu/hardware-spec.md), PAE-only) is likewise LDC/STC-only.
 
 The RTL is the ground truth here: `jcore-cpu/core/datapath.vhm` (the `p4_sel_v` decode, around
 `:1697` and following) decodes `0x08` TTB, `0x0C` TEA, `0x10` MMUCR, `0x14` TSBBR, `0x18` TSBCFG,
 `0x1C` TSBPTR (read-only), `0x20` TRA, `0x24` EXPEVT, `0x28` INTEVT, `0x2C` MMUFSR, `0x048`
-TSBSLOT, `0x04C` TSBVSEED (write-only) and `0x050` TSBVICT (read-only).
-`PTEH`/`PTEL`/`ASIDR` are never P4-MMIO selected (handled via LDC); their LDC write path is
-elsewhere in the same file. Read that list as "what the RTL decoded when this line was written" —
+TSBSLOT, `0x04C` TSBVSEED (write-only), `0x050` TSBVICT (read-only), `0x054` TSBCNT (read-only)
+and the read-only `0x00` PTEH / `0x04` PTEL / `0x38` ASIDR aliases. Those three have **read**
+cases only; their write path is `LDC`, elsewhere in the same file. Read that list as "what the RTL decoded when this line was written" —
 it grows; grep `p4_sel_v` rather than trusting it.
 
 > **Do not read this paragraph as a count.** It said "exactly six offsets" with pinned line numbers
@@ -162,11 +164,12 @@ it grows; grep `p4_sel_v` rather than trusting it.
 > P2 debug address, and Linux shipped a `#define` pointing there (fixed 2026-08-11). **P4 works for
 > reads and writes; new MMU registers are decoded here, in `datapath.vhm`, alongside `TSBPTR`.** The
 > only true limitation is that P4 accesses never reach `cpu.vhd`'s *return path*, because
-> `datapath.vhm` consumes them first — which is why genuinely debug-only windows (the walker
-> counters) sit at P2 `0xABCD0F00` instead. Line numbers here are indicative; grep for `p4_sel_v`.
+> `datapath.vhm` consumes them first — which is why genuinely debug-only windows once sat at P2
+> `0xABCD0F00` instead — though the walker counters, the last such window, moved *into* P4 at
+> `0x054` because their guest-observability makes hypervisor trapping the point. Line numbers here are indicative; grep for `p4_sel_v`.
 Linux agrees independently: `arch/sh/include/cpu-jcore/cpu/mmu_context.h` defines MMIO addresses for
-the decoded registers only (not a fixed number of them) and documents that "PTEH/PTEL/PTEU and ASIDR are LDC/STC-only control
-registers"; `arch/sh/mm/tlb-jcore.c` uses `ldc %0, pteh`.
+the decoded registers only (not a fixed number of them) and documents the register set (`PTEU` is still LDC-only; `PTEH`/`PTEL`/`ASIDR` now have read-only
+aliases); `arch/sh/mm/tlb-jcore.c` uses `ldc %0, pteh`.
 
 **Undecoded P4 offsets fail SILENTLY (normative hazard).** A load or store to a P4 offset in this
 block that the hardware does not decode raises **no exception and no bus error**. Writes fall into
