@@ -101,7 +101,8 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 | `0xF00`     | walker counters (debug) | Read-only walk/hit counters exported by `core/tlb_walk.vhd` for the anti-vacuity guards. **Scaffolding**, removed with the `MMU_WALKER` generic in Phase 3. Inside the reserved `0x044`–`0xFFC` range below. |
 | `0x03C`     | QACR0      | Store-queue 0 area register (`0xFF00003C`), see [../sq/spec.md §3](../sq/spec.md) |
 | `0x040`     | QACR1      | Store-queue 1 area register (`0xFF000040`), see [../sq/spec.md §3](../sq/spec.md) |
-| `0x044`–`0xFFC` | reserved | future registers                                  |
+| `0x048`     | TSBSLOT    | TSB slot-address helper: write a VA, read the same address back to get `tsb_ptr(VA)` — the exact slot address the hardware TSB walker (`core/tlb_walk.vhd`) and TSBPTR-on-fault use. Added in Phase-2 Task 2 so Linux's `jcore_tsb_slot_offset()` bit-for-bit C mirror of `core/datapath_pkg.vhd`'s `tsb_ptr()` could be deleted. **Allocated here, but NOT decoded at this P4 address today** — like the walker counters above, `SEG_P4` is fully absorbed inside `datapath.vhm` before it reaches `cpu.vhd`'s return path, so the RTL instead decodes this at the P2 debug address `0xABCD0F10` (`core/cpu.vhd` `tsb_slot_sel`; kernel side `JCORE_TSB_SLOT` in `arch/sh/include/cpu-jcore/cpu/mmu_context.h`). Revisit once Phase 3 plumbs a real P4 return path. |
+| `0x04C`–`0xFFC` | reserved | future registers                                  |
 
 **Decision: `0x020`/`0x024`/`0x028` are TRA / EXPEVT / INTEVT.** This closes the three-way
 conflict formerly recorded as §7 open question 4. CPUINFO moves from `0x020` to `0x030`, and
