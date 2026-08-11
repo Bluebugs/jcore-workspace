@@ -167,7 +167,30 @@ Inherited from SH-4. MMIO at `0xFF00000C`. On any TLB-related exception (miss, p
 
 ### 2.6 TSBBR — TSB Base Register (NEW)
 
-Holds the physical base address of the per-CPU TSB and configuration bits.
+Holds the base address of the per-CPU TSB and configuration bits.
+
+> **The base is written as a P1 kernel virtual address, not a raw physical
+> address.** This is a hardware/software contract with two halves, and both
+> matter:
+>
+> - **Software** derefs the address `TSBPTR` / `TSBSLOT` hand back — those
+>   registers return `TSBBR`'s own bits unconverted — so the value must be
+>   directly loadable by the kernel, i.e. P1.
+> - **The walker** applies the SH P1 fold itself before issuing its physical
+>   reads (`core/cpu.vhd`, the `walk_own` takeover arm). P1 is untranslated by
+>   architecture (`PA = VA & 0x1FFFFFFF`), so §5's "a walk cannot itself fault"
+>   still holds — the fold is *how* that property is realised, not an exception
+>   to it.
+>
+> An earlier revision of this section said "physical base address" flatly. That
+> was stale, and it was not harmless: it led a reviewer to conclude the kernel
+> was dereferencing a physical address as a virtual one, and it sat alongside a
+> real boot-code defect that programmed `TSBBR` with
+> `jcore_boot_tsb - PAGE_OFFSET + __MEMORY_START` — which both broke the P1
+> contract *and* double-counted `__MEMORY_START`, since `vmlinux.lds` already
+> links at `PAGE_OFFSET + __MEMORY_START`. The register pointed at neither a
+> valid VA nor a valid PA. Fixed 2026-08-11; the correct value is simply
+> `jcore_boot_tsb`.
 
 **Access:** MMIO at `0xFF000014` (read/write). Cold boot-config register — MMIO only, no LDC/STC encoding (see §3.1 for the access-frequency rationale).
 
@@ -790,10 +813,12 @@ The walker is **architecturally mandatory** on a J4-class MMU: there is no
 `MMUCR` enable bit and no software TSB probe. `VBR + 0x400` still means "TLB
 miss", but its handler is now the page-table walk, not a TSB probe.
 
-**A walk cannot itself fault.** `TSBBR` is a physical address, so the walker's
-reads bypass translation entirely — no nesting, no recursion, no new exception
-class. A malformed `TSBBR` hangs the walk, exactly as it would hang the
-software handler's `mov.l`.
+**A walk cannot itself fault.** `TSBBR` holds a **P1 kernel virtual address**
+(§2.6), and P1 is untranslated by architecture, so the walker folds it
+(`PA = VA & 0x1FFFFFFF`) and its reads bypass translation entirely — no
+nesting, no recursion, no new exception class. The fold is how the property is
+realised, not an exception to it. A malformed `TSBBR` hangs the walk, exactly
+as it would hang the software handler's `mov.l`.
 
 **The walk must be self-terminating.** The miss condition is a *level* that
 stays true until the miss is resolved, so a walker that re-arms on that level
