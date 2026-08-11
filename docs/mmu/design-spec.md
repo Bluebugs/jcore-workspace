@@ -170,6 +170,39 @@ Offset  Field        Width   Description
 
 The same layout works for J32 (with upper VPN/PPN bits unused) and J64 (with all bits populated). Hash function for indexing: XOR-fold the VPN with itself shifted right by `log2(TSB_entries)`, masked to entry count.
 
+> **Amendment — Phase 2 of the hardware-walker work. Status: IMPLEMENTED on
+> `jcore-cpu` branch `mmu/tsb-hw-walker` and `linux@jcore` branch
+> `mmu/tsb-phase2`, NOT MERGED.**
+>
+> **The TSB is 2-way.** Entries stay 16 bytes; a **set** is one 32-byte cache
+> line holding two contiguous entries — way 0 at `+0`, way 1 at `+16`.
+> `TSBBR.TSB_SIZE_LOG` counts **sets**, and the index scales by `<< 5`.
+> Associativity here is a **performance** change: it absorbs conflict misses,
+> which are what send a fault down the slow path. It is deliberately not
+> claimed as an isolation mechanism.
+>
+> **`ASID` is folded into the index**, not only compared as a tag:
+> `hash = (vpn ^ (vpn >> HASH_SHIFT)) ^ amix`, where
+> `a1 = asid ^ (asid << 5)` and `amix = a1 ^ (a1 >> 9)`. The full normative
+> statement, its measured effect, and — importantly — the limits of what it
+> buys are [hardware-spec.md §2.8a](hardware-spec.md). **It is hardening, not
+> isolation**; see §6.5 below.
+>
+> **There is exactly one index function, and no skewing.** A per-way fold was
+> designed and then dropped, because it makes a stale entry in one way
+> shadowable behind a fresh entry in the other — see
+> [linux-spec.md §4.3](linux-spec.md) for why that follows from the TSB being
+> software-filled rather than hardware-filled.
+>
+> **Prior art (pre-2006).** Set-associative placement with the ways of a set
+> in one aligned block, probed together, is the **PowerPC HTAB PTEG** (601 /
+> 603 / 604, 1993–94) — eight entries in one aligned group, read as a unit,
+> with a software fallback. `ASID`-in-the-index is **US 5,493,660** (HP, filed
+> 1992-10-06, expired) and **US 5,899,994** (Sun, 1997, expired); context as a
+> **tag only**, the arrangement this replaces, is **US 7,430,643** (Sun,
+> priority 2004-12-30). *Publication or grant before 2006 is evidence of prior
+> art, not patent clearance.*
+
 The TSB lives in normal cacheable memory **in the untranslated P1 segment**, allocated by the kernel at boot (one per CPU). Its size is a kernel policy decision; typical sizes are 8 KB (512 entries) for embedded, 64 KB (4096 entries) for systems with significant working sets.
 
 **P1 placement is required, not advisory.** The privileged architecture saves only one level of `SPC`/`SSR` (no hardware trap-level stack — see [priv-arch/design-spec.md §4.7](../priv-arch/design-spec.md)), so the miss handler must never itself fault. Its memory accesses are the `TSBPTR`-relative TTE load and (on TSB miss) the page-table walk; if either address were translated it could miss the TLB and recursively corrupt `SPC`/`SSR`. Keeping the TSB and the kernel page tables in P1 (`PA = VA & 0x1FFFFFFF`, cached but untranslated) makes the miss handler provably non-faulting and a single save level sufficient. This mirrors classic SH-4/MIPS (`kseg0`) kernel-structure placement.
@@ -273,6 +306,39 @@ A mapping is revoked either by flushing the TLB (`MMUCR.TI`, which clears `VALID
 ### 6.5 Side-channel posture (residuals)
 
 Time-sliced tenants share the L1 I/D caches and the 32-entry TLB; conventional contention channels (Prime+Probe, Evict+Time, TLB-occupancy, deterministic-NRU eviction-set construction, and data-dependent software-miss-handler timing) remain. They are bounded by the single-hart, non-SMT design (no concurrent observation) and the low clock. Mitigations, if a deployment requires them: flush L1 + TLB on context switch, a constant-time/constant-memory miss handler, and mapping secret pages uncacheable (`C=0`). The move to PIPT L1 caches removes the VIPT virtual-synonym channel and the page-coloring correctness dependency.
+
+**The TSB is a contention channel too, and Phase 2 hardens it without closing
+it.** The TSB is per-CPU and shared across address spaces, and a hit is roughly
+11× cheaper than a miss, so conflict-based prime+probe against it is real.
+
+- **What Phase 2 changed.** Folding `ASID` into the index
+  ([hardware-spec.md §2.8a](hardware-spec.md)) removes the *zero-effort*
+  primitive — before it, the same VA in two address spaces always collided, so
+  evicting a victim's entry for VA `X` meant touching VA `X`. A hardware victim
+  LFSR seeded by the OS ([hardware-spec.md §2.13](hardware-spec.md)) means that
+  even on a genuine collision the attacker cannot control which way is evicted,
+  so priming is unreliable.
+- **What it did not change.** Neither is a boundary. **J-Core is open source**,
+  so the fold `g` in `hash = f(vpn) ⊕ g(asid)` is public and recomputable, and
+  the remaining unknown lives in an offset space of only `2^TSB_SIZE_LOG`
+  (64–1024) — brute-forceable by timing probes. The attacker is delayed by a
+  search, not excluded. **No document in this workspace should describe the
+  fold as isolation.**
+- **What a boundary would be.** Per-domain TSB partitioning: disjoint index
+  sets per trust domain, switched by writing `TSBBR` on domain switch. That
+  closes the channel by construction rather than by obfuscation, needs no RTL
+  change, and is specified in
+  [hardware-spec.md §2.13a](hardware-spec.md). Flush-on-switch remains the
+  migration-safe backstop.
+- **What is unavailable to us, and why it must not be re-proposed.** A keyed
+  or per-context index mapping would work technically, but its origin is
+  **RPcache — Wang & Lee, ISCA 2007, pp. 494–505**, past the project's 2006
+  cutoff; there is **no pre-2006 TLB index randomization at all**. And a
+  boot-time secret *constant* XOR'd into the index — the obvious cheaper idea
+  — is **useless, not merely weak**: it cancels in the collision condition
+  `(f(v₁) ⊕ g(a₁) ⊕ K) & mask == (f(v₂) ⊕ g(a₂) ⊕ K) & mask`, because conflict
+  attacks depend on relative placement, never absolute. See
+  [hardware-spec.md §2.8b](hardware-spec.md).
 
 ## 7. Performance Characteristics
 

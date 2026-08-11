@@ -272,11 +272,12 @@ Consequences for the `pgtable.h` plumbing:
 > ordinary process context, outside any exception, where its `SR ← SSR`
 > is not obviously correct. Likely should be plain `LDTLB`.
 >
-> **Phase 2 only:** the TSB becomes 2-way with 32-byte sets, so the fill path
-> gains way selection (software policy — replace the way whose tag matches,
-> else alternate on a per-CPU counter) and `jcore_tsb_slot_offset()` becomes a
-> set offset. **None of this is in the tree; Phase 1 keeps today's 1-way
-> 16-byte format.**
+> **Phase 2 — status: IMPLEMENTED on `linux@jcore` branch `mmu/tsb-phase2`
+> and `jcore-cpu` branch `mmu/tsb-hw-walker`, NOT MERGED.** See §4.3 below for
+> the fill contract this establishes. In one line: the TSB is 2-way with
+> 32-byte sets, `TSBPTR` and the new `TSBSLOT` register both present a **set**
+> address, `jcore_tsb_slot_offset()` is **deleted**, and every TSB entry write
+> in the kernel goes through one helper.
 
 ### 4.0 The vector page
 
@@ -439,6 +440,72 @@ int __jcore_tlb_walk(pgd_t *pgd, unsigned long addr, unsigned long pteh_tag)
 For J64, the walker grows additional levels (P4D, PUD already). Compile-time level folding via the standard `pgtable.h` macros handles both widths from this one source.
 
 **OPEN DECISION (deferred to SP1): `_PAGE_ACCESSED` bit assignment.** The walker above sets `_PAGE_ACCESSED` on the software PTE, but this document does not assign it a bit position in §3.2. On J32 the 32-bit PTE is fully consumed by the RTL-mandated layout (`flags[7:0]` + `PageMask[11:8]` + `PPN[31:10]`) — there is no spare bit for a hardware-visible Accessed flag, and the hardware TLB does not implement one (it is ignored by the walker's `ldtlb.rn`/TSB path either way). SP1 must pick one of: (a) steal/overload an existing software-only encoding (e.g. combine with `_PAGE_STALE` semantics), (b) track ACCESSED purely in a separate software structure outside the PTEL image, or (c) widen/relocate the PTE (the PAE §3.4 64-bit PTE has spare high bits available). This document does not make that call; it only records the constraint so SP1 starts from an accurate picture.
+
+### 4.3 The TSB fill contract (Phase 2)
+
+> **Status: IMPLEMENTED on `linux@jcore` branch `mmu/tsb-phase2` and
+> `jcore-cpu` branch `mmu/tsb-hw-walker`, NOT MERGED.** The code listings in
+> §4.1/§4.2 above still show the pre-Phase-2 shape; this subsection is
+> normative where they disagree.
+
+The TSB is 2-way. `TSBPTR` and `TSBSLOT` both present a 32-byte-aligned **set**
+address, and the set is a single cache line holding two contiguous 16-byte
+entries — way 0 at `+0`, way 1 at `+16`, each laid out `tag_hi`, `tag_lo`,
+`data`, reserved.
+
+**`jcore_tsb_slot_offset()` is deleted.** It was a from-scratch C
+reimplementation of the RTL's index hash that had to be kept bit-for-bit in
+sync by hand — a mirror with no mechanism keeping the two copies honest.
+Its replacement, `jcore_tsb_slot_addr()`, writes the VA to the `TSBSLOT` MMIO
+register (`0xFF000048`, [hardware-spec.md §2.12](hardware-spec.md)) and reads
+the set address back, so the index is computed by the one RTL function that
+owns it. The fault path is unchanged: it uses the `TSBPTR` the fault already
+latched.
+
+**One writer.** All three words of a TSB entry are stored by
+`jcore_tsb_write_entry()` in `arch/sh/mm/tlb-jcore.c`, and nothing else in the
+kernel writes a TSB entry. It enforces the store order:
+
+```
+    data (PTEL)    -> slot + 8
+    tag_lo (ASID)  -> slot + 4
+    barrier()
+    tag_hi (VPN)   -> slot + 0      <- the commit point
+```
+
+The walker compares `tag_hi` **first**, so `tag_hi` is the commit point.
+Writing it earlier lets a walk that lands between the stores see `tag_hi`
+already matching the new VPN while `tag_lo`/`data` still describe whatever the
+slot held before — a torn read that installs a wrong translation with no
+exception and no diagnostic. **Hardware cannot distinguish a torn entry from a
+legitimate one**, so no bare-metal guard can catch a regression of this order.
+Concentrating the stores in one function, with the reasoning attached, *is* the
+enforcement: a future writer has to edit that function to get it wrong.
+
+**Way selection, and why the rule is what it is.** `jcore_tsb_pick_way()`
+applies one rule: **if either way already holds this VPN, overwrite that way.**
+Only when neither matches does it take the hardware's victim nomination from
+`TSBVICT` ([hardware-spec.md §2.13](hardware-spec.md)), whose LFSR the kernel
+seeds from boot entropy at MMU init through the write-only `TSBVSEED`.
+
+This must not be "optimised" into always taking the nomination. Suppose a fresh
+entry for VPN `X` went to way 1 while a stale entry for the same `X` still sat
+in way 0. The next walk probes way 0 first, matches its tag, and installs the
+**stale `PTEL`** — wrong permissions, no exception, no diagnostic. Hardware
+cannot detect it; both tags are legitimate. Overwriting the matching way is
+what makes that state **unconstructable** rather than merely unlikely, and
+software can apply the rule for free because it already has both tags: one
+index function plus both ways in a single 32-byte line means the tags arrive in
+the one load it was going to issue anyway.
+
+This is the reason the design has **one** index function and no skewing. Under
+skewed associativity the two candidate slots for a VPN live in different sets
+under different hashes, so software filling one cannot cheaply see the other,
+and the stale-shadow state above becomes constructible. Skewing is a
+*hardware-fill* technique — safe in a cache because the agent that fills is the
+agent that just probed every way. This TSB is **software-filled**; the filler
+is not the prober. That mismatch, not the hashing, is what makes skewing unsafe
+here.
 
 ## 5. ASID Allocation and Context Switching
 

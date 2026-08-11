@@ -173,16 +173,31 @@ Holds the physical base address of the per-CPU TSB and configuration bits.
 
 **J32 layout (32 bits):**
 ```
-[31:N+4] TSB_BASE      Physical address of TSB. Must be aligned to 
-                       16 × 2^N bytes (TSB size).
-[N+3:4]  reserved (0)
-[3:0]    TSB_SIZE_LOG  log2(number of TSB entries). Valid: 6–14
-                       (64 to 16384 entries; TSB = 1 KB to 256 KB).
-                       For TSB_SIZE_LOG = N, the TSB spans 16 × 2^N
-                       bytes (each entry is 16 bytes).
+[31:N+5] TSB_BASE      Physical address of TSB. Must be aligned to 
+                       32 × 2^N bytes (TSB size).
+[N+4:5]  reserved (0)
+[4]      reserved (0)
+[3:0]    TSB_SIZE_LOG  log2(number of TSB SETS). Valid: 6–14
+                       (64 to 16384 sets; TSB = 2 KB to 512 KB).
+                       For TSB_SIZE_LOG = N, the TSB spans 32 × 2^N
+                       bytes (each set is 32 bytes = 2 ways × 16 B).
 ```
 
 On J64, TSB_BASE widens to a 64-bit physical address. The low 4 bits remain `TSB_SIZE_LOG`.
+
+> **Amendment — Phase 2 of the hardware-walker work. Status: IMPLEMENTED on
+> `jcore-cpu` branch `mmu/tsb-hw-walker`, NOT MERGED** (MMU suite 97 PASS /
+> 0 FAIL at `a2522ed`). Later phases (instruction retirement) are **not**
+> implemented.
+>
+> `TSB_SIZE_LOG` counts **sets**, not entries. Phase 1 and everything before
+> it counted 16-byte entries, and the layout above has been rewritten in
+> place to the Phase-2 meaning — this register's software contract therefore
+> changed, and a kernel written against the Phase-1 text will size its TSB at
+> half the bytes the hardware indexes. `core/datapath_pkg.vhd`'s `tsb_ptr()`
+> reads `tsbbr(3 downto 0)` as the set count and clears `tsbbr(4 downto 0)`
+> before ORing the scaled index, which is where the extra reserved bit comes
+> from.
 
 ### 2.7 TSBCFG — TSB Configuration (NEW)
 
@@ -202,34 +217,119 @@ Holds the hash configuration used by hardware when computing TSBPTR.
 
 For most kernels, software writes HASH_MODE=1 and HASH_SHIFT=TSB_SIZE_LOG at boot and never touches TSBCFG again.
 
-### 2.8 TSBPTR — TSB Slot Pointer (NEW, read-only)
+### 2.8 TSBPTR — TSB Set Pointer (NEW, read-only)
 
-Hardware-populated on every TLB miss. Holds the address (in physical memory) of the TSB slot where the missing translation, if cached, would be found.
+Hardware-populated on every TLB miss. Holds the address (in physical memory) of the TSB **set** where the missing translation, if cached, would be found. A set is one 32-byte cache line holding two contiguous 16-byte entries — way 0 at `+0`, way 1 at `+16`.
 
 **Access:** `STC TSBPTR, Rn` (`0x004B`, read-only; the hot-path read — see §3.1) and MMIO at `0xFF00001C` (also read-only). There is no `LDC TSBPTR`.
 
 **Computation (hardware, on TLB miss):**
 ```
-hash = VPN ^ ((HASH_MODE == 1) ? (VPN >> HASH_SHIFT) : 0)
+vpn  = VA[31:12]
+a1   = ASIDR ^ (ASIDR << 5)
+amix = a1 ^ (a1 >> 9)
+hash = (VPN ^ ((HASH_MODE == 1) ? (VPN >> HASH_SHIFT) : 0)) ^ amix
 mask = (1 << TSBBR.TSB_SIZE_LOG) - 1
-TSBPTR = (TSBBR.TSB_BASE) | ((hash & mask) << 4)
+TSBPTR = (TSBBR & ~0x1F) | ((hash & mask) << 5)
 ```
 
-The `<< 4` is because each TSB entry is 16 bytes. TSBPTR is therefore naturally aligned to a 16-byte boundary within the TSB.
+The `<< 5` is because each **set** is 32 bytes. TSBPTR is therefore naturally aligned to a 32-byte boundary — one cache line — within the TSB.
 
-> **Planned change (Phase 2 of the hardware-walker work, §5.0) — NOT yet in
-> effect.** The TSB becomes **2-way, one 32-byte set per cache line**: entries
-> stay 16 bytes, `TSB_SIZE_LOG` comes to count **sets rather than entries**,
-> and this computation becomes `(TSBBR & ~0x1F) | ((hash & mask) << 5)`,
-> producing a 32-byte-aligned **set** address. Same total TSB bytes for the
-> same entry count, one line fill per probe, but 1-way → 2-way associativity;
-> conflict misses are what send a fault down the ~150-cycle slow path.
-> `jcore_tsb_slot_offset()` in `arch/sh/mm/tlb-jcore.c`, which mirrors this
-> function bit-for-bit, changes with it.
+> **Amendment — Phase 2. Status: IMPLEMENTED on `jcore-cpu` branch
+> `mmu/tsb-hw-walker`, NOT MERGED.** The formula above **is** the RTL
+> (`core/datapath_pkg.vhd`, `tsb_ptr()`); it is not a plan. Two things changed
+> from Phase 1: the scale went `<< 4` → `<< 5` (2-way sets), and `ASID` is
+> now folded into the **index**, not only compared as a tag.
 >
-> **Today, and throughout Phase 1, the `<< 4` above is exactly what the RTL
-> does and what Linux assumes.** The walker's first phase probes today's
-> 1-way 16-byte slot unchanged.
+> `jcore_tsb_slot_offset()` in `arch/sh/mm/tlb-jcore.c` — the from-scratch C
+> reimplementation of this hash that had to be kept bit-for-bit in sync by
+> hand — is **deleted**. Software that needs a set address outside a fault
+> uses the `TSBSLOT` register (§2.12), which evaluates this same RTL
+> function. There is now exactly one implementation of the index.
+
+#### 2.8a The `ASID` fold is hardening, not isolation
+
+**Do not describe this fold as a security boundary anywhere.** It is not one,
+and a downstream design that treats it as one will be built on sand.
+
+What it does: without it, the same virtual address in two address spaces always
+lands in the same set. Since a TSB hit is roughly 11× cheaper than a miss, that
+handed an attacker a *zero-effort*, deterministic, targeted eviction primitive —
+to evict a victim's entry for VA `X`, touch VA `X`. The fold removes that
+primitive and measurably improves distribution (simulated-model TSB miss rate
+49.4% → 36.3% at 256 sets / 16 processes, 49.5% → 18.6% at 1024 sets / 32
+processes). Both are worth having.
+
+What it does **not** do. The fold is XOR-separable —
+`hash = f(vpn) ⊕ g(asid)` — and **J-Core is open source, so `g` is public**.
+The attacker recomputes it. All that is left to find is the victim's `ASID`
+contribution, and the offset space is only `2^TSB_SIZE_LOG` (64–1024 values),
+which is brute-forceable by timing probes. The attacker is delayed by a search,
+not excluded. Isolation is §2.13a's per-domain partitioning, and only that.
+
+The fold is deliberately **not** a bare `vpn ^ asid`. The `<< 5` spread with a
+`>> 9` refold makes every index bit, at any TSB size, a function of three
+different `ASID` bits with a different triple per bit; a bare XOR of a narrow
+identifier distributes badly (see the Prior art note below). It is applied in
+**both** `HASH_MODE`s — a mode that silently disabled it would be a switch for
+turning the hardening off. And because it is a constant XOR for a fixed `ASID`,
+it is a bijection on the set index: within one address space the conflict
+distribution is bit-for-bit what it was before the fold, so it cannot introduce
+thrashing in a single-`ASID` workload.
+
+**Prior art (pre-2006).** Folding the address-space identifier into a
+translation-structure *index* is **US 5,493,660**, Hewlett-Packard, filed
+**1992-10-06**, granted 1996-02-20, **expired**: a *hardware TLB miss handler*
+that forms its pointer by XORing high-order virtual-address bits — which are
+the OS-assigned space identifier — with low-order bits, "to provide a more
+uniform distribution of pointer references over periods when multiple processes
+execute". Same mechanism, same motivation, same context. **US 5,899,994** (Sun
+Microsystems, filed 1997-06-26, expired) is a second, independent record of TSB
+index formation from PID + VA, and it carries the design warning above: XORing a
+*narrow* process identifier straight into the index distributes badly and
+invites thrashing — which is why the shipped fold is a mixed function rather
+than a bare XOR. The *prior* J-Core design, in which context participates as a
+**tag only**, is **US 7,430,643** (Sun, priority 2004-12-30).
+
+*Publication or grant before 2006 is evidence of prior art. It is **not** a
+patent-clearance opinion, which this document does not offer.*
+
+#### 2.8b What was considered and dropped — do not re-propose
+
+**A keyed or per-context index mapping is unavailable to this project.** Its
+origin is **RPcache — Z. Wang & R. B. Lee, "New Cache Designs for Thwarting
+Software Cache-Based Side Channel Attacks", ISCA 2007, pp. 494–505**, which is
+past the project's 2006 prior-art cutoff (`docs/glossary.md` §2). A search for
+an earlier tech report, workshop paper or filing found none. More broadly:
+**there is no pre-2006 TLB index randomization at all** — the only pre-2006 TLB
+security item locatable is a 1995 *observation* that the TLB is a covert
+channel. Every pre-2006 randomized-index design (Seznec ISCA 1993; González,
+Valero, Topham & Parcerisa ICS 1997; Topham & González, IEEE ToC 48(2), Feb
+1999; Sun US 7,290,116, priority 2004-06-30, explicitly stateless) chooses its
+function for *miss-ratio* reasons and **publishes it**.
+
+**A boot-time secret constant XOR'd into the index is useless, not merely
+weak.** This is the obvious idea, and it looks like it should work, so the
+reason it does not is recorded here rather than left to be rediscovered. The
+collision condition between two accesses is
+
+```
+(f(v₁) ⊕ g(a₁) ⊕ K) & mask  ==  (f(v₂) ⊕ g(a₂) ⊕ K) & mask
+```
+
+in which `K` **cancels**. Conflict attacks depend on *relative* placement,
+never absolute placement, so a global constant — secret or not — changes
+nothing an attacker can observe. It would buy zero security at the cost of a
+register that looks like a secret and would be treated as one.
+
+**The CEASER boundary.** The tempting future enhancement — "periodically re-key
+the hash so an attacker who has learned the mapping loses it" — is precisely
+the encumbered idea: CEASER (Qureshi, MICRO 2018), CEASER-S (ISCA 2019),
+ScatterCache (USENIX Security 2019), MIRAGE (2021). All post-2006. The bright
+line for J-Core is therefore: **no key, no cipher, no re-keying.** The index
+function is fixed at synthesis. `TSBCFG` selects among *fixed, published*
+functions and is boot configuration, never a secret. Static selection is fine;
+a runtime-writable index *key* register is not.
 
 ### 2.9 CPUINFO — CPU Information (NEW, MMIO only)
 
@@ -321,6 +421,115 @@ Read-only MMIO register at `0xFF00002C`, latched on every TLB exception (I-fetch
 **MULTI_HIT is a special case.** When KIND=7, the entire low byte (`[7:0]`, including USER at bit 4) reads 0 — only `VALID` (bit 12) and `KIND` (bits `[11:8]`) are meaningful. This mirrors the fact that a multi-hit is a configuration error detected during TLB lookup, before the normal miss/protection classification (direction, privilege) has been computed for a specific access.
 
 **Relationship to EXPEVT (§5).** MMUFSR is latched by the same fault-capture logic that latches `TEA`/`PTEH`/`SPC`/`SSR` on a TLB exception (§5 steps 2-4), so by the time the handler is entered at `VBR + 0x400`, `STC EXPEVT, Rn` and a read of `0xFF00002C` are both immediately valid and describe the same fault. The two are read in whichever order suits the handler; neither is more expensive than the other. Linux@jcore, for instance, reads MMUFSR *unconditionally* in the fault prologue (`arch/sh/kernel/cpu/jcore/entry.S`), before it knows the fault kind, and folds its WRITE bit straight into the `error_code` argument of `do_page_fault()` — a single unpredicated MMIO load is cheaper on this pipeline than branching on `EXPEVT` to decide whether to issue it. `STC EXPEVT, Rn` is then used to separate miss from protection. Software is free to read MMUFSR lazily instead, but nothing in the hardware rewards doing so.
+
+### 2.12 TSBSLOT — TSB set-address helper (NEW, MMIO only)
+
+> **Amendment — Phase 2. Status: IMPLEMENTED on `jcore-cpu` branch
+> `mmu/tsb-hw-walker`, NOT MERGED.** Decoded in `core/datapath.vhm` as
+> `P4_TSBSLOT`, alongside `TSBBR`/`TSBCFG`/`TSBPTR`.
+
+**Access:** MMIO at `0xFF000048`, read **and** write. There is no LDC/STC form.
+
+Write a virtual address; read the same address back to get `tsb_ptr(VA)` — the
+32-byte-aligned set address for that VA under the current `TSBBR`, `TSBCFG` and
+`ASIDR`. Only the VA is latched. The index function is evaluated **on the
+read**, so `core/datapath_pkg.vhd`'s `tsb_ptr()` stays the single
+implementation of the index anywhere in the system.
+
+**Why it exists.** `TSBPTR` (§2.8) is latched by a fault, so it is only
+available on the fault path. Linux's `__update_tlb()` fills the TSB *outside*
+any fault, on permission upgrades, where no `TSBPTR` has been latched. Before
+this register, that path used `jcore_tsb_slot_offset()` — a from-scratch C
+reimplementation of the hash that had to be kept bit-for-bit in sync with the
+RTL by hand. That mirror is the class of defect this register removes; it is
+deleted.
+
+**Its failure mode is benign, which is the point.** The register is a
+write-VA-then-read-result pair, so a preemption between the two halves could
+return a set address for someone else's VA. `__update_tlb()` already runs under
+`local_irq_save`, and even if it did not, the consequence is that software
+writes a *correct* entry into the *wrong* set: the walker then fails to find
+it, misses, and takes the software path. **Slow, not wrong.** No architectural
+atomicity is required of the pair, and none is provided.
+
+### 2.13 TSBVSEED / TSBVICT — TSB victim selector (NEW, MMIO only)
+
+> **Amendment — Phase 2. Status: IMPLEMENTED on `jcore-cpu` branch
+> `mmu/tsb-hw-walker`, NOT MERGED.** Decoded in `core/datapath.vhm` as
+> `P4_TSBVSEED` / `P4_TSBVICT`; the LFSR itself is `tsb_lfsr_next()` in
+> `core/datapath_pkg.vhd`.
+
+With a 2-way set, software that finds neither tag matching must choose a way to
+replace. Hardware nominates one, pseudo-randomly, so that the choice is not
+something an attacker can predict or steer.
+
+| Address | Name | Access |
+|---|---|---|
+| `0xFF00004C` | `TSBVSEED` | **write-only** — seeds the victim LFSR |
+| `0xFF000050` | `TSBVICT`  | **read-only** — bit 0 is the way nomination; all other bits read 0 |
+
+The selector is a 16-bit Fibonacci LFSR, taps 16/14/13/11
+(`x¹⁶+x¹⁴+x¹³+x¹¹+1`, maximal length 65535). **The seed is not in the
+hardware**: the OS writes it at MMU init from real boot entropy. That is not
+ceremony. This is an open-source core, so the polynomial and any constant seed
+compiled into the RTL are readable by anyone, and a victim sequence an attacker
+can replay offline is worth no more than a fixed choice.
+
+**Only the 1-bit nomination is exposed.** `TSBVSEED` has no read case at all
+and returns a hard zero — deliberately, not by omission: if software could
+recover the seed, so could an attacker. Reading `TSBVICT` **advances** the
+LFSR, so each read consumes exactly one bit and no two reads observe the same
+state; an attacker cannot resynchronise to the sequence even by watching
+evictions.
+
+**Zero is the LFSR's lock-up state**, and it self-heals to a fixed, non-secret
+constant rather than leaving an un-seeded machine silently pinned to way 0 — a
+correct-but-slow failure nobody would notice. That constant carries **no**
+security claim. Security here comes from the OS seed, and only from it.
+
+The selector sits **outside** the index function — it chooses which way to
+evict, not where to look — so it is clear of the no-key boundary of §2.8b. A
+key in the *index* is CEASER-shaped and post-2006; an unpredictable
+*replacement victim* is not.
+
+**Prior art (pre-2006).** Random replacement is ubiquitous well before the
+cutoff — A. J. Smith, "Cache Memories", ACM Computing Surveys 14(3), 1982;
+Hennessy & Patterson, any edition ≤4th; and it is the replacement policy of
+essentially every ARM core of the era. *Pre-2006 publication is evidence of
+prior art, not patent clearance.*
+
+### 2.13a Isolation is partitioning, not hashing
+
+**The `ASID` fold (§2.8a) is hardening. The victim LFSR (§2.13) is hardening.
+Neither is an isolation boundary, and this specification does not claim one
+from either.** The boundary, where a deployment needs one, is **per-domain TSB
+partitioning**: give each trust domain its own TSB (or its own disjoint
+sub-range of one allocation, by also adjusting `TSB_SIZE_LOG`) and write
+`TSBBR` on domain switch. Disjoint index sets mean there are no shared sets to
+contend for, so there is no cross-domain collision to measure — the channel is
+closed **by construction**, not by obfuscation, and it stays closed against an
+attacker who knows the whole algorithm.
+
+**This needs no RTL change at all.** The TSB is software-managed memory and
+`TSBBR` is already a writable register. The cost is one register write per
+domain switch, and it moves from cycles to **memory** (k TSBs) or to
+**capacity** (one allocation sub-divided). Neither is paid on the miss path.
+
+The alternative considered and rejected as costly was **flush-on-switch**: a
+full `memset` of the TSB on every cross-domain switch. It is correct and fully
+covered pre-2006, and it remains the migration-safe backstop; it is simply far
+more expensive per switch than reprogramming a base register.
+
+**Prior art (pre-2006).** Partitioning a shared, index-mapped structure into
+disjoint sets per activity, under OS control, precisely so one activity cannot
+displace another's footprint: **J. Liedtke, H. Härtig & M. Hohmuth,
+"OS-Controlled Cache Predictability for Real-Time Systems", RTAS 1997,
+pp. 213–224.** Flush-on-switch / never-co-schedule-across-a-privilege-boundary:
+**C. Percival, "Cache Missing for Fun and Profit", BSDCan 2005.** *Publication
+before 2006 is evidence of prior art, not patent clearance.*
+
+Under a hypervisor, this composes in two non-interfering levels — see
+[../hypervisor/design-spec.md §3.8a](../hypervisor/design-spec.md).
 
 ## 3. Instruction Encodings
 
@@ -562,13 +771,16 @@ If more than one matches: behavior undefined — software must not write duplica
 
 A TLB **miss** is no longer an exception in the first instance. It is a
 **stall**, the way a cache miss is a stall. On a miss the pipeline holds and a
-hardware FSM (`core/tlb_walk.vhd`) probes the TSB set addressed by `TSBPTR`:
+hardware FSM (`core/tlb_walk.vhd`) probes the TSB set addressed by `TSBPTR`.
+**It probes both ways of that set**, way 0 first and then way 1, bailing out of
+a way as soon as one of its two tag words mismatches:
 
-- **On a tag match** it installs the entry through the same `tlb_wr` port
+- **On a tag match in either way** it installs the entry through the same `tlb_wr` port
   `LDTLB` uses and releases the hold. The faulting access replays and
   translates. **No exception is raised** — `SPC`, `SSR`, `EXPEVT`, `PTEH`,
   `TEA` and `MMUFSR` are *not* written, and no vector is fetched.
-- **On no match**, or on an entry with `V=0` or `STALE=1`, the walker stops.
+- **On no match in either way**, or when the matching entry has `V=0` or
+  `STALE=1`, the walker stops.
   The miss condition is still true, so the sequence in §5.1 below runs
   **exactly as it did before the walker existed** — same vector, same
   `EXPEVT`, same `TEA`/`PTEH`/`TSBPTR`/`MMUFSR` capture. There is deliberately
@@ -595,7 +807,9 @@ empirically by the Phase-1 feasibility spike, `jcore-cpu` commit `90e6cbc`.)
 |---|---|
 | Stall-and-walk mechanism (ack withheld, external `db_o` borrowed) | proven on RTL by spike `90e6cbc`; walker FSM in progress |
 | Exception path on walk failure (§5.1) | unchanged and shipped |
-| TSB entry format | **Phase 1 keeps today's format**: 16-byte slot, 1-way, `tag_hi`/`tag_lo`/`data` at `+0`/`+4`/`+8`, `tsb_ptr()` scaling by `<< 4`. The 2-way 32-byte set of §4.4 is **Phase 2, not yet implemented.** |
+| TSB entry format | **Phase 2: 2-way, 32-byte set, `tsb_ptr()` scaling by `<< 5`, `ASID` folded into the index** (§2.8). IMPLEMENTED on `mmu/tsb-hw-walker`, **not merged**. Phase 1's 1-way 16-byte slot is superseded. |
+| Two-way probe in the walker FSM | Phase 2, IMPLEMENTED (`core/tlb_walk.vhd`, generic `tsb_ways => 2` from `core/cpu.vhd`); guard `mmuwalkway1` |
+| `TSBSLOT` / `TSBVSEED` / `TSBVICT` (§2.12, §2.13) | Phase 2, IMPLEMENTED and decoded in `core/datapath.vhm` |
 | Instruction retirement (§3.1) | **Phase 3, not yet started.** All seven instructions still exist and still work. |
 
 ### 5.1 Exception sequence (when the walk does not resolve the miss)
@@ -675,10 +889,17 @@ The TLB-miss handler's hot path (described in §7) uses only R0–R3 of bank 1, 
 ### 7.0 The hardware TSB walk (design; see §5.0)
 
 The nine-instruction sequence of §7.1 is replaced by hardware. The FSM
-performs exactly the same probe — same TSB slot, same two tag comparisons,
-same `PTEL` install — with two additional checks the software handler never
-made (`V=1` and `STALE=0`, see §5.0), and without taking an exception at all
-on a hit.
+performs the same probe — same two tag comparisons, same `PTEL` install — with
+two additional checks the software handler never made (`V=1` and `STALE=0`,
+see §5.0), and without taking an exception at all on a hit.
+
+**Phase 2: the probe covers two ways.** `TSBPTR` addresses a 32-byte **set**,
+and the FSM walks way 0 (`+0`/`+4`/`+8`) and then, only if way 0 fails, way 1
+(`+16`/`+20`/`+24`). Way 1's words are a D-cache hit into the line way 0
+already filled, so the second way costs bus turns rather than memory latency.
+Read counts: **3** for a way-0 hit, **5** for a way-1 hit, **4** for a
+both-ways miss that goes on to the exception. Bailing on a `tag_hi` mismatch
+before reading `tag_lo`/`data` is what keeps a way-0 miss cheap.
 
 **Software's remaining role** is the slow path only: on a walk failure the
 handler at `VBR + 0x400` walks the page tables, fills the TSB slot, and
@@ -690,8 +911,13 @@ so `tag_hi` must be the **commit point**: software writes `data`, then
 `tag_lo`, then `tag_hi` last, with a barrier before the final store.
 Otherwise a walk can observe a torn entry — correct VPN, stale `ASID`/`PTEL` —
 and install a wrong translation *silently*, with no exception.
-`tlb-jcore.c` currently writes `tag_hi` **first**; that is a defect
-independent of the walker and is fixed as part of this work.
+`tlb-jcore.c` used to write `tag_hi` **first**; that was a defect independent
+of the walker. **Fixed in Phase 2** (`linux@jcore` branch `mmu/tsb-phase2`,
+not merged): all three words are now stored by a single helper,
+`jcore_tsb_write_entry()`, which is the only place in the kernel that writes a
+TSB entry. Hardware cannot distinguish a torn entry from a legitimate one, so
+no bare-metal guard can catch a regression of this order — concentrating the
+stores in one reviewed function is the enforcement.
 
 **Expected cost:** ~5–6 cycles fault-to-resumed-execution for a warm TSB hit,
 against the 22 (IMISS) / 23 (DMISS) measured for §7.1. The saving is the two
@@ -846,6 +1072,9 @@ Beyond inheriting the SH-4 MMU structure:
 | TSBBR, TSBCFG registers | ~96 bits flop (J32), 160 bits (J64) |
 | TSBPTR register | ~32 bits (J32), 64 bits (J64) |
 | TSBPTR computation (hash, XOR, mask, OR) | ~50 LUTs |
+| `ASID` fold in the index (§2.8a) — two shifts and two XORs on an existing combinational path | a handful of LUTs; off the critical timing path (measured DMISS/IMISS warm cycles unchanged at 7/8) |
+| TSBSLOT latch + its read-side `tsb_ptr()` evaluation (§2.12) | 32 bits flop; the index logic is shared, not duplicated |
+| Victim LFSR + TSBVSEED/TSBVICT decode (§2.13) | 16 bits flop + ~10 LUTs |
 | ASIDR register | 16 bits flop per CPU, ×`n_tc` on FGMT cores (§2.1a) |
 | Extended ASID_TAG (8 → 16 bits) | 8 bits per TLB entry |
 | PageMask (4 bits per TLB entry) | 4 bits per TLB entry |
