@@ -136,6 +136,39 @@ Earlier drafts of this spec, of the Phase 1 MMU spec, and of the Phase 2 IOMMU s
 > see the §5 cost table. §3.8's cookie/range verification becomes dead code
 > for hits, retained only for the software fallback.
 
+### 3.8a Per-domain TSB partitioning composes on this machinery
+
+> **Amendment — Phase 2 of the hardware-walker work
+> ([../mmu/hardware-spec.md §2.13a](../mmu/hardware-spec.md)). Status: the
+> `jcore-cpu` and `linux@jcore` side is IMPLEMENTED but NOT MERGED; the
+> hypervisor itself is unimplemented (this whole document is Phase 3).**
+
+[mmu/hardware-spec.md §2.13a](../mmu/hardware-spec.md) makes per-domain TSB
+partitioning — disjoint index sets per trust domain, selected by writing
+`TSBBR` — the **only** actual isolation mechanism for the TSB contention
+channel. The `ASID` fold in the index and the victim LFSR are hardening; they
+raise cost, they do not draw a boundary. Partitioning needs no RTL change,
+because the TSB is software-managed memory and `TSBBR` is already a writable,
+trapped register.
+
+**It lands on machinery this document already specifies**, and it composes in
+two levels that do not interfere:
+
+- **Between guests** — the hypervisor allocates a per-guest TSB and owns its
+  placement. This is §3.8, and it exists today; nothing new is required.
+- **Within a guest** — the guest sub-divides *its own* allocation among its
+  trust domains and writes `TSBBR` on domain switch. The write traps (§5); the
+  hypervisor bounds-checks it against that guest's allocation and programs the
+  real register.
+
+**The hypervisor never needs to understand the guest's domain policy.** Its
+entire obligation is "stay inside your allocation". The guest is free to change
+how many domains it has, how it sizes them, or to abandon partitioning
+entirely, with no hypervisor change and no interface to renegotiate.
+
+**Consequence for §5's cost table: `TSBBR` is no longer a cold-path register.**
+See the amendment there.
+
 ### 3.9 Untranslated guests are translated
 
 **Decision:** When virtualization is active for a guest (`SR.HPRIV=0` in that context), all of the guest's P0-P3 accesses are translated through the TLB, regardless of what value the guest's own `MMUCR.AT` holds. A guest may believe it is running with translation off; the hardware translates it anyway. See [hardware-spec.md §4.4.1](hardware-spec.md).
@@ -313,7 +346,8 @@ Realistic estimates for a Linux guest under a paravirtualized hypervisor on 100 
 | Guest context switch | ~50 cycles (hypercall to update ASID/TSB) |
 | Privileged instruction trap | ~40 cycles |
 | Inter-guest IPI | ~100 cycles |
-| Guest MMUCR / TSBBR / TSBCFG access (P4 MMIO trap) | ~60 cycles, cold path only |
+| Guest MMUCR / TSBCFG access (P4 MMIO trap) | ~60 cycles, cold path |
+| Guest `TSBBR` write (P4 MMIO trap) | ~60 cycles — **cold path only if the guest does not partition its TSB by trust domain; warm if it does** (§3.8a, and the amendment below) |
 
 **What a guest TLB miss actually costs — the trap breakdown.** The forced-translation rule of
 [hardware-spec.md §4.4.1](hardware-spec.md) makes all of a guest's P0-P3 accesses translated, and
@@ -347,6 +381,25 @@ hypervisor keeps ownership of the guest's TSB placement (§3.8) while the guest'
 `STC TSBPTR` still returns a pointer into that TSB, computed by hardware from the base the
 hypervisor programmed.
 
+> **Amendment — the "cold path only" characterisation of `TSBBR` is wrong once a
+> guest partitions its TSB by trust domain (§3.8a).** The reasoning above — a
+> guest touches these at boot and at whole-TLB-flush time, not per miss — holds
+> for `MMUCR` and `TSBCFG`. It does **not** hold for `TSBBR`: per-domain
+> partitioning switches `TSBBR` on **domain switch**, potentially on every
+> crossing of a trust boundary inside the guest. That is a warm path, not a
+> cold one.
+>
+> **The ~60-cycle figure itself stands** — it is the cost of one emulated-MMIO
+> P4 trap and nothing about the trap changed. What changes is how often it is
+> paid, and therefore what a hypervisor implementer should optimise. A
+> `TSBBR`-write trap handler that is merely *correct* is adequate for a boot
+> register; one on a domain-switch path wants to be short, and its bounds check
+> wants to be branch-free rather than merely present.
+>
+> A guest that does not partition its TSB pays exactly what the row above says.
+> The hypervisor cannot tell which kind of guest it has in advance, so it must
+> be built for the warm case.
+
 **Pinned P1 mappings ([hardware-spec.md §4.4.5](hardware-spec.md)) cost TLB capacity, not cycles.**
 An MMU-using guest requires its P1 window resident and never evicted. Because P1 is one contiguous
 region, that is typically a single large-page entry per admitted guest — the same entry a flat
@@ -366,6 +419,26 @@ With the hypervisor active and all guests confined to their assigned ASID ranges
 - **Guest-to-host isolation:** Guest can never construct an HPA. All addresses the guest manipulates are RAs; only the hypervisor's RA-to-HPA map can produce HPAs. **Enforcement differs before and after the hardware TSB walker, and the guarantee is only as good as its enforcement:**
   - *Today (procedural):* every `LDTLB`/`LDTLB.RN` traps, and the hypervisor verifies the entry against one it wrote (§3.8). A guest-writable TSB is therefore survivable.
   - *With the walker (structural, DESIGNED not implemented):* the walker installs without a trap, so verification is gone. The argument becomes: **the walker's only data source is the set at `TSBBR | hash`; `TSBBR` is hypervisor-owned and P4-trapped; therefore the walker can only install entries the hypervisor wrote.** This holds **only if the guest cannot write its own TSB** — hence the read-only mapping mandated in §3.8. A guest-writable TSB under a walker is a direct guest→host escape.
+- **The `TSBBR` write-trap handler carries BOTH of the above, and that is a
+  single point requiring its own test.** This is stated here explicitly rather
+  than left implied across §3.8a and the guest-to-host bullet above, because
+  the two properties are separately documented and a reader can easily meet
+  only one of them.
+  - *Guest→host:* after the walker, `TSBBR` ownership **is** the isolation
+    argument. If a guest can point `TSBBR` outside its own allocation, it
+    chooses what the walker installs into the TLB, with no trap and no
+    verification. That is a **guest→host escape**.
+  - *Intra-guest:* per-domain partitioning (§3.8a) makes the *same* register
+    write the boundary between a guest's own trust domains. A bounds check
+    that permits an out-of-partition base lets one domain prime and probe
+    another's TSB sets. That is a **cross-domain leak**.
+  - Therefore a missing, off-by-one, or non-total bounds check in that one
+    handler is **simultaneously** a cross-domain leak and a guest→host escape.
+    It must have a dedicated negative test — a guest writing a `TSBBR` outside
+    its allocation, and a guest writing one inside its allocation but outside
+    its current domain's sub-range — not merely be covered incidentally by
+    tests that exercise the happy path. Both properties fail together and
+    silently; neither produces a fault of its own.
 - **Guest-to-guest isolation:** Different guests get different ASID ranges. A TLB lookup with the wrong ASID misses, falls into the trap handler. Hypervisor's TSB management ensures no cross-guest TSB entries exist.
 - **Hypervisor protection:** Hypervisor's own memory is mapped only in HS-mode mappings, with no TLB entries accessible from S or U. Even a malicious guest kernel cannot reach hypervisor memory.
 - **Device-to-guest isolation:** Phase 2 IOMMU's per-BMID enforcement, with BMID ranges assigned per guest.

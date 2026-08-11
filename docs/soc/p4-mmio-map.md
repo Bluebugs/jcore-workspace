@@ -98,11 +98,13 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 | `0x030`     | CPUINFO    | Per-CPU hart ID + capability flags — **allocated, NOT implemented in current RTL** (see note below) |
 | `0x034`     | reserved   | proposed `PTEU` (PAE only, [mmu/hardware-spec.md §2.10](../mmu/hardware-spec.md)) |
 | `0x038`     | reserved → **ASIDR** (planned) | **Reserved for a read-only `ASIDR` alias** when `STC ASIDR,Rn` retires (Phase 3, see §3.1 retirement notice). `ASIDR` is a J-core addition with no stock SH-4 offset, hence `0x038` rather than a low address. **Not decoded today.** |
-| `0xF00`     | walker counters (debug) | Read-only walk/hit counters exported by `core/tlb_walk.vhd` for the anti-vacuity guards. **Scaffolding**, removed with the `MMU_WALKER` generic in Phase 3. Inside the reserved `0x044`–`0xFFC` range below. |
+| `0xF00`     | walker counters (debug) | Read-only walk/hit counters exported by `core/tlb_walk.vhd` for the anti-vacuity guards. **Scaffolding**, removed with the `MMU_WALKER` generic in Phase 3. Not in this block at all — the walker counters live at P2 `0xABCD0F00`; this row records the allocation so nobody re-uses `0xF00` here. |
 | `0x03C`     | QACR0      | Store-queue 0 area register (`0xFF00003C`), see [../sq/spec.md §3](../sq/spec.md) |
 | `0x040`     | QACR1      | Store-queue 1 area register (`0xFF000040`), see [../sq/spec.md §3](../sq/spec.md) |
 | `0x048`     | TSBSLOT    | TSB slot-address helper — **decoded in RTL** (`core/datapath.vhm`, `P4_TSBSLOT`, read/write alongside TSBBR/TSBCFG/TSBPTR). Write a VA, read the same address back to get `tsb_ptr(VA)` — the exact slot address the hardware TSB walker (`core/tlb_walk.vhd`) and TSBPTR-on-fault use. Only the VA is latched; the index function is evaluated on the read, so `core/datapath_pkg.vhd`'s `tsb_ptr()` remains the single implementation. Added in Phase-2 Task 2 so Linux's `jcore_tsb_slot_offset()` bit-for-bit C mirror could be deleted; kernel side is `JCORE_TSB_SLOT` (`0xFF000048`) in `arch/sh/include/cpu-jcore/cpu/mmu_context.h`. |
-| `0x04C`–`0xFFC` | reserved | future registers                                  |
+| `0x04C`     | TSBVSEED   | TSB victim-selector seed — **decoded in RTL** (`core/datapath.vhm`, `P4_TSBVSEED`). **WRITE-ONLY**: there is no read case, so a read returns the decoder's hard zero *deliberately*, not by omission. Seeds the LFSR that nominates which way of a 2-way TSB set to replace when neither tag matches. The seed comes from the OS at MMU init precisely because it must not be public — this is an open-source core, so the polynomial and any constant seed compiled into the RTL are readable by anyone. If software could read the seed back, so could an attacker. Kernel side is `JCORE_TSB_VSEED`. See [mmu/hardware-spec.md §2.13](../mmu/hardware-spec.md). |
+| `0x050`     | TSBVICT    | TSB victim nomination — **decoded in RTL** (`core/datapath.vhm`, `P4_TSBVICT`). **READ-ONLY**, and only bit 0 is meaningful: the way to replace. **The read advances the LFSR**, so each read consumes one bit and no two reads observe the same state; neither the seed nor the LFSR state is ever readable. Kernel side is `JCORE_TSB_VICTIM`. |
+| `0x054`–`0xFFC` | reserved | future registers                                  |
 
 **Decision: `0x020`/`0x024`/`0x028` are TRA / EXPEVT / INTEVT.** This closes the three-way
 conflict formerly recorded as §7 open question 4. CPUINFO moves from `0x020` to `0x030`, and
@@ -148,9 +150,11 @@ PTEU ([mmu/hardware-spec.md §2.10](../mmu/hardware-spec.md), PAE-only) is likew
 
 The RTL is the ground truth here: `jcore-cpu/core/datapath.vhm` (the `p4_sel_v` decode, around
 `:1697` and following) decodes `0x08` TTB, `0x0C` TEA, `0x10` MMUCR, `0x14` TSBBR, `0x18` TSBCFG,
-`0x1C` TSBPTR (read-only), `0x20` TRA, `0x24` EXPEVT, `0x28` INTEVT, `0x2C` MMUFSR and `0x048`
-TSBSLOT. `PTEH`/`PTEL`/`ASIDR` are never P4-MMIO selected (handled via LDC); their LDC write path is
-elsewhere in the same file.
+`0x1C` TSBPTR (read-only), `0x20` TRA, `0x24` EXPEVT, `0x28` INTEVT, `0x2C` MMUFSR, `0x048`
+TSBSLOT, `0x04C` TSBVSEED (write-only) and `0x050` TSBVICT (read-only).
+`PTEH`/`PTEL`/`ASIDR` are never P4-MMIO selected (handled via LDC); their LDC write path is
+elsewhere in the same file. Read that list as "what the RTL decoded when this line was written" —
+it grows; grep `p4_sel_v` rather than trusting it.
 
 > **Do not read this paragraph as a count.** It said "exactly six offsets" with pinned line numbers
 > long after the RTL had grown past six, and that staleness directly caused a defect: an
@@ -161,7 +165,7 @@ elsewhere in the same file.
 > `datapath.vhm` consumes them first — which is why genuinely debug-only windows (the walker
 > counters) sit at P2 `0xABCD0F00` instead. Line numbers here are indicative; grep for `p4_sel_v`.
 Linux agrees independently: `arch/sh/include/cpu-jcore/cpu/mmu_context.h` defines MMIO addresses for
-the six decoded registers only and documents that "PTEH/PTEL/PTEU and ASIDR are LDC/STC-only control
+the decoded registers only (not a fixed number of them) and documents that "PTEH/PTEL/PTEU and ASIDR are LDC/STC-only control
 registers"; `arch/sh/mm/tlb-jcore.c` uses `ldc %0, pteh`.
 
 **Undecoded P4 offsets fail SILENTLY (normative hazard).** A load or store to a P4 offset in this
@@ -240,6 +244,8 @@ Address-map partitioning conventions:
 - Generous reservation policy with 4 KB-aligned slots — ARM AMBA "memory map by 4 KB pages" convention (AMBA AHB, 1999); PCI BAR alignment rules (PCI 2.0, 1993).
 - SoC-wide control register page separate from per-CPU pages — PowerPC 7xx/74xx SoC layout (1997 onwards).
 - Peripheral allocation table maintained as a single canonical document — PCI device ID registry pattern (PCI SIG, 1992).
+- A **write-only** control register whose value cannot be read back, so that privileged software can install a value software must not be able to recover (`0x04C` TSBVSEED) — write-only control registers are standard pre-2006 practice; SH-4's own write-only cache/MMU control paths and the PCI 2.0 write-only configuration semantics are both examples.
+- A **read-destructive** status register whose read advances internal state (`0x050` TSBVICT) — read-to-clear / read-to-advance registers are pervasive pre-2006, e.g. SH-4 interrupt-controller and UART status registers (1998) and the 16550 UART's read-clearing IIR/LSR (1987).
 
 All references pre-2006, satisfying the project-wide prior-art policy ([glossary §2](../glossary.md)).
 
