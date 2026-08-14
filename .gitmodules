@@ -1,6 +1,7 @@
 [submodule "jcore-soc"]
 	path = jcore-soc
 	url = git@github.com:Bluebugs/jcore-soc.git
+	branch = master
 [submodule "gcc"]
 	path = gcc
 	url = git@github.com:Bluebugs/gcc.git
@@ -10,9 +11,11 @@
 [submodule "jcore-cpu"]
 	path = jcore-cpu
 	url = git@github.com:mountain-reverie/jcore-cpu.git
+	branch = master
 [submodule "linux"]
 	path = linux
 	url = git@github.com:mountain-reverie/linux.git
+	branch = jcore
 [submodule "llvm-project"]
 	path = llvm-project
 	url = git@github.com:mountain-reverie/llvm-project.git
