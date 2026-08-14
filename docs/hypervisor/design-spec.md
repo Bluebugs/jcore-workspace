@@ -465,6 +465,38 @@ With the hypervisor active and all guests confined to their assigned ASID ranges
 - **Hypervisor protection:** Hypervisor's own memory is mapped only in HS-mode mappings, with no TLB entries accessible from S or U. Even a malicious guest kernel cannot reach hypervisor memory.
 - **Device-to-guest isolation:** Phase 2 IOMMU's per-BMID enforcement, with BMID ranges assigned per guest.
 
+### 6.1 What these guarantees do not cover on a speculative or multi-threaded core
+
+Every guarantee above is **architectural**: it says which addresses a guest can name and which
+translations it can install. On [ooo/j32ooo-spec.md](../ooo/j32ooo-spec.md) or
+[ooo/j32lt-spec.md](../ooo/j32lt-spec.md) each of those checks sits behind a branch predictor, and
+several of the mechanisms are triggered by an address a mispredicted path can produce. Three
+additions are required, all specified on the CPU side and summarised here so this section is not
+read as complete:
+
+- **Predictor domains.** Without them, host and guest share branch-predictor state and a guest
+  trains the targets the hypervisor speculates to — VMScape (CVE-2025-40300). ASID range
+  partitioning, the mechanism the guest-to-guest bullet above relies on, does not extend to the
+  predictor unless something carries it there. `PDID` ([hardware-spec.md §2.8](hardware-spec.md))
+  is that carrier, with `SR.HPRIV` as a separate hardware term so the guest→host path fails closed
+  even if the hypervisor mismanages `PDID`.
+- **Non-speculative device space.** The emulation aperture is a comparator on a physical address;
+  on a speculative core it must not be reached by an access that may be squashed
+  ([hardware-spec.md §2.5](hardware-spec.md) rule 6). Otherwise a squashed access corrupts the
+  capture registers a real trap is about to use, speculative loads reach real devices, and the
+  aperture's location is discoverable by timing.
+- **The unit of tenancy is a core.** The TSB-contention channel this section already documents,
+  the walker counters at `0xFF000054`, the shared L1 and the shared TLB are all *between whatever
+  is co-resident on a core*. [hardware-spec.md §4.7](hardware-spec.md) makes a core the unit of
+  guest allocation, which is what makes those channels intra-guest rather than cross-guest. Note
+  the shape of the argument: §6's existing analysis of the TSB counters — that a counter *states*
+  cross-guest behaviour with no timing apparatus at all — generalises to every counter the CPU
+  specs add, and is why those count committed events only.
+
+The through-line is that this section's isolation arguments are necessary and remain true; they are
+just not sufficient once the core speculates, and none of them fails loudly when the
+microarchitectural half is missing.
+
 ## 7. Limitations and Trade-offs
 
 Honest accounting of what we give up by staying pre-2006:

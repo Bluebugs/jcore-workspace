@@ -1,6 +1,6 @@
 # J32-LT — Light Out-of-Order, 4-Way Barrel-FGMT J-Core Specification
 
-**Status:** Draft v0.1
+**Status:** Draft v0.3
 **Compatible ISA:** J32 baseline (SH-2 + J-core extensions: SHAD, SHLD, CAS.L) + MMU
 **Scope:** CPU core front end, issue, memory pipeline, PMU. FPU, MMU, IOMMU/DMA, SIMD, crypto specified separately.
 
@@ -17,6 +17,7 @@
 3. **Single-thread floor:** with one thread runnable, IPC must be no worse than the in-order J32 baseline (~0.7–0.85). Latency-sensitive workloads must not pay for the thread count. Met by the barrel period floor of §2.5, which yields ~0.94.
 4. Preserve precise exceptions per thread, the J32 MMU model, and CAS.L semantics with no architecturally visible changes.
 5. Present to Linux as 4 logical CPUs per core.
+6. **Transient-execution security at a cost the barrel absorbs (§16).** In-order *issue* is not a defence — this core predicts branches and issues non-blocking loads past them (§7.4), which is a complete Spectre-v1 gadget. What the barrel does provide is that the standard stall-based defence, normally rejected as too expensive, costs this design point far less than any other (§7.4a). That is a second claim alongside throughput per joule, and §12.2 gate G8 tests it.
 
 ### 1.2 Non-goals
 
@@ -39,6 +40,8 @@
 | Pipeline | 12 stages | 10 stages |
 | Predictor | tournament (bimodal+gshare+chooser) | gshare only, BTFNT-seeded |
 | Memory speculation | store-sets (SSIT+LFST) | none needed |
+| Speculative store bypass (v4) | present, needs `SSBD` | structurally absent (§7.3) |
+| Cost of delay-on-miss (§7.4a) | absorbed by 2 contexts | absorbed by 4 |
 | Optimised for | single-thread latency | throughput per joule |
 
 Both are J32-class (MMU, Tier 1 FPU-capable). Neither supersedes the other.
@@ -64,8 +67,14 @@ Both are J32-class (MMU, Tier 1 FPU-capable). Neither supersedes the other.
 | Stride prefetcher | Chen & Baer 1995 |
 | Next-line prefetch / stream buffers | Jouppi 1990 |
 | PMU event counters, per-strand | DEC Alpha 21064 1992; PowerPC 750 1997; UltraSPARC T1 per-strand counters 2005 |
+| Address-space-tagged lookup state | MIPS R4000 ASID-tagged TLB 1991; SH-4 hardware manual 1998 |
+| Withholding a memory access until speculation resolves | Intel US6035393 (priority 1995, expired); Farkas & Jouppi 1994 |
+| Deferred-exception token on a speculative load | IA-64 control speculation `ld.s`/NaT/`chk.s` (Itanium 1999–2001) |
+| Serializing / speculation-barrier instruction | PowerPC `isync`; SPARC v9 `MEMBAR #Sync` (1994) |
+| Invalidate-array control bit | SH-4 `CCR.ICI` / `CCR.OCI` (1998) |
+| Shared-cache leakage between hardware threads | Percival, *Cache Missing for Fun and Profit*, BSDCan 2005; Kocher 1996 |
 
-Nothing in this document requires a post-2005 citation.
+Nothing in this document requires a post-2005 citation. That includes §16 — the security section was written under the same constraint, and §16.7 records the two mechanisms that had to be rejected because they could not meet it.
 
 ---
 
@@ -230,16 +239,26 @@ A bundle that cannot dual-issue occupies ISS for two of its thread's barrel slot
 
 | Structure | Size | Index |
 |---|---|---|
-| gshare PHT | 1024 × 2-bit counters | `PC[10:1] XOR GHR[9:0] XOR {tid,tid}` |
+| gshare PHT | 1024 × 2-bit counters | `PC[10:1] XOR GHR[9:0] XOR DOM` |
 | GHR | 10 b × 4 threads | per-thread, speculative + committed copy |
-| BTB | 32-entry, 4-way SA | PC tag + 2-bit TC_ID |
-| RAS | 8 entries × 4 threads | per-thread, mandatory |
+| BTB | 32-entry, 4-way SA | PC tag + full `DOM` tag |
+| RAS | 8 entries × 4 threads | per-thread, mandatory; each entry carries its push-time `DOM` |
+
+```
+DOM = { PDID[5:0], SR.HPRIV, SR.MD, TC_ID[1:0] }      -- 10 bits
+```
+
+`DOM` is the *security domain* identifier of [j32ooo-spec §3.2](j32ooo-spec.md), not the thread ID alone. Four contexts smeared over a single 1024-entry table by a 2-bit tag is not isolation; `{tid,tid}` in an earlier draft of this table let any thread place a counter at any other thread's index. `PDID` is the hyperprivileged predictor-domain register of [j32ooo-spec §20.10](j32ooo-spec.md); `SR.HPRIV` is a separate hardware term so that a hypervisor which fails to update `PDID` still cannot share a domain with its guest. A BTB domain mismatch is a miss. A RAS pop whose entry `DOM` does not match the current domain is discarded in favour of the BTB — which is what closes the return-stack transient path (§16.2).
+
+**All four structures update from committed instructions only, indexed by the committing instruction's `DOM`** — the value captured at ISS and carried in its ROB entry (§6.3), never the live register value at write time. Commit-only training alone is insufficient: an instruction retiring in the same window as a world switch would otherwise train the domain it is leaving into the domain it is entering, which is the Branch Privilege Injection race (§16.2). The GHR's committed copy already exists for squash repair and does double duty as the mechanism that keeps a squashed path from training the table.
 
 **BTFNT seeding.** On BTB allocation the corresponding PHT counter is initialised to the static backward-taken/forward-not-taken direction — backward branch → weakly taken (`10`), forward branch → weakly not taken (`01`) — rather than to a neutral or zero value. Cold-start accuracy approaches the static heuristic (~65–70% on typical code) instead of coin-flip, and the counter trains away from it wherever dynamic behaviour disagrees.
 
 Relative to [j32ooo-spec §3.2](j32ooo-spec.md) this **deletes the 1024-entry bimodal table and the 1024-entry chooser table**, taking predictor array reads from three per prediction to one. On a structure accessed every fetch cycle this is one of the largest single energy items in the front end.
 
 Per-thread RAS is not optional: a shared RAS is corrupted by interleaved call/return streams from four threads, and the corruption is silent.
+
+**Note on BTFNT seeding and §16.** A documented, deterministic initial counter state removes the predictor-training instability that the [CARRV 2019 BOOM authors](https://boom-core.org/docs/replicating_mitigating_spectre_carrv19.pdf) had to work around to make their attacks reliable — an attacker knows the state of a freshly allocated entry. This is not a reason to change the seeding, which is the right performance call and worth ~65–70% cold accuracy; predictor-state secrecy was never a defence and §16 does not rely on it. It is recorded so the trade is explicit.
 
 ### 3.6 Delayed branch handling
 
@@ -262,6 +281,8 @@ The relief shrinks as *k* falls. At *k* = 1 with the period floor, 7 raw cycles 
 ### 4.1 Decode
 
 Two independent decoders, one per slot. Multi-uop instructions crack here, per [j32ooo-spec §4.1](j32ooo-spec.md): `MAC.L`/`MAC.W` → 4, `RTE` → 3, `CAS.L` → 3, `TRAPA` → 4+, `LDS.L @Rm+` → 2, `MOVMU.L`/`MOVML.L` → 1–17.
+
+**`SPB`, the speculation barrier** ([j32ooo-spec §4.6](j32ooo-spec.md)), is architecturally identical here: no instruction younger than `SPB` executes until `SPB` retires. It is serializing per §4.3 rule 6, so it occupies its bundle alone and the thread's other three barrel slots continue to turn. Software needs it — without a barrier, neither `__builtin_speculation_safe_value` nor any index-masking idiom has a lowering target (§16.6).
 
 **A cracking instruction occupies the bundle alone.** If a multi-uop instruction appears in slot 0, slot 1 does not issue with it; if in slot 1, it issues alone after slot 0. This keeps the ROB allocation port 2-wide and avoids a variable-width allocator. Cracking instructions are rare enough in the target workloads that the IPC cost is second-order; `MOVMU`/`MOVML` are the exception and are addressed in §14.
 
@@ -294,7 +315,7 @@ Slot 0 and slot 1 dual-issue if and only if **all** of:
 3. No intra-pair T-bit RAW, **unless fused** (§4.2 removes it).
 4. FU compatibility per the table below.
 5. Neither slot is a cracking instruction (§4.1).
-6. Neither slot is serializing (`LDC Rm,SR`, `LDC.L @Rm+,SR`, `LDC Rm,VBR`, `TRAPA`).
+6. Neither slot is serializing (`LDC Rm,SR`, `LDC.L @Rm+,SR`, `LDC Rm,VBR`, `TRAPA`, `SPB`, `HCALL`, `HRTE`, any `LDC` to a hyperprivileged register).
 7. Both threads' ROB partition has ≥2 free entries.
 
 **FU compatibility** (shift shares the ALU1 pipe; there is one multiplier, one LSU, one branch unit):
@@ -399,6 +420,7 @@ Per entry:
 | `op_type` | 4 b | branch / load / store / ALU / … |
 | `dst_logical` | 5 b | destination architectural register |
 | `prev_rat` | 4 b | **previous RAT mapping — enables §5.4 squash restore** |
+| `dom` | 10 b | security domain captured at ISS (§3.5); indexes predictor updates at commit and selects the translation regime for memory ops (§6.6 rules 4–5) |
 | `value` | 32 b | result; read directly at RR by consumers |
 | `valid` | 1 b | result written |
 | `exception` | 4 b | exception type, if any |
@@ -423,6 +445,18 @@ Precise per thread. On exception at commit:
 3. Set `SR.BL`, save `SPC`/`SSR`, vector through `VBR`.
 
 The other three threads are entirely unaffected — they share no front-end stage state with the excepting thread beyond the selection logic, which holds no per-thread architectural state.
+
+### 6.6 Squash and fault rules the security model depends on
+
+Precise-per-thread is an *architectural* property and says nothing about what a squashed or faulting instruction leaves behind microarchitecturally. Three rules, stated here rather than implied:
+
+1. **A squash cancels microarchitectural work.** Beyond §6.5, it deallocates MSHRs held by squashed loads whose fills have not returned and cancels prefetches those loads generated. Without this, §7.4a leaks through the MSHR and prefetch paths.
+2. **No structure is trained by a squashed instruction** — gshare, BTB, RAS and the stride tables update at commit only (§3.5, §7.5a).
+3. **Permission-resolved forwarding.** A load may not forward a value to a dependent uop until its translation and permission check has resolved; a faulting load forwards **poison**, and a uop consuming poison produces poison and may not use it to form an address or a branch condition. Poison is discarded at squash and raises at commit per §6.5. This keeps a permission-failing load from feeding a transient address once the MMU (§11) is integrated, and it belongs in this document because forwarding is this pipeline's business. Prior art: IA-64 `ld.s`/NaT/`chk.s` deferred-exception tokens (1999–2001); and plain SH-4 discipline, where the permission check is part of the load's execution rather than a commit-time afterthought.
+4. **No cache lookup on an unresolved physical address.** No L1 or L2 tag comparison, fill or validation may proceed with a physical address that is not the output of a completed and permitted translation — in particular, an access whose walk is still in flight does not present a partially-formed `pa_tag` to a PIPT cache. This is the L1-Terminal-Fault shape, and J-Core has met it: an I-side fetch reaching the PIPT I-cache with an undefined `pa_tag` during a walk was tagged and validated at MISS1, yielding silent wrong instructions. Fixed on the I-side, measured clear on the D-side — but the rule was in no specification, so nothing stopped a new pipeline reintroducing it.
+5. **Every memory access carries its own instruction's `SR.HPRIV`/`SR.MD` snapshot**, taken at ISS, and selects its translation regime from it. A pending change to either makes younger accesses non-speculative. Violating this is not a leak: under [hypervisor/hardware-spec.md §4.4.1](../hypervisor/hardware-spec.md) a guest's P1 is translated while a hypervisor's P1 is *folded* to a physical address with no permission check, so an access under a stale `HPRIV` reads host memory directly ([j32ooo-spec §20.11](j32ooo-spec.md)).
+
+**`HCALL` and `HRTE` are serializing** (§4.3 rule 6). Beyond the mode change, `HRTE` carries the complete-on-resume writeback of [hypervisor/hardware-spec.md §4.5](../hypervisor/hardware-spec.md) rule 2: hardware writes `HMDR` into the register named by `HMCR.REGN`/`BANK`. On this core that write is performed **at `HRTE`'s commit**, into the thread's ARF, resetting that register's RAT entry to `IN_ARF`. An out-of-band ARF write while the RAT still points the register at an in-flight ROB entry would be silently lost — §5.1's future-file is exactly the structure the hypervisor spec's writeback port does not know about.
 
 ---
 
@@ -454,18 +488,44 @@ This removes two arrays, their per-memory-op lookups, the violation-detection co
 
 The cost is real and should be stated: a load cannot bypass an older store that is waiting on its data. That thread stalls. The other three threads cover it.
 
-### 7.4 MSHRs — 2 per thread + 2 shared
+**This is also a security property, not only an area one.** Speculative store bypass is the v4 transient-execution path, and it exists on [j32ooo-spec §8.4](j32ooo-spec.md) precisely because that core speculates on store addresses; that spec therefore needs an `SSBD` control bit to turn the mechanism off. J32-LT has nothing to disable — the path is structurally absent, for the same reason the predictor is. It is the one place where this design point is unambiguously safer than its sibling, and it costs nothing to claim because it was already true (§16.2).
+
+### 7.4 MSHRs — 2 demand + 1 prefetch per thread
 
 Non-blocking loads still pay off under in-order issue, because a thread stalls only at the first instruction that *consumes* a missing load. Independent younger loads and all younger stores continue to issue past a miss.
 
 | MSHR pool | Count | Purpose |
 |---|---|---|
 | Per-thread L1-D | 2 × 4 = 8 | demand misses |
-| Shared prefetch | 2 | stride and next-line prefetch fills |
+| Per-thread prefetch | 1 × 4 = 4 | stride and next-line prefetch fills |
 
-Per-thread allocation, rather than a shared pool, guarantees that one thread's miss burst cannot starve another thread's demand miss — the same isolation argument as the partitioned ROB and LSQ, and the reason the whole design partitions per thread wherever the structure is small.
+Per-thread allocation, rather than a shared pool, guarantees that one thread's miss burst cannot starve another thread's demand miss — the same isolation argument as the partitioned ROB and LSQ, and the reason the whole design partitions per thread wherever the structure is small. The prefetch MSHRs are per-thread for the same reason and for one more: a shared, contended, 2-entry structure in an otherwise fully partitioned memory pipeline is a cross-thread timing channel, and it was the one inconsistency in this section (§16.3).
 
 Prior art: Kroft 1981 (lockup-free cache with MSHRs); Farkas & Jouppi 1994 (non-blocking loads on in-order pipelines).
+
+### 7.4a Delay-on-miss
+
+**A load that misses in the L1-D while still speculative does not issue to the L2 or to memory.** It holds its LQ entry until every older branch in its thread has resolved and no older instruction can except, then issues the miss normally. L1-D hits proceed speculatively at full speed and are unaffected.
+
+The rule is a condition on MSHR allocation — a speculative miss does not allocate — and nothing else. No filter buffer, no shadow cache, no promotion logic, no rollback. Area is ~400 gates. What it buys: no fill, no L2 lookup, no replacement-metadata update and no coherence traffic is ever caused by a load that does not commit, which closes the cache covert channel at every level of the hierarchy at once (§16.2).
+
+**Why this is the right design point for this mechanism, and the strongest form of the §3.7 argument.** Delay-on-miss is normally rejected as too expensive: it converts a speculative miss into a serialized one, and on a single-threaded or 2-way machine the core simply stalls. Here §3.7's arithmetic applies unchanged. A delayed load costs its own thread real time, but the other three threads occupy the intervening cycles and lose nothing, so the *aggregate* cost is roughly a quarter of the per-thread cost. The cheapest strong defence in the literature is close to free on a 4-way barrel, for exactly the reason the barrel was chosen in the first place.
+
+This is a projection, and §12.2 gate **G8** makes it falsifiable. Non-blocking loads (§7.4) are what make it survivable: a thread stalls only at the instruction that *consumes* the delayed load, so independent younger work continues to issue.
+
+**Prior art:** Intel **US6035393** (Glew & Gupta, priority 1995-09-11, **expired**), claim 1 — stall prefetching "until either the dummy instruction retires, or a misprediction of a previous branch is detected". Withholding a memory access made on behalf of a speculative instruction until the speculation resolves, claimed in 1995. The motivation there was avoiding side effects on uncacheable MMIO; the mechanism is this one. Sakalis & Kaxiras (2019) supply only the security framing. §7.4b is the case where that motivation applies to us word for word.
+
+### 7.4b Non-speculative regions
+
+Delay-on-miss delays L1-D **misses**. Device space is uncacheable, so a load to it never allocates and §7.4a never engages. A second, stronger rule covers it:
+
+> An access whose translated physical address lies in **P4**, in the **emulation aperture** (`(PA & HEMUM) == HEMUB`, [hypervisor/hardware-spec.md §2.5](../hypervisor/hardware-spec.md)), or in a page mapped **uncacheable** (`PTEL.C = 0`) is **never issued speculatively**, hit or miss. It waits at its LQ/SQ entry until it is the oldest un-retired access of its thread.
+
+It closes three things §7.4a does not reach: a speculative load of a device register is a real read with real side effects; a squashed aperture match would otherwise write `HPAR`/`HMCR`/`HMDR`, corrupting the capture registers a genuine trap is about to consume and handing the hypervisor's device model an address the guest never accessed; and timing a squashed aperture hit would disclose the hypervisor's device-model layout.
+
+**Prefetchers never enter these regions.** A prefetch whose target translates into P4, the aperture, or an uncacheable page is **dropped silently** — not issued, never a trap source. §7.5a's page-boundary rule does not imply this: P4 starts on a page boundary like any other, and a legitimate upward stride reaches it.
+
+In-order issue makes the wait cheaper here than on [j32ooo-spec §8.2b](j32ooo-spec.md): the access is already near the head of its thread's window, and the barrel gives the other three threads the cycles. ~300 gates.
 
 ### 7.5 Cache hierarchy
 
@@ -477,6 +537,10 @@ Inherited from [j32ooo-spec §11](j32ooo-spec.md) and [cache/l2-spec.md](../cach
 | L1-D | 32 KB, 4-way SA, 32 B lines, write-through, write-allocate, pseudo-LRU |
 | L2 | 128 KB unified, 8-way SA, write-back, inclusive |
 | Stride prefetcher | 8-entry table **× 4 threads** |
+
+### 7.5a Prefetcher constraints
+
+Trained by **committed** loads only (§6.6 rule 2); prefetches **never cross a page boundary** (stream buffers have stopped at page boundaries since Jouppi 1990, here also bounding what a mistrained stride can touch); prefetches into P4, the emulation aperture or an uncacheable page are **dropped silently** (§7.4b); per-thread disable bit; and the table is cleared by the predictor-invalidate control of §16.4. The next-line L1-I prefetcher obeys the same rules.
 
 Four threads sharing a 32 KB L1 halves the effective per-thread capacity relative to the 2-way case. §12.2 makes L1 miss rate under 4-thread load an explicit measurement gate; if it degrades more than projected, the levers are associativity, capacity, or way-prediction (§14), in that order of preference.
 
@@ -525,12 +589,15 @@ The floor is what stops this from degenerating: without it, four threads collaps
 | GHR (10 b) | 2 B |
 | RAS (8 × 32 b) | 32 B |
 | Standby queue (2 × 71 b) | 18 B |
-| `ASIDR` (16 b `ASID_TAG`) | 2 B |
+| `ASIDR` (16 b `ASID_TAG`) + `PDID` (6 b) | 3 B |
 | Auto-priority state (`last_cas_pc`, `cas_fail_count`, `prio_dropped`, `parked`) | 5 B |
-| **Per thread** | **~171 B** |
-| **Four threads** | **~684 B** |
+| MMU fault state (§11: `PTEH`, `TSBPTR`, `TEA`, `MMUFSR`, `PTEL`, `EXPEVT`, `SPC`, `SSR`) | 32 B |
+| Hypervisor context (§16.12: `SR.HPRIV`, `HSPC`, `HSSR`, `VBR_HYP`, `HEDR`, `HEMUB`, `HEMUM`, `HPAR`, `HMDR`, `HMCR`, `HSQCR`) | 42 B |
+| **Store queue (§16.12: two 32 B buffers + `QACR0`/`QACR1`)** | **72 B** |
+| **Per thread** | **~318 B** |
+| **Four threads** | **~1,272 B** |
 
-Fits in distributed RAM and flip-flops.
+Still fits in distributed RAM and flip-flops, but note the growth: the last three rows are ~146 B per thread, and at four threads they are the largest single block of per-context state in the design. They exist because **anything the hypervisor and MMU specifications call "per-vCPU" or "per-CPU" is per thread context here** — four vCPUs are resident concurrently, so there is no exit at which a save/restore sequence could run. §16.12 gives the reasoning and the failure mode for each.
 
 Note the absence of rename-map checkpoints, which at [j32ooo-spec §13.1](j32ooo-spec.md)'s 8 × 23 × 6 bits were 138 B per thread — the largest single item in the J32-OOO per-thread context and, at 4 threads, would have been 552 B on its own.
 
@@ -543,7 +610,7 @@ Note the absence of rename-map checkpoints, which at [j32ooo-spec §13.1](j32ooo
 | RAT | per thread |
 | ROB | **partitioned**, 8/thread |
 | LQ / SQ | **partitioned**, 4+4/thread |
-| MSHR | **partitioned**, 2/thread + 2 shared prefetch |
+| MSHR | **partitioned**, 2 demand + 1 prefetch per thread (§7.4) |
 | ARF | per thread |
 | Functional units | shared; one issuing thread per cycle |
 | L1-I / L1-D / L2 | shared, unpartitioned |
@@ -583,8 +650,14 @@ Events inherited from [j32ooo-spec §12.2](j32ooo-spec.md), with these changes:
 | 0x16 | `SLOT0_KILLED` | *new* — mid-bundle branch targets (§3.3) |
 | 0x17 | `FUSION_HITS` | *new* — fused compare-branch pairs (§4.2) |
 | 0x18 | `BARREL_SLOT_IDLE` | *new* — barrel slots unused because the owning thread was masked or stalled |
+| 0x19 | `SPEC_MISS_DELAY_CYCLES` | *new* — cycles loads spent waiting to become non-speculative (§7.4a). **The delay-on-miss cost meter; gate G8.** |
+| 0x1A | `SPEC_MISS_DELAYED` | *new* — loads delayed at least one cycle by §7.4a |
+| 0x1B | `PREDICTOR_INVALIDATES` | *new* — §16.4 control writes; proves the kernel hook fires |
+| 0x1C | `RAS_DOMAIN_MISMATCH` | *new* — RAS pops discarded on domain mismatch (§3.5) |
 
-The four new events exist specifically to make §2.4's IPC projection falsifiable on hardware. `BUNDLE_SPLIT`, `FUSION_HITS`, and `SLOT0_KILLED` together reconstruct `E[width]` directly.
+The four `BUNDLE_SPLIT`/`SLOT0_KILLED`/`FUSION_HITS`/`BARREL_SLOT_IDLE` events exist specifically to make §2.4's IPC projection falsifiable on hardware; together the first three reconstruct `E[width]` directly. Events 0x19–0x1A do the same job for §7.4a's cost claim, which is the security section's equivalent load-bearing projection.
+
+**Events 0x19–0x1C are cross-thread observable.** The PMU is privileged-only and `PMTID` must not be reachable from unprivileged code — see §16.3.
 
 Linux integration unchanged: `arch/sh/kernel/perf_event_j32.c` with a 4-context event map.
 
@@ -623,6 +696,13 @@ Everything else in the MMU spec — `PTEH` VPN-only, generation-tagged `ASID_TAG
 > | `EXPEVT`, `SPC`, `SSR` | **required** | implied by §6.5's "precise per thread" but not stated here |
 > | `MMUCR`, `TTB`, `TSBCFG` | correctly shared | cold, set once at boot |
 >
+> **The same argument extends to the Phase 3 hypervisor register set** — see §16.12. Every
+> register [hypervisor/hardware-spec.md](../hypervisor/hardware-spec.md) describes as "per-vCPU,
+> saved and restored across VM exit and entry" is per thread context here, because four vCPUs are
+> resident at once and there is no exit to save at. That list includes the two 32-byte **store-queue
+> buffers** and `QACR0`/`QACR1`, whose sharing is a cross-vCPU data-corruption bug with no
+> speculation involved at all.
+>
 > Cost is roughly 6 registers × 3 extra copies (~600 flops against ~220k
 > gates) — the same order as the period-floor cost §2.5 already accepts. The
 > hazard if omitted is silent installation of cross-thread translations.
@@ -658,12 +738,13 @@ Everything else in the MMU spec — `PTEH` VPN-only, generation-tagged `ASID_TAG
 | Commit + retire | 8,000 | 10,000 | −2,000 |
 | FGMT machinery (barrel + period floor, standby queues, per-thread state) | 17,000 | 13,450 | +3,550 |
 | PMU ×4 threads | 14,000 | 9,500 | +4,500 |
+| Security mechanisms (§16.5) | 15,200 | 8,400 | +6,800 |
 | Misc (bypass, control, debug) | 17,000 | 17,000 | — |
-| **Subtotal (core)** | **~220,000** | **221,950** | **−2,000** |
+| **Subtotal (core)** | **~235,200** | **230,350** | **+4,850** |
 | Cache subsystem | 18,500 | 18,500 | — |
-| **Total core + caches** | **~238,500** | **~240,450** | — |
+| **Total core + caches** | **~253,700** | **~248,850** | **+4,850** |
 
-**J32-LT is not smaller than J32-OOO.** This is the single most important number in this document and it should not be buried: the design trades scheduler area for thread-context area, and the two roughly cancel. Doubling the thread count consumes essentially everything that deleting the issue queue, the rename machinery, the store-set predictor, and two predictor tables gives back.
+**J32-LT is not smaller than J32-OOO — and with virtualization in scope it is now measurably larger.** This is the single most important number in this document and it should not be buried: the design trades scheduler area for thread-context area, and the two roughly cancelled until §16.12 required four copies of the per-vCPU hypervisor register set and the store queue. Doubling the thread count consumed everything that deleting the issue queue, the rename machinery, the store-set predictor and two predictor tables gave back; quadrupling the per-context privileged state now costs ~4,850 gates beyond that. The energy-per-instruction argument (§12.1's activity table, gate G4) is unaffected — none of this state is read on a per-cycle path — but the "comparable area" framing of §1.3 no longer holds without the qualifier.
 
 **The win is energy per instruction, not die area.** Per-cycle dynamic activity is where the two designs diverge:
 
@@ -695,8 +776,21 @@ Every number in §12.1 and §2.4 is an a-priori estimate. [j32ooo-spec §15.1](j
 | G5 | L1-D miss rate under 4-thread load | PMU 0x06/0x07 | within 1.5× of 1-thread rate |
 | G6 | LUT4 + BRAM on ECP5 85F | synthesis | fits alongside SoC peripherals |
 | G7 | Fmax vs in-order J32 | synthesis, ECP5-6 | no worse than −10% |
+| G8 | **Delay-on-miss cost (§7.4a)** | PMU 0x19/0x1A + CoreMark ×4, SSH bulk crypto, JSON parse, at *k* = 1 and 4 | Aggregate IPC loss **<5% at *k*=4**; report the *k*=1 number, where the barrel gives no relief |
+| S1 | v1, v2, RSB proof-of-concepts fail | `riscv-boom/boom-attacks` PoCs ported to SH-Compact, in cosim | secret not recovered above the noise floor |
+| S2 | No speculative fill | RTL assertion: no L1/L2 tag, valid or replacement-state change attributable to a still-speculative load | zero violations across the regression |
+| S3 | Cross-thread channel bounded | thread A attempts to observe thread B's secret-dependent access pattern via shared L1/TLB/gshare/BTB | measured and recorded, consistent with the §16.3 same-trust policy — not assumed zero |
+| S4 | Negative controls | for each of S1–S3 and S5–S8, disable the mitigation or corrupt the expected constant and confirm the test **does** detect the leak | every security test proven non-vacuous |
+| S5 | **Guest cannot train host or peer-guest predictions** | a guest trains an indirect branch at a hypervisor dispatch site's VA, and at a peer guest's; measure both mispredict rates with and without the training loop. Include a guest pair whose `ASID_TAG`s differ only above bit 7 | no measurable difference — the VMScape and truncation regressions |
+| S6 | **No speculative device access** | RTL assertion: no bus request, no aperture comparison, no `HPAR`/`HMCR`/`HMDR` write for an access that is not the oldest un-retired access of its thread (§7.4b) | zero violations; capture registers unchanged after a squash |
+| S7 | **Mode-snapshot invariant** | a guest access issued in the shadow of an unresolved `HRTE` (§6.6 rule 5) | no access resolves through P1 folding at `SR.HPRIV = 0` |
+| S8 | **Store-queue context isolation** | four contexts running four vCPUs each fill SQ0 and burst (§16.12) | each burst contains exactly its own 32 bytes |
 
 **G4 is the gate that matters.** If J32-LT is the same area as J32-OOO and does not clearly win on energy per instruction, the design has no reason to exist and the roadmap should carry J32-OOO alone.
+
+**G8 is the second-most important number in this document**, because §1.1(6) and §7.4a claim that the barrel makes the standard strong defence affordable. If G8 fails at *k* = 4, that claim is wrong and §14 item 10 applies. It is trace-modellable alongside G1/G3 in P0 at almost no extra cost — the model already knows which loads miss and which branches are unresolved.
+
+S4 is not optional. The MMU guard suite in this project once false-passed six sub-tests that had never executed; a security test that cannot fail is worse than no test, because it is believed.
 
 G1 and G3 should be run in simulation against `sim/sh2instr.c` traces well before RTL exists — the bundle model, barrel timing, fusion rate, and pairing rules are all analytically tractable, and a trace-driven model is far cheaper than discovering at G1 that `E[width]` is 1.3.
 
@@ -708,7 +802,8 @@ G1 and G3 should be run in simulation against `sim/sh2instr.c` traces well befor
 4. **Differential**: `sim/sh2instr.c` as the retirement oracle; mismatch at commit halts the simulation. This is the same methodology that found the four precise-exception defect classes during MMU M8, and it is the right tool for a machine whose whole correctness argument rests on in-order commit.
 5. **Thread isolation**: four independent test programs concurrently; verify no cross-thread state corruption, particularly RAS, GHR, ASIDR, and LSQ forwarding.
 6. **Stress**: Linux boot as 4 CPUs, Dhrystone, CoreMark, `stress-ng --futex`, LTP SMP subset, SSH bulk crypto, JSON parse.
-7. **Regression against N_TC=1**: with a single thread configured at build time, results must match the in-order J32 path bit-for-bit — the same gate `fgmt/mt2x2-plan.md` §1 applies to the J2 line.
+7. **Security**: gates S1–S4 of §12.2, plus directed tests for `DOM` mismatch on BTB and RAS (§3.5), poison propagation and non-use as an address (§6.6 rule 3), squash-time MSHR and prefetch cancellation (§6.6 rule 1), and the invalidate control clearing all five arrays (§16.4).
+8. **Regression against N_TC=1**: with a single thread configured at build time, results must match the in-order J32 path bit-for-bit — the same gate `fgmt/mt2x2-plan.md` §1 applies to the J2 line.
 
 ---
 
@@ -724,6 +819,9 @@ G1 and G3 should be run in simulation against `sim/sh2instr.c` traces well befor
 | 6 | [cache/l2-spec.md](../cache/l2-spec.md) §6.6, §20.1 | per-thread line-lock qualification generalised from 2 to 4 threads; L1-D↔MSHR interface contract; ×4 stride tables; EBR allocation revisited |
 | 7 | [mmu/hardware-spec.md](../mmu/hardware-spec.md) §2.1a, §4 | scoped addition: on FGMT implementations `ASIDR` is per-TC and TLB compare selects by TC_ID (§11). Not a rewrite of the single-context definition |
 | 8 | [fgmt/dual-fgmt-proposal.md](../fgmt/dual-fgmt-proposal.md), [fgmt/mt2x2-plan.md](../fgmt/mt2x2-plan.md) | pointer note: these are the J2-line `N_TC=2` documents; J32-LT is the 4-way OOO-line target |
+| 9 | [glossary.md](../glossary.md) §2 | two rules the prior-art policy needs for security mechanisms: prior art matches at the level of **mechanism, not motivation**; and a pre-2006 *structure* is necessary but not sufficient where the security-specific *combination* is separately claimed. See §16.7 |
+| 10 | [glossary.md](../glossary.md) §4 | the FGMT definition should record that co-resident contexts are **one security domain** unless a product point says otherwise (§16.3) — it is a property of the threading model, not of this core |
+| 11 | Linux port documentation | `switch_mm` must issue the predictor invalidate (§16.4); core-scheduling is required by §16.3; `SPB` and the invalidate control are gated on a CPU capability bit |
 
 ---
 
@@ -739,6 +837,9 @@ G1 and G3 should be run in simulation against `sim/sh2instr.c` traces well befor
 7. **L1 capacity under 4 threads** — if G5 fails, the preference order is associativity, then capacity, then way prediction. Cache partitioning per thread is explicitly rejected: it converts a shared-capacity advantage into a fixed one.
 8. **Software-exposed thread priority** — not provided (§1.2). The two automatic cases cover the dominant scenarios.
 9. **Dual-core J32-LT** — 8 logical CPUs, MSI coherence per [cache/l2-spec.md §7](../cache/l2-spec.md). Not specified here; the AIC2 change in §13 item 3 is the prerequisite.
+10. **If G8 misses (delay-on-miss costs more than 5% at *k* = 4)** — the levers, in order: narrow the trigger to loads whose address derives from a value produced under an unresolved branch (a more precise condition, not a weaker one); raise the per-thread MSHR count so more independent work proceeds behind a delayed load; accept the loss, which is still the cheapest defence available. **Adding a speculative fill buffer is not on the list** — §16.7 explains why, and the exclusion is a requirement rather than a preference.
+11. **Core-granular tenancy (§16.3)** — four contexts sharing one L1, one TLB and one predictor set are one security domain, enforced by a scheduler (the hypervisor's under virtualization) rather than by hardware. This is the weakest link in §16 and it is deliberate: partitioning per thread would undo the sharing advantage that §9.2 is built on. §14 item 7 already rejects cache partitioning on performance grounds; note it is *also* the escape hatch here, and that it is patent-clear (§16.13). Do not adopt distrusting co-residency silently. **The commercial consequence is sharper here than on J32-OOO**: the rule converts four sellable tenant slots per core into one tenant's four vCPUs, so LT's throughput advantage now shows up as vCPUs-per-tenant rather than tenants-per-board. Whether that is the product the service wants is a Phase 6.5 question, not a hardware one — see [jcore-ulx3s-service-plan.md §3](../jcore-ulx3s-service-plan.md).
+12. **Per-context privileged state (§16.12) is the cost that grew** — ~10,000 gates, four-way FGMT's doing. If G6 (ECP5 fit) comes under pressure, this is not the place to economise: it is the only item in §16 whose omission causes silent data corruption rather than a channel. The place to look is thread count.
 
 ---
 
@@ -757,10 +858,179 @@ G1 and G3 should be run in simulation against `sim/sh2instr.c` traces well befor
 | P8 | Cache hierarchy ×4-thread tuning, prefetchers | 1.5 mo |
 | P9 | PMU ×4 + Linux driver, incl. the four new events | 1.5 mo |
 | P10 | Auto-priority (CAS spin, SLEEP) | 0.5 mo |
-| P11 | Verification, Linux boot as 4 CPUs, G1–G7 | 3 mo |
+| P10.5 | Security mechanisms (§16): `DOM` tagging, delay-on-miss, poison forwarding, squash cleanup, invalidate control, `SPB` | 1.5 mo |
+| P11 | Verification, Linux boot as 4 CPUs, G1–G8 and S1–S4 | 3 mo |
 | P12 | ULX3S 85F bring-up | 2 mo |
 
-**Total ~25 months.** P0 is deliberately first and deliberately cheap: §2.4's IPC projection is the load-bearing assumption of the entire design, it is analytically tractable, and discovering it is wrong after P6 would be expensive.
+**Total ~26.5 months.** P0 is deliberately first and deliberately cheap: §2.4's IPC projection is the load-bearing assumption of the entire design, it is analytically tractable, and discovering it is wrong after P6 would be expensive. **P0 should also model §7.4a and produce the G8 answer** — the same trace model already knows which loads miss and which branches are unresolved, so the marginal cost is close to zero and the payoff is knowing before P1 whether the security claim of §1.1(6) holds.
+
+---
+
+## 16. Security model — transient execution
+
+### 16.1 In-order issue is not a defence
+
+The tempting reading of §1.3 is that a core without renaming, without an issue queue and without memory-dependence prediction has little to fear from Spectre. That reading is wrong, and it should be dealt with in the first paragraph of this section rather than discovered later.
+
+J32-LT predicts branches (§3.5), fetches and executes past the prediction, and issues **non-blocking loads** past an L1 miss (§7.4). Those three facts are a complete Spectre-v1 gadget; nothing in the in-order issue rule prevents a transient load from leaving a trace in the cache. The published evidence agrees: [SpecLFB (USENIX Security 2024)](https://www.usenix.org/system/files/sec24summer-prepub-556-cheng-xiaoyu.pdf) evaluates transient-execution defences on an in-order core alongside an out-of-order one because both need them.
+
+What in-order issue *does* buy is narrower and real: the v4 speculative-store-bypass path is structurally absent (§7.3), and the mispredict window is shorter because fusion resolves branches a stage earlier (§4.2).
+
+### 16.2 Threat model
+
+**In scope.** Two mutually distrusting security domains — user vs kernel, process vs process, or **thread vs sibling barrel thread** — where one reads the other's data through a microarchitectural channel using transient execution.
+
+| Path | Ingredient here | Closed by |
+|---|---|---|
+| Bounds-check bypass (v1) | branch prediction + speculative non-blocking loads | §7.4a, §16.6 |
+| Branch target injection (v2) | 1024-entry gshare and 32-entry BTB shared by 4 contexts | §3.5 `DOM` tagging, §16.4 |
+| Return-stack transient | RAS entries usable across privilege | §3.5 RAS domain tag |
+| Speculative store bypass (v4) | — | **structurally absent** (§7.3) |
+| Permission-failing load feeds a transient address | fault raised at commit (§6.5) | §6.6 rule 3 |
+| Cross-thread cache/TLB/predictor contention | 4 contexts, one L1, one TLB, one predictor set (§9.2) | §16.3 — **by policy, not by hardware** |
+| **Guest trains the hypervisor's indirect branches** (VMScape) | predictor shared across `SR.HPRIV` | §3.5, [j32ooo-spec §20.10](j32ooo-spec.md) |
+| **Guest trains another guest's branches** | no VMID; ASID partitioning is the only separator | `PDID` in `DOM` |
+| **Predictor update crosses a world switch** (Branch Privilege Injection) | update applied after the domain changes | §3.5 update policy, ROB-carried `DOM` |
+| **Speculative access to an emulated device or P4** | aperture comparator on a speculative PA; device reads have side effects | §7.4b |
+| **Guest folds P1 to host physical memory** | mode-dependent address path (hypervisor §4.4.1) | §6.6 rule 5 — *escape, not leak* |
+| **One vCPU reads another's store-queue bytes** | SQ buffers per-CPU, 4 contexts concurrent | §16.12 — *not a speculation bug* |
+
+**Out of scope, explicitly.** Physical attacks, power and EM analysis, Rowhammer, fault injection, and timing analysis of *committed* execution — a victim whose committed control flow or access pattern depends on a secret leaks with or without speculation, and the answer is constant-time software (Kocher 1996; [Percival 2005](https://www.daemonology.net/papers/htt.pdf)).
+
+### 16.3 The four-context sharing decision — the core is the unit of tenancy
+
+§9.2 shares the L1 caches, L2, gshare PHT, BTB, TLB and prefetch state across four contexts while §1.1(5) presents those contexts to Linux as four CPUs. Those statements are compatible **only if co-resident contexts are same-trust**, and this specification takes that position deliberately, as an allocation rule rather than a scheduling hint:
+
+> **A physical core is the unit of tenant allocation. Every thread context of a core belongs to the same tenant — the same virtual machine, or the same trust domain on an unvirtualized system. A tenant that needs only one vCPU is given a whole core, with the sibling contexts idle or running that same tenant's other vCPUs.**
+
+A dual-core J32-LT board therefore hosts **two tenants of up to four vCPUs each**, not eight tenants of one. Under the hypervisor extension the scheduler enforcing this is the hypervisor's, and it belongs in admission control ([hypervisor/hardware-spec.md §4.7](../hypervisor/hardware-spec.md)); [jcore-ulx3s-service-plan.md §3](../jcore-ulx3s-service-plan.md) carries the corrected tenant count. Note this cuts harder here than on [j32ooo-spec §20.3](j32ooo-spec.md): four contexts per core is what makes the aggregate-throughput case, and the rule converts them from four sellable tenant slots into one tenant's four vCPUs. That is the honest price of the sharing in §9.2, and it does not change the IPC argument of §2.4 at all — a tenant with four runnable vCPUs saturates the barrel exactly as four tenants would.
+
+The exposure this accepts is pre-2006 public knowledge, which is worth stating plainly rather than treating as a novel risk. Percival demonstrated RSA key recovery across a shared L1 between two hardware contexts on one core in 2005, and observed that the technique applies "to any system where caches are shared between two or more non-mutually-trusted execution threads". §9.2 is that configuration with four contexts instead of two.
+
+The alternative is partitioning, and §14 item 7 already rejects per-thread cache partitioning because it "converts a shared-capacity advantage into a fixed one" — which is the whole reason four contexts share 32 KB rather than owning 8 KB each. The design cannot have both.
+
+What the hardware still provides so the policy is enforceable and testable:
+
+- LSQ partitioning makes cross-thread store-to-load forwarding structurally impossible (§7.1).
+- `DOM` (§3.5) includes `TC_ID`, so predictor *state* is not shared even though the *arrays* are.
+- The invalidate control (§16.4) is per-context.
+- PMU 0x19–0x1C expose cross-thread interference, so §16.3 can be tested rather than assumed.
+
+This belongs in the Linux port documentation as well (§13 item 11). A kernel that schedules two tenants across contexts of one core is operating the part outside its specification.
+
+### 16.4 Predictor invalidate control
+
+One privileged control-register bit per context. Writing 1 invalidates, in a single action, that context's gshare entries, its BTB entries, its RAS and its stride table. The bit self-clears. The kernel writes it from `switch_mm` and on leaving a more privileged domain.
+
+Three constraints on the implementation, and they are requirements, not preferences:
+
+1. **Software-triggered only.** Hardware does not detect security-domain transitions and does not act on them by itself.
+2. **Unconditional and complete.** One action, everything cleared. No modes, no partial subsets, no progressive re-enable as a reset proceeds.
+3. **No save/restore.** State is discarded, never preserved and reloaded.
+
+Prior art: **SH-4 `CCR.ICI` / `CCR.OCI`** (SH-4 hardware manual, 1998) — a privileged register write that invalidates a cache array wholesale. The value of clearing predictor state across context switches is pre-2006 in the literature (Two branch-predictor schemes under frequent context switches, 1998; OPTS, 2002). §16.7 explains why constraints 1–3 are stated as hard requirements.
+
+**Under virtualization this is defence in depth, not the primary mechanism.** The x86 answer to cross-domain predictor training is IBPB on every VM exit, at roughly 10% on emulated-device workloads, because tagging is absent and the barrier is all there is. Here `DOM` already carries `SR.HPRIV` and `PDID`, so host and guest occupy different predictor domains by construction. The invalidate stays a **policy** choice — a per-guest control bit a hypervisor may set to issue it on every world switch, paying for it; the default does not. Tag first, barrier optional, is the whole reason to have specified `DOM` properly.
+
+
+### 16.5 What this costs
+
+| Mechanism | Area | Performance |
+|---|---|---|
+| `DOM`-tagged index and BTB tag (§3.5) | ~300 gates | slight; more cold-start misses, less cross-context aliasing |
+| RAS domain tags ×4 (§3.5) | ~350 gates | negligible — a discarded pop falls back to the BTB |
+| Commit-only training (§3.5, §7.5a) | ~0 | small accuracy loss on tight loops |
+| **Delay-on-miss (§7.4a)** | **~400 gates** | **the only material item — G8** |
+| Permission-resolved forwarding (§6.6) | ~700 gates (poison through bypass and LQ ×4) | negligible |
+| Squash cleanup (§6.6) | ~450 gates | negligible |
+| `SPB` (§4.1) | ~150 gates | only where software uses it |
+| Invalidate control ×4 contexts (§16.4) | ~950 gates | cold predictor after each context switch |
+| PMU events 0x19–0x1C (§10) | ~600 gates | — |
+| `PDID` and wider `DOM` tags (§3.5) | ~600 gates | as above |
+| `DOM` carried through the ROB (§6.3) | ~200 gates | — |
+| Non-speculative region gating (§7.4b) | ~300 gates | nil |
+| `HRTE` writeback through ARF+RAT (§6.6) | ~200 gates | one drained pipeline per hypercall / MMIO resume |
+| **Per-context hypervisor registers + store queue ×4 (§16.12)** | **~10,000 gates** | — |
+| **Total** | **~15,200 gates** (~6.5% of the core) | |
+
+The area is no longer noise: §16.12 alone is ~4.5% of the core, and it is the one item four-way FGMT makes expensive rather than cheap — [j32ooo-spec §20.12](j32ooo-spec.md) pays a third of it. It is also the one item that is not a channel: omitting it produces silent cross-vCPU data corruption. Everything else on this list totals ~5,200 gates.
+
+The claim that still holds is about *performance*: the speculation defences cost little here and would not on a latency-first core — see §7.4a and G8. The claim that no longer holds unqualified is §12.1's "comparable area": once virtualization is in scope, four thread contexts cost four copies of the per-vCPU register set, and that is a real widening of the gap against J32-OOO.
+
+### 16.6 Software contract
+
+Hardware closes the microarchitectural paths; software still owns the gadget.
+
+- **Array index masking** after a bounds check, rather than relying on the branch.
+- **`SPB`** (§4.1) where masking is not expressible. GCC's `__builtin_speculation_safe_value` lowers to mask-plus-`SPB` in the `sh-linux` port.
+- **Predictor invalidate** (§16.4) from `switch_mm`.
+- **Core scheduling** per §16.3.
+
+All of it gated on a CPU capability bit: J2 and in-order J32 parts have none of these.
+
+### 16.7 Mechanisms deliberately not implemented
+
+The [glossary §2](../glossary.md) prior-art policy exists because J-Core's value proposition is patent freedom, and it needs care for this class of mechanism: the *structures* involved are often pre-2006 while the *security-triggered combination* is recent and claimed.
+
+1. **No L0 speculative filter cache.** The obvious alternative to §7.4a is a small buffer catching speculative fills and promoting them to L1 on non-speculative, cleared on squash and domain switch — the SpecBuf shape proposed for BOOM in CARRV 2019, and the MuonTrap shape. The structure is thoroughly pre-2006: Jouppi 1990 stream buffers and Cray US5761706 (filed 1994, expired) hold prefetched blocks outside the cache; Intel US6223258 (filed 1998, expired) services a non-temporal load from a dedicated buffer "without accessing said cache". The security-triggered combination is not, and is claimed by live patents (Microsoft US11061824, priority 2019; plus split-cache and reserved-set variants). **Do not build it, and do not "optimise" §7.4a into it** by adding a buffer for delayed misses. This is also why §14 item 10 excludes it from the G8 fallback list.
+2. **The invalidate control keeps the §16.4 shape.** Hardware detection of a domain transition combined with a multi-mode, progressively re-enabled reset is claimed (SiFive US11429392, priority 2018); save/restore of predictor state across context switches is claimed (Arm US10838730; Microsoft US11068273). The plain software-triggered unconditional invalidate is what SH-4 `CCR.ICI` has done to a different array since 1998.
+3. **§6.6 rule 3 is an ordering constraint on forwarding, not register taint.** Taint bits on architectural registers with a policy register selecting which speculation features to disable is the AMD US10956157 shape. Ours is a rule about when one load may forward.
+
+The two general rules this yields belong in [glossary §2](../glossary.md) (§13 item 9): prior art matches at the level of **mechanism, not motivation** — a claim covers structure and steps, which is why US6035393's 1995 stall-until-speculation-resolves reads on §7.4a regardless of why it was filed — and conversely a pre-2006 *structure* is necessary but not sufficient where the security-specific *combination* is separately claimed.
+
+This is a documentation exercise, not a freedom-to-operate opinion. The two load-bearing findings — US6035393 as the §7.4a anchor, US11061824 as the reason for rejection 1 — warrant a professional search before RTL commits.
+
+### 16.8 Relationship to J32-OOO
+
+| | J32-OOO | J32-LT |
+|---|---|---|
+| v4 speculative store bypass | present; needs an `SSBD` control ([§8.4](j32ooo-spec.md)) | **structurally absent** (§7.3) |
+| Delay-on-miss cost | absorbed by 2 contexts; [j32ooo-spec §20.8](j32ooo-spec.md) gate S5, threshold <10% | absorbed by 4; G8, threshold <5% |
+| Contexts sharing L1/TLB/predictors | 2 | 4 — larger surface for the same §16.3 policy |
+| Tenants per core under §16.3 | 1 (up to 2 vCPUs) | 1 (up to 4 vCPUs) |
+| Per-context privileged state (§16.12) | ~3,000 gates | **~10,000 gates** — the item four-way FGMT makes expensive |
+| Predictor isolation before `DOM` | 1 bit of thread ID | 2 bits over 4 contexts — was the weaker of the two |
+| Mispredict window | tournament predictor, 7/4-cycle recovery | shorter: fusion resolves a stage earlier (§4.2) |
+
+Neither is the secure one and the other the insecure one. LT is structurally ahead on v4 and on the cost of the main defence; OOO is ahead on contention surface simply by having half as many contexts.
+
+### 16.12 Per-context hypervisor state, and the store queue
+
+[hypervisor/hardware-spec.md](../hypervisor/hardware-spec.md) describes `HEMUB`, `HEMUM`, `HPAR`, `HMDR`, `HMCR` and `HSQCR` as "per-vCPU state, saved and restored across VM exit and entry" — correct for a core running one vCPU at a time. **This core runs four concurrently.** There is no exit at which to save, so every one of them is **per thread context**:
+
+| Register | Hazard if shared |
+|---|---|
+| `SR.HPRIV` | one context's mode selects another's translation regime — §6.6 rule 5 |
+| `HSPC`, `HSSR` | one context's trap destroys another's resume state |
+| `VBR_HYP`, `HEDR` | one vCPU's delegation policy applied to another's traps |
+| `HEMUB`, `HEMUM` | one vCPU's device map applied to another's accesses |
+| `HPAR`, `HMDR`, `HMCR` | a second aperture trap overwrites the capture registers the hypervisor is about to consume for the first |
+| `HSQCR`, **two 32 B SQ buffers, `QACR0`/`QACR1`** | below |
+| `PDID` | [j32ooo-spec §20.10](j32ooo-spec.md) |
+
+**The store queue is the serious one, and it is not a speculation bug.** [sq/spec.md](../sq/spec.md) gives the core two 32-byte buffers, and [hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spec.md) carves them out of the guest-mode P4 trap precisely so a guest can use them at native speed — eight stores plus a `PREF` per burst, untrapped. With four contexts resident, up to four vCPUs write the *same* buffer; their bytes interleave, and whichever issues the `PREF` bursts a mixture to its own physical target. That is cross-vCPU disclosure and corruption on the hot path the carve-out exists to accelerate, with no misprediction anywhere in it. §16.3's core-granular tenancy makes those vCPUs the same tenant and so bounds the blast radius, but the behaviour is still wrong between two vCPUs of one tenant.
+
+**Cost: ~114 B per context beyond §9.1's baseline, ×3 additional contexts ≈ 2,700 bits ≈ 10,000 gates.** This is the largest single security line item in either design, and it is four-way FGMT that makes it so — [j32ooo-spec §20.12](j32ooo-spec.md) pays a third of it. It is not optional and it is not deferrable: unlike every other item in §16, omitting it produces silent data corruption rather than a channel.
+
+The reasoning is identical to §11's MMU-register correction, extended to the Phase 3 set, and so is the failure mode: silent attribution of one context's state to another.
+
+### 16.13 Prior-art summary
+
+| Mechanism | Pre-2006 source |
+|---|---|
+| Domain-tagged lookup state, `PDID` (§3.5) | sun4v `PRIMARY_CONTEXT`/`SECONDARY_CONTEXT` with a distinct hyperprivileged nucleus context (UltraSPARC Architecture 2005, hyperprivileged edition); MIPS R4000 ASID-tagged TLB (1991); SH-4 (1998) |
+| No speculative access to device space (§7.4b) | Intel US6035393 (priority 1995, **expired**) — its *literal* motivation; SH-4's architectural P1/P2 cached/uncached split (1998) |
+| Mode transitions serialized (§4.3, §6.6) | PowerPC `isync`; IBM S/370 serialization; SH-4 exception-entry semantics (1998) |
+| Per-context privileged state (§16.12) | the argument §11 already applies to `PTEH`/`TEA`/`MMUFSR`; sun4v per-vCPU hyperprivileged state (2005) |
+| Commit-time predictor update (§3.5) | speculative-history repair literature, 1996–1998 |
+| Delay-on-miss (§7.4a) | Intel US6035393, priority 1995-09-11, **expired**; Farkas & Jouppi 1994 |
+| Poisoned speculative load result (§6.6) | IA-64 `ld.s`/NaT/`chk.s` (1999–2001); Smith & Pleszkun 1985 |
+| Speculation barrier (§4.1) | PowerPC `isync`; SPARC v9 `MEMBAR #Sync` (1994) |
+| Array-invalidate control bit (§16.4) | SH-4 `CCR.ICI` / `CCR.OCI` (1998) |
+| Clearing predictor state at context switch (§16.4) | Two branch-predictor schemes under frequent context switches (1998); OPTS (2002) |
+| Prefetch bounded at page boundary (§7.5a) | Jouppi 1990; Cray US5761706 (filed 1994, expired) |
+| Threat model (§16.2) | Kocher 1996; Percival, BSDCan 2005 |
+| Way partitioning, if §16.3 is ever revisited | MIT column caching, Chiou et al. 1999–2000; US6370622 (filed 1998, expired); Suh & Devadas 2002–2004 |
 
 ---
 
@@ -773,8 +1043,9 @@ G1 and G3 should be run in simulation against `sim/sh2instr.c` traces well befor
 | Physical register file | — | future-file: values live in the ROB |
 | Free list | — | no physical registers to allocate |
 | Rename-map checkpoints | 8 × 23 × 6 b **per thread** | §5.4 history buffer instead |
-| SSIT | 1024 entries | §7.3: no address speculation possible |
+| SSIT | 1024 entries | §7.3: no address speculation possible — and with it the v4 transient path (§16.2) |
 | LFST | 64 entries | §7.3 |
+| `SSBD` control bit | — | nothing to disable ([j32ooo-spec §8.4](j32ooo-spec.md)) |
 | Bimodal PHT | 1024 × 2 b | gshare alone (§3.5) |
 | Chooser PHT | 1024 × 2 b | gshare alone (§3.5) |
 | Ready-thread arbiter | priority computation/cycle | ready-mask encoder; free-running counter at *k*=4 (§3.1) |
@@ -792,5 +1063,10 @@ G1 and G3 should be run in simulation against `sim/sh2instr.c` traces well befor
 - **`E[width]`** — average architectural instructions retired per issuing cycle. The quantity §2.4's IPC projection turns on.
 - **Future-file** — a register-status table mapping architectural registers to in-flight producers, with results held in the ROB until commit. Not renaming: it expands no name space.
 - **PAIR** — pipeline stage between DEC and ISS that performs fusion detection, pairing legality, and slot steering.
+- **`DOM`** — security-domain identifier `{PDID[5:0], SR.HPRIV, SR.MD, TC_ID[1:0]}` used to tag and index every predictor structure (§3.5) and carried per instruction in the ROB. Not the thread ID alone.
+- **`PDID`** — Predictor Domain ID ([j32ooo-spec §20.10](j32ooo-spec.md)). Hyperprivileged 6-bit register naming the current security domain.
+- **Delay-on-miss** — a load that misses L1 while still speculative does not issue to L2 until it is non-speculative (§7.4a). A condition on MSHR allocation, not a structure.
+- **Poison** — the value a faulting or permission-unresolved load forwards in place of data; propagates through dependents, may not form an address or branch condition, raises at commit (§6.6).
+- **`SPB`** — speculation barrier: nothing younger executes until it retires ([j32ooo-spec §4.6](j32ooo-spec.md)).
 - **Standby register** — one-deep per-thread raw-bundle buffer that catches the barrel follower when an issue bundle fails to drain.
 - **Split bundle** — a bundle that issues its two slots in two separate cycles because dual-issue was illegal or an operand was not ready.

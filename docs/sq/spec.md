@@ -203,6 +203,34 @@ the queue is bit-for-bit as the guest left it. No flush is forced across the swi
 of the lazy model is that preemption never changes what the guest eventually bursts; the burst
 happens, if at all, only when the guest's own `PREF` next executes.
 
+### 7.1 Multi-threaded implementations: the queues are per thread context
+
+The save/restore contract above assumes a core that runs **one vCPU at a time**. An FGMT
+implementation does not: [../ooo/j32ooo-spec.md §13](../ooo/j32ooo-spec.md) runs two thread contexts
+concurrently and [../ooo/j32lt-spec.md §9](../ooo/j32lt-spec.md) runs four. Two or four vCPUs are
+resident *simultaneously*, so there is no exit at which the save sequence could run, and no ordering
+of it that would help.
+
+**Normative:** on an implementation with `N` thread contexts, the store queue is replicated per
+context — `N` × (two 32-byte buffers + `QACR0` + `QACR1` + `HSQCR`). A store to `0xE0000000` is
+absorbed into the issuing context's SQ0, and a `PREF` bursts that context's buffer.
+
+Without replication the failure is immediate and has nothing to do with speculation: two vCPUs
+writing the same 32-byte buffer interleave their bytes, and whichever issues the `PREF` first bursts
+a mixture of both to *its* physical target. That is a cross-vCPU data disclosure and corruption on
+the hot path [../hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spec.md)'s P4 carve-out
+exists to accelerate — eight untrapped stores plus a `PREF`, by design, for exactly the guest that
+must not see another's data.
+
+Cost: 72 bytes of state per additional context. See
+[../hypervisor/hardware-spec.md §2.9](../hypervisor/hardware-spec.md), which applies the same rule
+to the rest of the per-vCPU register set, and
+[../ooo/j32lt-spec.md §16.12](../ooo/j32lt-spec.md) for the four-context total.
+
+§7's sequences remain correct and remain required — they are what a hypervisor runs when it
+switches a *context* between vCPUs. Replication removes the case where two vCPUs share a queue at
+the same instant; it does not remove the case where one context hosts two vCPUs over time.
+
 **Cost.** The state is small and fixed: 64 bytes of buffer plus three registers (`QACR0`,
 `QACR1`, `HSQCR`), independent of how much of either queue is actually populated. A hypervisor
 may skip steps 2–3 of the save sequence for a queue whose `VALID` bit is clear, since there is

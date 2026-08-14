@@ -118,9 +118,11 @@ LDC Rm, HMCR     : 0100 mmmm 1000 1111   = 0x408F | m<<8
 STC HMCR, Rn     : 0000 nnnn 1000 1111   = 0x008F | n<<8
 LDC Rm, HSQCR    : 0100 mmmm 1001 1111   = 0x409F | m<<8
 STC HSQCR, Rn    : 0000 nnnn 1001 1111   = 0x009F | n<<8
+LDC Rm, PDID     : 0100 mmmm 1010 1111   = 0x40AF | m<<8
+STC PDID, Rn     : 0000 nnnn 1010 1111   = 0x00AF | n<<8
 ```
 
-This carves a new control-register family with capacity for up to 16 hyperprivileged control registers (slots 0–15). After allocation of HEMUB, HEMUM, HPAR, HMDR, HMCR, and HSQCR in slots 4–9, **six free slots (10–15) remain** for future hyperprivileged register extensions. All accesses in this family, executed with `SR.HPRIV=0`, raise the **hyperprivileged-register access exception**, delivered to the hypervisor and not delegatable to a guest. Its cause code, HEDR bit and vector are specified once, in [§3.4](#34-privileged-register-access-from-supervisor-mode), and are deliberately not restated here; the HEDR bit assignment is tabulated in [§2.3.1](#231-expevt-to-hedr-bit-mapping-normative). This enforces that only hyperprivileged code can read or write these registers.
+This carves a new control-register family with capacity for up to 16 hyperprivileged control registers (slots 0–15). After allocation of HEMUB, HEMUM, HPAR, HMDR, HMCR, and HSQCR in slots 4–9 and `PDID` in slot 10 (§2.8), **five free slots (11–15) remain** for future hyperprivileged register extensions. All accesses in this family, executed with `SR.HPRIV=0`, raise the **hyperprivileged-register access exception**, delivered to the hypervisor and not delegatable to a guest. Its cause code, HEDR bit and vector are specified once, in [§3.4](#34-privileged-register-access-from-supervisor-mode), and are deliberately not restated here; the HEDR bit assignment is tabulated in [§2.3.1](#231-expevt-to-hedr-bit-mapping-normative). This enforces that only hyperprivileged code can read or write these registers.
 
 The choice of low nibble `0xF` avoids collision with SH-4's existing `0xE` (LDC/STC) and `0xB`/`0xA`/`0x7`/`0x3` (LDC.L/STC.L variants) low nibbles in the 0100 family.
 
@@ -212,6 +214,26 @@ Trap condition (guest only, SR.HPRIV = 0):
 
 5. **Reset value:** Both HEMUB and HEMUM read as 0 at reset (aperture disabled).
 
+6. **The comparator is evaluated only for a non-speculative access.** On an implementation that
+   speculates, an access whose physical address lies in P4, in the aperture, or in an uncacheable
+   page is not issued until it is the oldest un-retired access of its thread
+   ([../ooo/j32ooo-spec.md §8.2b](../ooo/j32ooo-spec.md),
+   [../ooo/j32lt-spec.md §7.4b](../ooo/j32lt-spec.md)); the aperture test, and the `HPAR`/`HMCR`/`HMDR`
+   capture of §4.5, happen only at that point. Rules 1–5 above are otherwise unchanged.
+
+   Without this, three things break, none of them visible on an in-order core: a squashed access
+   that matched the aperture would write the capture registers a genuine trap is about to consume,
+   handing the hypervisor's device model an address the guest never accessed; a speculative load of
+   an emulated or real device register would be a real read with real side effects; and a guest
+   could locate the aperture boundaries by timing squashed accesses, disclosing the device map.
+   Hardware prefetchers likewise never generate an access into P4, the aperture, or an uncacheable
+   page — such a prefetch is dropped silently and is never a trap source.
+
+   Pre-2006 prior art for withholding a memory access on behalf of a speculative instruction until
+   the speculation resolves, filed for exactly this hazard: Intel US6035393 (Glew & Gupta, priority
+   1995, expired), whose stated purpose is preventing a speculative prefetch from reaching
+   uncacheable memory-mapped I/O.
+
 **Design rationale:** The emulation aperture traps guest accesses to reserved regions, such as Dreamcast console I/O devices (the AIC, AICA, GD-ROM, etc.), which exist at fixed physical addresses. The trap diverts these accesses to the hypervisor, which can then emulate the behavior or inject the appropriate device state into the guest. Pre-2006 prior art: IBM S/370 storage keys (1970) pioneered physical-address-indexed access tests for memory protection; the aperture applies the same model to I/O emulation on a virtualized architecture.
 
 ### 2.6 HPAR, HMDR, and HMCR — MMIO Trap Information Registers
@@ -268,6 +290,58 @@ HSQCR   Hypervisor Store-Queue Status Register    32-bit
 **Reset value:** 0 (both queues empty).
 
 **Cross-reference:** The store queue architecture and the format of the queue buffers are specified in [../sq/spec.md §6](../sq/spec.md).
+
+### 2.8 PDID — Predictor Domain ID (speculative-execution implementations only)
+
+```
+PDID    Predictor Domain ID     6 bits, [31:6] RAZ/WI
+```
+
+**Required on any implementation that speculates** — [../ooo/j32ooo-spec.md §20.10](../ooo/j32ooo-spec.md) and [../ooo/j32lt-spec.md §3.5](../ooo/j32lt-spec.md). Not required on the in-order J2/J32 cores, which have no predictor state to isolate; `CPUINFO` bit `[17] = PDID_SUPPORT` reports its presence.
+
+`PDID` names the **security domain** that indexes and tags every branch-predictor structure — the direction predictors, the BTB, the return-address stack, and the prefetch tables. Hardware combines it with `SR.HPRIV`, `SR.MD` and the thread-context ID to form the predictor tag; software's only obligation is to give distinct domains distinct `PDID` values.
+
+**Software contract:**
+
+- The hypervisor writes `PDID` on every world switch, before `HRTE` into a guest.
+- Distinct guests MUST receive distinct `PDID` values. A hypervisor that runs more than 64 concurrent guests must recycle values, and must issue the predictor-invalidate control ([../ooo/j32ooo-spec.md §20.4](../ooo/j32ooo-spec.md)) when it does — the same generation problem `ASID_TAG` solves with its generation field, in a register too small to carry one.
+- An unvirtualized kernel writes `PDID` at `switch_mm`, or leaves it at 0 and relies on the invalidate control alone.
+
+**Why this exists rather than reusing `ASIDR`.** Two reasons, both discovered only when speculation and virtualization were considered together:
+
+1. Trap entry does not change `ASIDR`, so the hypervisor executes with whatever `ASID_TAG` the guest left. Host and guest would share a predictor domain, and a guest could train the branch targets of the HCALL dispatcher (§3.1), the guest-`LDTLB` handler (§3.3) or the emulated-MMIO device model (§4.5) — all of which run at `SR.HPRIV = 1` against addresses the guest chose. This is VMScape (CVE-2025-40300), where the same property on shipping x86 parts allowed a guest to extract host memory.
+2. `ASID_TAG`'s top 4 bits are the generation discriminator ([../glossary.md §5](../glossary.md)), and guest-to-guest separation rests **entirely** on ASID range partitioning because this design has no VMID (§12). Any predictor index that truncates `ASID_TAG` discards the one field that separation depends on.
+
+**`SR.HPRIV` is a hardware term of the predictor tag and is deliberately not folded into `PDID`.** A hypervisor that forgets to update `PDID` must still be unable to share a predictor domain with the guest it just trapped from: the guest→host path fails closed in hardware, and only the guest→guest path depends on software discipline — which it already does, through ASID allocation.
+
+**Per-vCPU** (§2.9). **Reset value:** 0.
+
+Prior art: sun4v's `PRIMARY_CONTEXT`/`SECONDARY_CONTEXT` with the hyperprivileged nucleus context distinct from any guest context (UltraSPARC Architecture 2005, hyperprivileged edition) — a short, software-written domain number selecting which translations and cached state apply, which is exactly this register's job; MIPS R4000 ASID (1991); SH-4 (1998).
+
+### 2.9 Per-vCPU state on multi-threaded implementations
+
+Every register this specification calls "per-vCPU, saved and restored across VM exit and entry" —
+`SR.HPRIV`, `HSPC`, `HSSR`, `VBR_HYP`, `HEDR`, `HEMUB`, `HEMUM`, `HPAR`, `HMDR`, `HMCR`, `HSQCR`,
+`PDID` — assumes a core that runs one vCPU at a time.
+
+**On an FGMT implementation that assumption is false and the save/restore contract cannot hold.**
+[../ooo/j32ooo-spec.md §13](../ooo/j32ooo-spec.md) runs two thread contexts concurrently and
+[../ooo/j32lt-spec.md §9](../ooo/j32lt-spec.md) runs four. Two or four vCPUs are resident
+simultaneously; there is no exit at which to run a save sequence. **On such implementations every
+register in the list above is per thread context**, and so are the store-queue buffers and
+`QACR0`/`QACR1` ([../sq/spec.md §7](../sq/spec.md)).
+
+The store queue is the one that fails without any speculation involved: §4.4.3 carves the SQ region
+out of the guest-mode P4 trap so a guest can use it at native speed, and two vCPUs writing the same
+32-byte buffer interleave their bytes into whichever one issues the `PREF`. That is direct cross-vCPU
+disclosure and corruption on the hot path the carve-out exists to accelerate. See
+[../ooo/j32lt-spec.md §16.12](../ooo/j32lt-spec.md) for the cost, which at four contexts is the
+largest single security line item in that design.
+
+This mirrors [../mmu/hardware-spec.md](../mmu/hardware-spec.md)'s per-context requirement for
+`ASIDR`, `PTEH`, `TEA`, `MMUFSR` and `TSBPTR`, already recorded in
+[../ooo/j32lt-spec.md §11](../ooo/j32lt-spec.md). The reasoning and the failure mode are identical:
+silent attribution of one context's state to another.
 
 ## 3. New Instructions
 
@@ -586,6 +660,29 @@ physically contiguous (no ability to scatter a guest's frames, no demand-paging 
 from the host), and it adds a second, redundant address-relocation mechanism alongside the TLB that
 already does this job. Reusing the TLB is one relocation mechanism, not two.
 
+### 4.4.1a Mode-dependent translation on a speculative implementation (normative)
+
+§4.4.1 makes the translation regime depend on `SR.HPRIV`: a guest's P1/P2 go through the TLB, while
+at `SR.HPRIV = 1` they are *folded* — `PA = VA & 0x1FFFFFFF`, no TLB lookup, **no permission check**.
+
+On a core that executes speculatively, that is a mode-dependent address path in which one of the two
+modes performs no access check at all. An access executed under a stale `SR.HPRIV` — issued before an
+older `HRTE` resolved — would fold a guest virtual address directly onto host physical memory. **That
+is a guest→host escape, not a side channel**, and it is the only place in this specification where a
+speculation error loses the isolation boundary outright rather than leaking through a channel.
+
+**Normative requirements on a speculative implementation:**
+
+1. `SR.HPRIV` is not speculatively renamed; it belongs to the privileged register group whose writes
+   are serializing.
+2. `HCALL` and `HRTE` are serializing.
+3. Every memory access carries the `SR.HPRIV`/`SR.MD` snapshot of its own instruction and selects its
+   translation regime from that snapshot, never from the live register.
+
+See [../ooo/j32ooo-spec.md §20.11](../ooo/j32ooo-spec.md). This is independent of §4.4.5's pinned
+guest P1 mappings: that rule restores the non-faulting-handler proof, this one determines which
+translation path an access takes. Both are required and neither implies the other.
+
 ### 4.4.2 Cacheability and the C-bit alias
 
 **Decision:** A guest's P1/P2 accesses, now translated per §4.4.1, are mapped by hypervisor-installed
@@ -738,6 +835,15 @@ resumes with `HRTE`. Normative rules:
 2. On `HRTE`, if `HMCR.DIR = 0` (load) and `HMCR.SQ = 0`, hardware writes `HMDR` into the register
    named by `HMCR.REGN`/`HMCR.BANK`, sign- or zero-extending per `HMCR.SIZE` exactly as the original
    load would have.
+
+   **On an implementation with register renaming or a future-file, this write is performed at
+   `HRTE`'s commit**, into the architectural register file, and it resets that register's rename-map
+   entry to point at the ARF. `HRTE` is serializing on such implementations. An out-of-band write to
+   the ARF while the rename map still redirects readers to an in-flight ROB entry would be silently
+   lost — the writeback port described here assumes a machine with one register file and no rename
+   map, and this is what that assumption costs. See [../ooo/j32ooo-spec.md §4.7](../ooo/j32ooo-spec.md)
+   and [../ooo/j32lt-spec.md §6.6](../ooo/j32lt-spec.md). `HCALL` and any write of `SR.HPRIV` are
+   serializing for the related reason in §4.4.1a.
 3. For `HMCR.DIR = 1` (store) and `HMCR.SQ = 0`, hardware performs no writeback on resume — the
    store's architectural effect on the emulated device is entirely the hypervisor's to produce (by
    updating its device model); there is no guest-visible register state to restore.
@@ -841,6 +947,42 @@ target an intercepted region: IBM System/370-XA SIE (1980, generally available 1
 intercepts a defined set of instruction classes and presents an operation exception for
 instructions outside it, rather than attempting to describe every possible operand form.
 
+## 4.7 vCPU placement on multi-threaded implementations (normative)
+
+On an FGMT implementation, the thread contexts of one core share the L1 caches, the L2, the TLB, the
+TSB, the branch-predictor arrays and the prefetch tables
+([../ooo/j32ooo-spec.md §13.3](../ooo/j32ooo-spec.md),
+[../ooo/j32lt-spec.md §9.2](../ooo/j32lt-spec.md)). Those structures are not partitioned, and
+partitioning them would consume most of what the extra contexts earn.
+
+**Decision (normative):** a **physical core is the unit of guest allocation**. Every thread context
+of a core belongs to the same guest. A guest that needs only one vCPU is given a whole core, with
+the sibling contexts idle or running that same guest's other vCPUs. The hypervisor **MUST** enforce
+this at admission time and **MUST NOT** place vCPUs of different guests on contexts of one core.
+
+Consequences, stated plainly because they are a capacity statement as much as a security one:
+
+- A dual-core J32-OOO part hosts **two guests of up to two vCPUs each**; a dual-core J32-LT part
+  hosts **two guests of up to four vCPUs each**. Not four and eight.
+- Under J32-LT the rule converts four contexts per core from four sellable guest slots into one
+  guest's four vCPUs. That core's throughput advantage therefore shows up as vCPUs-per-guest, not
+  guests-per-board. [../jcore-ulx3s-service-plan.md §3](../jcore-ulx3s-service-plan.md) carries the
+  corrected count.
+- Nothing else in this specification changes. The isolation arguments of
+  [design-spec.md §6](design-spec.md) — ASID partitioning, `TSBBR` ownership, hypervisor memory
+  unmapped from S and U — are all *architectural* and hold regardless of placement. This rule
+  addresses the *microarchitectural* contention channels those arguments do not reach.
+
+**Why the hypervisor rather than hardware.** The same reason §4.4.5 puts pinned-mapping duty on the
+hypervisor: hardware cannot know which vCPU belongs to which guest. And the same reason the rule
+must be written down — it is invisible in the ISA, so a scheduler that violates it produces a
+perfectly functional machine with no isolation between its co-resident tenants.
+
+The exposure being bounded is pre-2006 documented, not speculative: Percival, *Cache Missing for Fun
+and Profit* (BSDCan 2005), recovered an RSA key across a shared L1 between two hardware contexts of
+one core, and observed that it applies to any system where caches are shared between mutually
+untrusted execution threads.
+
 ## 5. Hyperprivileged-Only Instructions and Operations
 
 Operations that are valid only when SR.HPRIV=1:
@@ -943,6 +1085,30 @@ Critical RTL verification:
     `VBR + <same offset>` in the guest. The offset must be bit-identical between the two runs; only
     the base register changes.
 
+### 9.1 Additional verification points on a speculative implementation
+
+These apply only to cores that speculate ([../ooo/j32ooo-spec.md §20.8](../ooo/j32ooo-spec.md) gates
+S7–S12, [../ooo/j32lt-spec.md §12.2](../ooo/j32lt-spec.md) gates S5–S8, where they are stated as
+CPU-side gates; repeated here so a hypervisor-side reviewer sees them):
+
+20. **Predictor domain separation (§2.8).** A guest that trains an indirect branch at the virtual
+    address of a hypervisor dispatch site produces no measurable change in that site's misprediction
+    rate. Repeat across two guests with distinct `PDID`s, including a pair whose `ASID_TAG` values
+    differ only above bit 7 — that pair is the specific regression against a truncated predictor tag.
+21. **No speculative aperture access (§2.5 rule 6).** A mispredicted branch over a load from the
+    aperture produces no bus request, no `EXPEVT = 0x1E0`, and leaves `HPAR`/`HMCR`/`HMDR` unchanged.
+    Assert this in RTL, not only by directed test.
+22. **Mode snapshot (§4.4.1a).** A guest memory access issued in the shadow of an unresolved `HRTE`
+    resolves through the guest's TLB path, never through P1 folding.
+23. **Per-context state (§2.9).** Two guests on two thread contexts of one core — a configuration
+    §4.7 forbids in production but which must be *tested*, since the whole point is that hardware
+    does not prevent it: each context's `HSPC`/`HSSR`/`HPAR`/`HMCR`/`HMDR`/`HEMUB`/`HEMUM`/`HEDR`
+    and each context's store-queue buffers are unaffected by the other's traps and bursts.
+24. **`HRTE` writeback under rename (§4.5 rule 2).** A trapped load to each of `R8`–`R15` resumes
+    with the correct value when the destination register is also the target of an in-flight producer
+    at the time of the trap. Verification point 12 covers the unbanked case; this covers the rename
+    interaction, which is a different failure.
+
 ## 10. Cost Estimation
 
 Phase 3 hardware additions beyond Phase 1 baseline:
@@ -973,7 +1139,18 @@ Phase 3 hardware additions beyond Phase 1 baseline:
 | MMIO-trap control/sequencing (entry mux, EXPEVT/vector selection) | ~25 LUTs |
 | Unrepresentable-access detection + fail-closed gating (§4.6) | ~10–15 LUTs |
 | **Emulated-MMIO trap subtotal** | **~130–195 LUTs, ~15 flops** |
-| **Total (per core)** | **approximately 300 LUTs, ~215 flops** |
+| **Total (per core), single-threaded implementation** | **approximately 300 LUTs, ~215 flops** |
+| `PDID` register + predictor-tag width (§2.8) | ~6 flops, ~40 LUTs |
+| Non-speculative region gating for P4 / aperture / uncacheable (§2.5 rule 6) | ~40 LUTs |
+| Serialization and mode-snapshot logic (§4.4.1a) | ~50 LUTs |
+| **Per additional thread context** (§2.9: the 12 per-vCPU registers + two 32 B SQ buffers + `QACR0/1`) | **~910 flops each** |
+| **Total, 2-way FGMT (J32-OOO)** | **~430 LUTs, ~1,130 flops** |
+| **Total, 4-way FGMT (J32-LT)** | **~430 LUTs, ~2,950 flops** |
+
+The per-context rows are the honest cost of virtualizing a multi-threaded core and they dominate
+everything else in this table. They are flops, not LUTs, so they land on FPGA registers rather than
+logic; on the ECP5 that is the cheaper of the two resources, but at four contexts it is no longer a
+rounding error. §2.9 explains why none of it is optional.
 
 Arithmetic: 150 LUTs (existing Phase 3 baseline, row above) + 130–195 LUTs (emulated-MMIO trap,
 this task) = 280–345 LUTs, stated conservatively as **approximately 300 LUTs** per core. The
@@ -1019,7 +1196,7 @@ To be explicit: Phase 3 adds nothing to the **TLB array or its lookup function**
 - A privilege-mode bit (one flop)
 - A trap-delegation register (32 flops)
 - A separate vector base for hyperprivileged traps
-- Two new instructions (HCALL, HRTE), plus ten new hyperprivileged LDC/STC control-register encodings (§2.2)
+- Two new instructions (HCALL, HRTE), plus eleven new hyperprivileged LDC/STC control-register encodings (§2.2), of which `PDID` (§2.8) is required only on implementations that speculate
 - One change to LDTLB behavior in supervisor mode
 - A guest-mode override on the `MMUCR.AT` translation gate (§4.4.1) — one extra term in front of the existing lookup, not a change to the lookup, and no change to the TLB entry format
 - One aperture comparator on the post-translation physical address (§2.5, §4.5), plus the trap-entry capture registers and the `HRTE`-armed writeback port that go with it (§10: ~130–195 LUTs, ~15 flops, including §4.6 fail-closed gating)
