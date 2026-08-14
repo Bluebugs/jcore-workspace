@@ -66,7 +66,7 @@ The plan is staged so that each phase delivers a working, demonstrable system. T
 - Live migration between boards
 - Unmodified vintage SH kernel support — paravirt-only guests
 - Full Debian J64-native port (new `sh64-linux-gnu` triple) — multi-year upstream effort, out of scope; the J64 phase provides COMPAT for existing sh4 binaries instead
-- Cloud-density tenant counts — 2–3 concurrent VMs per board is the realistic ceiling
+- Cloud-density tenant counts — **one tenant per physical core** is the ceiling, so a dual-core board hosts **two concurrent tenants**, each with as many vCPUs as that core has thread contexts (2 on J32-OOO, 4 on J32-LT). This is a corrected number: earlier drafts said "2–3 concurrent VMs per board" on the assumption that FGMT contexts were separately sellable. They are not. The thread contexts of a core share its L1, L2, TLB, TSB and branch predictors, and [hypervisor/hardware-spec.md §4.7](hypervisor/hardware-spec.md) makes a core the unit of guest allocation for that reason. See [ooo/j32ooo-spec.md §20.3](ooo/j32ooo-spec.md) and [ooo/j32lt-spec.md §16.3](ooo/j32lt-spec.md); the underlying result is pre-2006 (Percival, BSDCan 2005, key recovery across a shared L1 between two contexts of one core). The isolation claim in §2 is written against mutually distrusting tenants, and this is what makes it true rather than aspirational.
 
 ---
 
@@ -276,7 +276,7 @@ The single biggest unknown in this budget is the actual LUT cost of one OoO J32 
 |---|---|
 | This plan's prior narrative ("BRAM-heavy by design") | ~10k |
 | This plan's §5 row "OoO upgrade delta" | +5–7k delta from in-order's 3–5k → 8–12k total |
-| [ooo/j32ooo-spec.md §15](ooo/j32ooo-spec.md) gate budget (222k gates ÷ 5–6 gates/LUT4) | **35–45k** (the spec's own ULX3S statement: "~35–45k LUTs for core + caches") |
+| [ooo/j32ooo-spec.md §15](ooo/j32ooo-spec.md) gate budget (230k gates ÷ 5–6 gates/LUT4) | **35–45k** (the spec's own ULX3S statement: "~35–45k LUTs for core + caches") |
 | [ooo/j32ooo-spec.md §11](ooo/j32ooo-spec.md) narrative claim | "~10K LUT4 per core including the dual-issue logic" |
 
 The OoO spec is internally inconsistent (its narrative and its §15 gate-budget conversion disagree by ~4×). Until empirical ECP5-6 synthesis numbers exist, the budget below is presented as a range:
@@ -297,7 +297,9 @@ The OoO spec is internally inconsistent (its narrative and its §15 gate-budget 
 
 **J32-LT does not solve this.** [ooo/j32lt-spec.md §12.1](ooo/j32lt-spec.md) estimates the light 4-way-FGMT core at ~220k gates against J32-OOO's ~222k — deleting the issue queue, the rename machinery, the store-set predictor, and two predictor tables is almost exactly cancelled by quadrupling the thread contexts. J32-LT is an **energy** design point, not an area one, and substituting it for J32-OOO leaves the Phase 6.5 fit problem untouched. Do not treat "light OoO" as a LUT-budget mitigation.
 
-It does, however, change *what a core is worth* on this board: 4 hardware threads at ~1.55 aggregate IPC serve roughly four tenant VMs per core, against two for J32-OOO. For a service whose Tier 1.5 value is concurrent tenants rather than single-tenant latency, one J32-LT core may be preferable to two J32-OOO cores at half the area — which is option 3 (single-core on the 85F) reframed as a feature rather than a concession. That is the Phase 6.5 decision worth taking seriously if the pessimistic LUT numbers hold.
+It does, however, change *what a core is worth* on this board — though **not in the way an earlier draft of this paragraph claimed**. That draft read 4 hardware threads at ~1.55 aggregate IPC as "roughly four tenant VMs per core", and concluded that one J32-LT core might beat two J32-OOO cores for a concurrency-driven service. That conclusion is withdrawn: [hypervisor/hardware-spec.md §4.7](hypervisor/hardware-spec.md) makes a **core** the unit of guest allocation, because the four contexts share one L1, one TLB, one TSB and one predictor set. Four contexts are four vCPUs for **one** tenant, not four tenants.
+
+The corrected comparison: one J32-LT core serves **one** tenant with 4 vCPUs; two J32-OOO cores serve **two** tenants with 2 vCPUs each. For a service selling concurrent isolated tenants, two OOO cores now win outright on the axis this paragraph was about — and J32-LT's case reverts to what [ooo/j32lt-spec.md §1.1](ooo/j32lt-spec.md) always claimed it was, throughput per joule for a tenant with parallel work. Note also that [ooo/j32lt-spec.md §16.12](ooo/j32lt-spec.md) adds ~10k gates of per-context hypervisor and store-queue state at four contexts, roughly three times the J32-OOO figure, which pushes the area comparison further against LT than §12.1's original "comparable area" framing. The Phase 6.5 decision stands, but on these numbers rather than the earlier ones.
 
 ### BRAM budget — corrected
 

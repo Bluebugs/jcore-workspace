@@ -29,6 +29,17 @@ Practical rules:
 
 This policy exists because J-Core's value proposition depends on patent freedom. The SH-1/2/3/4 patents expired before this project began. Anything we add must be similarly unencumbered.
 
+### 2.1 How prior art is matched
+
+Two rules, learned from screening the transient-execution mitigations in [ooo/j32ooo-spec.md §20](ooo/j32ooo-spec.md) and [ooo/j32lt-spec.md §16](ooo/j32lt-spec.md). Both cut in directions the bare pre-2006 test gets wrong.
+
+- **Prior art matches at the level of *mechanism*, not *motivation*.** A patent claim covers structure and steps, not purpose. A pre-2006 reference that teaches the same mechanism for an unrelated reason is still prior art and still evidence of freedom to operate. Worked example: delay-on-miss reads as a 2019 security technique, but Intel US6035393 (priority 1995, expired) claims stalling a memory access "until either the dummy instruction retires, or a misprediction of a previous branch is detected" — to avoid side effects on uncacheable MMIO. Same mechanism, different reason, and it qualifies. Do not reject a mechanism because the paper you found it in is recent; look for the mechanism.
+- **A pre-2006 *structure* is necessary but not sufficient when the purpose-specific *combination* is separately claimed.** Worked example in the other direction: holding a cache fill in a side buffer and promoting it later is pre-2006 (Jouppi 1990; Cray US5761706, expired; Intel US6223258, expired) — but doing so *because the load is speculative*, promoting *when it becomes non-speculative*, and clearing *on squash and domain switch* is claimed by live patents (Microsoft US11061824, priority 2019). Citing Jouppi would have satisfied this policy as written and still walked into the claim.
+
+Practical consequence: where a mechanism's *purpose* is post-2006 even though its structure is not — which in practice means security mechanisms — the prior-art citation is necessary but a check for live claims on the purpose-specific combination is also required. The security sections of the CPU specs are currently the only place this applies.
+
+Neither this section nor the specs that cite it constitute legal advice or a freedom-to-operate opinion. Where a finding is load-bearing for a design decision, it warrants a professional search before RTL commits.
+
 ---
 
 ## 3. Product points (CPU/SoC variants)
@@ -63,6 +74,10 @@ This project uses **one and only one** threading term: **FGMT**.
   - **FGMT 4-way, barrel** (J32-LT): the thread count equals the front-end depth ahead of issue, so each front-end stage holds a different thread each cycle and thread identity is *positional* rather than tagged. Selection degenerates to a counter while all threads are ready. See [ooo/j32lt-spec.md §3.1](ooo/j32lt-spec.md). Pure barrels collapse single-thread throughput to `1/depth`, so J32-LT applies a **period floor** — a thread is granted a fetch slot no more often than once every `max(k, 2)` cycles for *k* ready threads — which costs the positional-identity property below `k = 4`. Prior art for the barrel proper: CDC 6600 peripheral processors (Thornton 1964).
 - "SMT" (Simultaneous Multi-Threading, where multiple threads issue in the *same* cycle) is **not used** in this project. Earlier drafts mixed the terms; FGMT is now the only correct term. Update old text on sight.
 - "MT", "barrel", "hardware threads" are colloquial; FGMT is the spec term.
+
+**Security-domain status of co-resident contexts.** On every FGMT product point in this project, the contexts of one core **share the L1 caches, the L2, the TLB, the TSB and the branch-predictor arrays**, and are therefore **one security domain** unless a product point explicitly says otherwise. Stated as an allocation rule: **a physical core is the unit of tenant allocation** — every context of a core belongs to the same tenant (the same VM under the hypervisor extension, the same trust domain otherwise), and a tenant needing one vCPU is given a whole core. Under virtualization the hypervisor enforces this at admission time ([hypervisor/hardware-spec.md §4.7](hypervisor/hardware-spec.md)); otherwise the OS scheduler does.
+
+The capacity consequence is direct and should be quoted rather than re-derived: an *N*-context core hosts **one** tenant with up to *N* vCPUs, not *N* tenants. FGMT buys vCPUs per tenant, never tenants per board. This is a property of the threading model, not of any one core: see [ooo/j32ooo-spec.md §20.3](ooo/j32ooo-spec.md) and [ooo/j32lt-spec.md §16.3](ooo/j32lt-spec.md) for what the hardware does and does not provide, and Percival, *Cache Missing for Fun and Profit* (BSDCan 2005) for the pre-2006 demonstration of what shared-cache co-residency leaks.
 
 A *thread context* is a complete architectural register set (R0–R15, SR, GBR, VBR, PC, FPU regs if present) plus an ASID. *N* FGMT contexts per core means *N* complete register sets in hardware, selected per cycle. On implementations with an MMU, the live `ASID_TAG` register (**ASIDR**, §5) is part of the context and is therefore replicated per thread, with the TLB compare selecting by thread ID — see [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md).
 
