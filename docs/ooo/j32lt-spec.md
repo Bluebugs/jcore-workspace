@@ -834,7 +834,7 @@ G1 and G3 should be run in simulation against `sim/sh2instr.c` traces well befor
 4. **Thread count** — 4 matches the front-end depth exactly, which is what makes the barrel tag-free (§3.1). Changing the pipeline depth ahead of ISS breaks that 1:1 property and reintroduces an arbiter. Any future stage addition must either add a thread or accept the arbiter.
 5. **`MOVMU.L`/`MOVML.L` cracking** — up to 17 uops, and §4.1 makes them occupy a bundle alone. On code that uses them for prologue/epilogue this may be a measurable IPC cost; see [isa-density/hardware-impl.md §6](../isa-density/hardware-impl.md).
 6. **Way prediction in L1-I/L1-D** — 5–10% energy win, 1–2% IPC cost. Deferred, but a more attractive trade here than on J32-OOO given the energy-first goal. Revisit after G4.
-7. **L1 capacity under 4 threads** — if G5 fails, the preference order is associativity, then capacity, then way prediction. Cache partitioning per thread is explicitly rejected: it converts a shared-capacity advantage into a fixed one.
+7. **L1 capacity under 4 threads** — if G5 fails, the preference order is associativity, then capacity, then way prediction. **L1** partitioning *per thread* remains explicitly rejected: it converts a shared-capacity advantage into a fixed one, and under §16.3 the four contexts are one tenant anyway, so it would buy no isolation. This does not extend to the **L2**, which is shared across *cores* and therefore across tenants: [cache/l2-spec.md §16.1](../cache/l2-spec.md) partitions it by way, per tenant, and that is adopted rather than deferred.
 8. **Software-exposed thread priority** — not provided (§1.2). The two automatic cases cover the dominant scenarios.
 9. **Dual-core J32-LT** — 8 logical CPUs, MSI coherence per [cache/l2-spec.md §7](../cache/l2-spec.md). Not specified here; the AIC2 change in §13 item 3 is the prerequisite.
 10. **If G8 misses (delay-on-miss costs more than 5% at *k* = 4)** — the levers, in order: narrow the trigger to loads whose address derives from a value produced under an unresolved branch (a more precise condition, not a weaker one); raise the per-thread MSHR count so more independent work proceeds behind a delayed load; accept the loss, which is still the cheapest defence available. **Adding a speculative fill buffer is not on the list** — §16.7 explains why, and the exclusion is a requirement rather than a preference.
@@ -888,6 +888,8 @@ What in-order issue *does* buy is narrower and real: the v4 speculative-store-by
 | Speculative store bypass (v4) | — | **structurally absent** (§7.3) |
 | Permission-failing load feeds a transient address | fault raised at commit (§6.5) | §6.6 rule 3 |
 | Cross-thread cache/TLB/predictor contention | 4 contexts, one L1, one TLB, one predictor set (§9.2) | §16.3 — **by policy, not by hardware** |
+| **Cross-thread issue-bandwidth contention** | the ready-mask arbiter (§3.1) hands a stalled thread's barrel slots to the others, so one thread's stalls appear as another's speed-up | §16.3 — by policy; see §16.2a |
+| **Cross-tenant L2 contention** | one set of L2 arrays serves both cores ([cache/l2-spec.md §2](../cache/l2-spec.md)), so core-granular tenancy does not reach it | [cache/l2-spec.md §16.1](../cache/l2-spec.md) way-partitioning |
 | **Guest trains the hypervisor's indirect branches** (VMScape) | predictor shared across `SR.HPRIV` | §3.5, [j32ooo-spec §20.10](j32ooo-spec.md) |
 | **Guest trains another guest's branches** | no VMID; ASID partitioning is the only separator | `PDID` in `DOM` |
 | **Predictor update crosses a world switch** (Branch Privilege Injection) | update applied after the domain changes | §3.5 update policy, ROB-carried `DOM` |
@@ -897,13 +899,49 @@ What in-order issue *does* buy is narrower and real: the v4 speculative-store-by
 
 **Out of scope, explicitly.** Physical attacks, power and EM analysis, Rowhammer, fault injection, and timing analysis of *committed* execution — a victim whose committed control flow or access pattern depends on a secret leaks with or without speculation, and the answer is constant-time software (Kocher 1996; [Percival 2005](https://www.daemonology.net/papers/htt.pdf)).
 
+### 16.2a The issue-bandwidth channel, and why the PMU makes it loud
+
+The cache and TLB channels of §16.2 are the ones the literature names, and they need prime-and-probe
+apparatus to exploit. The barrel has a more direct one that needs none.
+
+Thread selection is a ready-mask priority encoder over the runnable set (§3.1) with a period floor
+(§2.5). When a thread stalls — a delayed load (§7.4a), an L1 miss, a parked `SLEEP` (§9.3), a
+lock-spin priority drop — it leaves the ready set, *k* falls, and **the remaining threads are
+selected more often**. One thread's stall is therefore the other threads' measurable speed-up, and
+the relationship is close to architectural: it is a direct function of the arbiter's input, not an
+emergent property of a shared array.
+
+Two things make this louder here than the equivalent on an SMT machine:
+
+1. **The signal is coarse and clean.** At *k* = 4 a thread gets one slot in four; at *k* = 2 it gets
+   one in two. A victim entering and leaving the ready set moves the observer's issue rate by a
+   step, not by a noisy fraction.
+2. **The PMU states the answer.** `PMCYC`/`PMINS` give an observer its own IPC directly, and events
+   `0x18 BARREL_SLOT_IDLE` and `0x19 SPEC_MISS_DELAY_CYCLES` are more direct still. These are
+   privileged, but a tenant owns its guest kernel, so "privileged" is not a boundary here. This is
+   the same argument [hypervisor/design-spec.md §6](../hypervisor/design-spec.md) makes about the
+   TSB walker counters: a counter that *states* cross-domain behaviour is worse than the timing
+   channel it summarises, because it needs no measurement apparatus and carries no noise.
+
+**This is not separately mitigated, and it cannot be cheaply.** Removing it means making thread
+selection independent of the other threads' readiness — that is, fixing the barrel period regardless
+of *k*, which discards §2.5's period floor and with it the single-thread performance the floor
+exists to protect. §16.3's tenancy rule is the answer instead: the observer and the victim are the
+same tenant.
+
+What the design *does* do is keep the channel from widening: §7.4a's delay-on-miss removes the
+cache-state half of it, so a stalled thread leaks its stall *timing* but not the addresses that
+caused it.
+
 ### 16.3 The four-context sharing decision — the core is the unit of tenancy
 
 §9.2 shares the L1 caches, L2, gshare PHT, BTB, TLB and prefetch state across four contexts while §1.1(5) presents those contexts to Linux as four CPUs. Those statements are compatible **only if co-resident contexts are same-trust**, and this specification takes that position deliberately, as an allocation rule rather than a scheduling hint:
 
-> **A physical core is the unit of tenant allocation. Every thread context of a core belongs to the same tenant — the same virtual machine, or the same trust domain on an unvirtualized system. A tenant that needs only one vCPU is given a whole core, with the sibling contexts idle or running that same tenant's other vCPUs.**
+> **A physical core is the unit of tenant allocation *at any instant*. Every thread context of a core belongs to the same tenant — the same virtual machine, or the same trust domain on an unvirtualized system — for as long as that tenant is resident. A tenant that needs only one vCPU is given a whole core, with the sibling contexts idle or running that same tenant's other vCPUs.**
 
-A dual-core J32-LT board therefore hosts **two tenants of up to four vCPUs each**, not eight tenants of one. Under the hypervisor extension the scheduler enforcing this is the hypervisor's, and it belongs in admission control ([hypervisor/hardware-spec.md §4.7](../hypervisor/hardware-spec.md)); [jcore-ulx3s-service-plan.md §3](../jcore-ulx3s-service-plan.md) carries the corrected tenant count. Note this cuts harder here than on [j32ooo-spec §20.3](j32ooo-spec.md): four contexts per core is what makes the aggregate-throughput case, and the rule converts them from four sellable tenant slots into one tenant's four vCPUs. That is the honest price of the sharing in §9.2, and it does not change the IPC argument of §2.4 at all — a tenant with four runnable vCPUs saturates the barrel exactly as four tenants would.
+A core may be shared between tenants **over time** via a gang switch: all four contexts change tenant together, with the invalidation sequence of [hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md) at the boundary. That raises the number of tenants a board can host, never the number running at one instant.
+
+A dual-core J32-LT board therefore *runs* **two tenants of up to four vCPUs each** at any instant, not eight tenants of one. Under the hypervisor extension the scheduler enforcing this is the hypervisor's, and it belongs in admission control ([hypervisor/hardware-spec.md §4.7](../hypervisor/hardware-spec.md)); [jcore-ulx3s-service-plan.md §3](../jcore-ulx3s-service-plan.md) carries the corrected tenant count. Note this cuts harder here than on [j32ooo-spec §20.3](j32ooo-spec.md): four contexts per core is what makes the aggregate-throughput case, and the rule converts them from four sellable tenant slots into one tenant's four vCPUs. That is the honest price of the sharing in §9.2, and it does not change the IPC argument of §2.4 at all — a tenant with four runnable vCPUs saturates the barrel exactly as four tenants would.
 
 The exposure this accepts is pre-2006 public knowledge, which is worth stating plainly rather than treating as a novel risk. Percival demonstrated RSA key recovery across a shared L1 between two hardware contexts on one core in 2005, and observed that the technique applies "to any system where caches are shared between two or more non-mutually-trusted execution threads". §9.2 is that configuration with four contexts instead of two.
 
@@ -1030,7 +1068,8 @@ The reasoning is identical to §11's MMU-register correction, extended to the Ph
 | Clearing predictor state at context switch (§16.4) | Two branch-predictor schemes under frequent context switches (1998); OPTS (2002) |
 | Prefetch bounded at page boundary (§7.5a) | Jouppi 1990; Cray US5761706 (filed 1994, expired) |
 | Threat model (§16.2) | Kocher 1996; Percival, BSDCan 2005 |
-| Way partitioning, if §16.3 is ever revisited | MIT column caching, Chiou et al. 1999–2000; US6370622 (filed 1998, expired); Suh & Devadas 2002–2004 |
+| L2 way partitioning by tenant ([cache/l2-spec.md §16.1](../cache/l2-spec.md)) | MIT column caching, Chiou et al. 1999–2000; US6370622 (filed 1998, expired); Suh & Devadas 2002–2004 |
+| Gang scheduling of a core's contexts ([hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)) | Ousterhout, "Scheduling Techniques for Concurrent Systems", ICDCS 1982 |
 
 ---
 

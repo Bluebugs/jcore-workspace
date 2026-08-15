@@ -73,6 +73,30 @@ idioms compile poorly:
    `r8..r14` + `PR` one register at a time — up to 8 instructions in and 8 out
    per non-leaf function.
 
+   **Second, independent justification: bulk context switching.** The same
+   one-register-at-a-time problem dominates every context save/restore in the
+   system, and two of those paths are now on a hot path rather than a cold one:
+
+   - **Gang switching** ([../hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)).
+     Time-sharing a core between guests requires saving and restoring *every*
+     thread context of that core together — on J32-LT that is 4 vCPUs of
+     ~318 B each, roughly **1.3 KB, or ~320 register moves each way**
+     ([../ooo/j32lt-spec.md §9.1](../ooo/j32lt-spec.md)). `movmu.l`/`movml.l`
+     collapse that by roughly 16:1. At a ~10 ms gang quantum the saving is
+     small in percentage terms, but it is the term that scales with thread
+     count, and it is what keeps a shorter quantum — and therefore lower
+     scheduling latency for a guest — affordable.
+   - **Per-vCPU privileged state** ([../hypervisor/hardware-spec.md §2.9](../hypervisor/hardware-spec.md)).
+     FGMT replicates the MMU and hyperprivileged register sets per thread
+     context, so the state a hypervisor moves at a switch grew by roughly a
+     third over the single-threaded figure.
+
+   This does not change the instruction definitions of §3.2 or either
+   implementation strategy in §4.2/§4.3; it is recorded because the
+   code-density argument alone under-states the value, and because a future
+   revision tempted to drop `movmu`/`movml` on cost grounds should know that
+   the hypervisor's switch path is a second consumer.
+
 3. **PIC/GOT address computation.** Position-independent code uses `r12` as the
    GOT pointer (the SH GCC `PIC_OFFSET_TABLE_REGNUM`). SH has *no* instruction
    that computes a base-relative address into a register: `MOVA` is hardwired to
