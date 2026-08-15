@@ -954,7 +954,7 @@ Gates S1–S6 of §20.8 are part of the verification plan, not a separate activi
 4. **TAGE-class branch predictor**: TAGE is 2006 (just at the cutoff); a tournament predictor today, possible upgrade later. Note the opposite move in [j32lt-spec.md §3.5](j32lt-spec.md): a *single* gshare table with BTFNT-seeded counters, dropping the bimodal and chooser arrays entirely. That is affordable there because 4-way FGMT absorbs most of a mispredict's cost (other threads occupy the refill cycles), which is not true at 2-way — so the predictor choice does not transfer in this direction.
 5. **Hardware stride detector tuning**: 8-entry table sizing may be wrong for some workloads; revisit after benchmarking.
 6. **Delay-on-miss cost (§8.2a)**: the one security mechanism whose cost is not small and not yet measured. Gate S5 (§20.8) decides. If it exceeds 20% aggregate, the options are, in order: restrict the delay to loads whose address derives from a value produced under an unresolved branch (a narrower trigger, not a weaker one); accept the loss; or reconsider the design point in favour of [j32lt-spec](j32lt-spec.md), where §7.4a costs materially less. Adding a speculative fill buffer is **not** an option — see §20.7.
-7. **Core-granular tenancy (§20.3)**: adopted deliberately, and the weakest link in the security model, since it is enforced by a scheduler — the hypervisor's under virtualization, Linux's otherwise — rather than by hardware. It costs the platform half its nominal tenant density and that trade is accepted. If a future product point needs mutually distrusting co-resident *contexts*, the levers are per-thread cache way partitioning (patent-clear per §20.13) and per-thread predictor arrays, at a cost that would substantially undo the FGMT gain. Do not adopt it silently.
+7. **Core-granular tenancy (§20.3)**: adopted deliberately, and the weakest link in the security model, since it is enforced by a scheduler — the hypervisor's under virtualization, Linux's otherwise — rather than by hardware. Gang scheduling ([hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)) recovers tenant density over time, so the cost is now scheduling latency and a cold cache per quantum rather than a halved tenant count. If a future product point needs mutually distrusting *concurrently resident* contexts, the levers are per-thread L1 way partitioning and per-thread predictor arrays, at a cost that would substantially undo the FGMT gain. Do not adopt it silently. Note the L2 is a separate problem with a separate answer already adopted: [cache/l2-spec.md §16.1](../cache/l2-spec.md).
 8. **`SPB` encoding (§4.6)**: `0x003B` is a candidate, not a decision. Needs ISA-owner sign-off alongside the [isa-density](../isa-density/spec.md) encodings.
 
 ---
@@ -1000,6 +1000,8 @@ The mitigations here were selected under the [glossary §2](../glossary.md) prio
 | Speculative store bypass (v4) | store-set predictor (§8.4) | §8.4 `SSBD` |
 | Permission-failing load feeds a transient address | fault detected at commit (§9.3) | §9.4 rule 3 |
 | Cross-thread cache/TLB/predictor contention | shared L1/L2/BP/TLB (§13.3) | §20.3 — **by policy, not by hardware** |
+| **Cross-thread issue-bandwidth contention** | the ready-thread arbiter (§13.2) gives a stalled thread's fetch slots to the other, so one thread's stalls appear as the other's speed-up | §20.3 — by policy; see §20.2a |
+| **Cross-tenant L2 contention** | one set of L2 arrays serves both cores ([cache/l2-spec.md §2](../cache/l2-spec.md)), so core-granular tenancy does not reach it | [cache/l2-spec.md §16.1](../cache/l2-spec.md) way-partitioning |
 | **Guest trains the hypervisor's indirect branches** (VMScape) | predictor shared across `SR.HPRIV` | §3.2, §20.10 |
 | **Guest trains another guest's branches** | no VMID; ASID partitioning is the only separator | §20.10 `PDID` |
 | **Predictor update crosses a world switch** (Branch Privilege Injection) | update applied after the domain changes | §3.2 update policy, ROB-carried `DOM` |
@@ -1011,15 +1013,29 @@ The mitigations here were selected under the [glossary §2](../glossary.md) prio
 
 Note the dates: the *attack* class in the last row is pre-2006 public knowledge. Percival demonstrated key recovery across a shared L1 between two hardware threads on one core in 2005 and observed that it applies "to any system where caches are shared between two or more non-mutually-trusted execution threads". That is a precise description of §13.3.
 
+### 20.2a The issue-bandwidth channel
+
+The cache and TLB channels of §20.2 need prime-and-probe apparatus. FGMT has a more direct one that does not.
+
+The ready-thread arbiter (§13.2) drops a thread from the ready set when it is parked, halted, waiting on an I-cache miss, or backed up at the ROB; the other thread then receives the fetch slots. One thread's stalls are therefore the other's measurable speed-up, as a direct function of the arbiter's input rather than as an emergent property of a shared array. The auto-priority mechanism of §13.4 adds a second, coarser version of the same signal: a thread that drops its priority on repeated CAS.L failure hands fetch bandwidth to its sibling, and event `0x12 SMT_THREAD_PRIORITY_DROPS` reports that it did.
+
+The PMU makes it loud rather than subtle. `PMCYC`/`PMINS` give an observer its own IPC, and events 0x12, 0x13, 0x15 and 0x16 are more direct still. They are privileged, but a tenant owns its guest kernel, so privilege is not the boundary here. This is the argument [hypervisor/design-spec.md §6](../hypervisor/design-spec.md) already makes about the TSB walker counters — a counter that *states* cross-domain behaviour beats the timing channel it summarises, needing no apparatus and carrying no noise.
+
+**Not separately mitigated.** Removing it means decoupling thread selection from the other thread's readiness, which is the mechanism §13.2 exists to provide. §20.3's tenancy rule is the answer: observer and victim are the same tenant. What the design does do is keep the channel narrow — §8.2a removes its cache-state half, so a stalled thread leaks stall *timing* but not the addresses behind it.
+
+At 2-way the channel is weaker than [j32lt-spec §16.2a](j32lt-spec.md)'s: with only two threads there is one bit of ready-set state to observe rather than a four-valued *k*.
+
 ### 20.3 The FGMT sharing decision — the core is the unit of tenancy
 
 §13.3 shares the L1 caches, L2, predictor tables, TLB and MSHRs between the two threads, while §13 presents those threads to Linux as two CPUs. **These two statements are only compatible if co-resident threads are same-trust.**
 
 J32OOO takes that position deliberately, and states it as an allocation rule rather than a scheduling hint:
 
-> **A physical core is the unit of tenant allocation. Every thread context of a core belongs to the same tenant — the same virtual machine, or the same trust domain on an unvirtualized system. A tenant that needs only one vCPU is given a whole core, with the sibling contexts idle or running that same tenant's other vCPUs.**
+> **A physical core is the unit of tenant allocation *at any instant*. Every thread context of a core belongs to the same tenant — the same virtual machine, or the same trust domain on an unvirtualized system — for as long as that tenant is resident. A tenant that needs only one vCPU is given a whole core, with the sibling contexts idle or running that same tenant's other vCPUs.**
 
-The consequence is arithmetic and should be read off directly: a dual-core J32-OOO board hosts **two tenants of up to two vCPUs each**, not four tenants of one. [j32lt-spec §16.3](j32lt-spec.md) hosts two tenants of up to four vCPUs each. Under the hypervisor extension the scheduler that must enforce this is the hypervisor's, not Linux's, and it belongs in admission control ([hypervisor/hardware-spec.md §4.7](../hypervisor/hardware-spec.md)); [jcore-ulx3s-service-plan.md §3](../jcore-ulx3s-service-plan.md) carries the corrected tenant count.
+A core may be shared between tenants **over time**, provided the transition is a gang switch: all contexts change tenant together, with the predictor, L1 and TLB invalidations of [hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md) at the boundary. Gang scheduling raises the number of tenants a board can host; it never raises the number that run at one instant, which is what this rule bounds.
+
+The consequence is arithmetic and should be read off directly: at any instant a dual-core J32-OOO board runs **two tenants of up to two vCPUs each**, not four tenants of one. [j32lt-spec §16.3](j32lt-spec.md) hosts two tenants of up to four vCPUs each. Under the hypervisor extension the scheduler that must enforce this is the hypervisor's, not Linux's, and it belongs in admission control ([hypervisor/hardware-spec.md §4.7](../hypervisor/hardware-spec.md)); [jcore-ulx3s-service-plan.md §3](../jcore-ulx3s-service-plan.md) carries the corrected tenant count.
 
 The alternative — partitioning or flushing the shared structures per thread — costs most of what the second thread earns, on a design point whose entire justification is throughput per area. The exposure being accepted is pre-2006 documented: [Percival 2005](https://www.daemonology.net/papers/htt.pdf) recovered an RSA key across a shared L1 between two hardware contexts of one core, and observed that it applies "to any system where caches are shared between two or more non-mutually-trusted execution threads". The rule above is what makes that observation inapplicable rather than unaddressed.
 
@@ -1185,7 +1201,8 @@ This is the same correction [j32lt-spec §11](j32lt-spec.md) already made for `P
 | Clearing predictor state across context switches (§20.4) | Two branch-predictor schemes under frequent context switches (1998); OPTS (2002) |
 | Prefetch bounded at page boundary (§11.4) | Jouppi 1990 stream buffers; Cray US5761706 (filed 1994, expired) |
 | Threat model (§20.2) | Kocher 1996; Percival, *Cache Missing for Fun and Profit*, BSDCan 2005 |
-| Cache way partitioning, if §20.3 is ever revisited | MIT column caching, Chiou et al. 1999–2000; US6370622 (filed 1998, expired); Suh & Devadas 2002–2004 |
+| L2 way partitioning by tenant ([cache/l2-spec.md §16.1](../cache/l2-spec.md)) | MIT column caching, Chiou et al. 1999–2000; US6370622 (filed 1998, expired); Suh & Devadas 2002–2004 |
+| Gang scheduling of a core's contexts ([hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)) | Ousterhout, "Scheduling Techniques for Concurrent Systems", ICDCS 1982 |
 
 ---
 

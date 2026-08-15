@@ -955,23 +955,87 @@ TSB, the branch-predictor arrays and the prefetch tables
 [../ooo/j32lt-spec.md §9.2](../ooo/j32lt-spec.md)). Those structures are not partitioned, and
 partitioning them would consume most of what the extra contexts earn.
 
-**Decision (normative):** a **physical core is the unit of guest allocation**. Every thread context
-of a core belongs to the same guest. A guest that needs only one vCPU is given a whole core, with
-the sibling contexts idle or running that same guest's other vCPUs. The hypervisor **MUST** enforce
-this at admission time and **MUST NOT** place vCPUs of different guests on contexts of one core.
+**Decision (normative):** a **physical core is the unit of guest allocation *at any instant***. Every
+thread context of a core belongs to the same guest for as long as that guest is resident. The
+hypervisor **MUST NOT** place vCPUs of different guests on contexts of one core **concurrently**.
+
+The word "concurrently" is load-bearing and was absent from an earlier revision of this section. A
+core may be shared between guests **over time**, provided the transition is a gang switch per §4.7.1.
+Without that relaxation the rule caps the machine at one guest per core for its lifetime, which is a
+much stronger constraint than the channels require.
+
+Two placement modes therefore satisfy this section:
+
+| Mode | Guests per core | When to use |
+|---|---|---|
+| **Dedicated** | one, for its lifetime | Simplest. No gang-switch cost, no residual-state flushing. The right default for a single-purpose appliance or a guest that must not see scheduling jitter |
+| **Gang-scheduled** (§4.7.1) | many, one at a time | Recovers guest density on a small machine. Costs a flush sequence and a cold cache per quantum |
 
 Consequences, stated plainly because they are a capacity statement as much as a security one:
 
-- A dual-core J32-OOO part hosts **two guests of up to two vCPUs each**; a dual-core J32-LT part
-  hosts **two guests of up to four vCPUs each**. Not four and eight.
+- In **dedicated** mode a dual-core J32-OOO part hosts **two guests of up to two vCPUs each** and a
+  dual-core J32-LT part **two guests of up to four vCPUs each**. Not four and eight.
 - Under J32-LT the rule converts four contexts per core from four sellable guest slots into one
-  guest's four vCPUs. That core's throughput advantage therefore shows up as vCPUs-per-guest, not
-  guests-per-board. [../jcore-ulx3s-service-plan.md §3](../jcore-ulx3s-service-plan.md) carries the
-  corrected count.
+  guest's four vCPUs. That core's throughput advantage shows up as vCPUs-per-guest, not
+  guests-per-board, in **both** modes — gang scheduling raises the number of guests a board can
+  host, never the number that can run at one instant.
+  [../jcore-ulx3s-service-plan.md §3](../jcore-ulx3s-service-plan.md) carries the counts.
 - Nothing else in this specification changes. The isolation arguments of
   [design-spec.md §6](design-spec.md) — ASID partitioning, `TSBBR` ownership, hypervisor memory
   unmapped from S and U — are all *architectural* and hold regardless of placement. This rule
   addresses the *microarchitectural* contention channels those arguments do not reach.
+- **The shared L2 is outside the reach of either mode.** A single set of L2 arrays serves every
+  core ([../cache/l2-spec.md §2](../cache/l2-spec.md)), so two guests on two different cores share
+  it no matter how vCPUs are placed. That channel is closed by way-partitioning
+  ([../cache/l2-spec.md §16.1](../cache/l2-spec.md)), which is required in the baseline dual-core
+  configuration and is not a gang-scheduling-specific measure.
+
+### 4.7.1 Gang switching (normative, when the gang-scheduled mode is used)
+
+All contexts of a core switch guests together, at a quantum boundary, never individually. The
+hypervisor **MUST** perform the following before the first entry to the incoming guest. Each item is
+a channel that would otherwise carry the outgoing guest's state across the boundary:
+
+| # | Action | Mechanism | Cost |
+|---|---|---|---|
+| 1 | Quiesce every context of the core | ordinary trap into HS mode on each | — |
+| 2 | Save each vCPU's context | §2.9's per-context state, ~318 B per vCPU | see below |
+| 3 | Invalidate predictors, BTB, RAS and stride tables, **per context** | [../ooo/j32ooo-spec.md §20.4](../ooo/j32ooo-spec.md) | one register write each |
+| 4 | Invalidate L1-I and L1-D | SH-4 `CCR.ICI` / `CCR.OCI`. **L1-D is write-through** ([../ooo/j32ooo-spec.md §11.2](../ooo/j32ooo-spec.md)), so there is no dirty data to write back and this is an invalidate, not a flush | one register write each |
+| 5 | Flush the TLB | tens of entries; `ASID_TAG` tagging makes this unnecessary for *correctness*, and it is done for the channel | negligible |
+| 6 | Switch `TSBBR`, `PDID`, `L2WAYMASK` | already per-guest (§2.8, design-spec §3.8, [../cache/l2-spec.md §16.1](../cache/l2-spec.md)) | three register writes |
+| 7 | Restore the incoming guest's vCPU contexts, enter | §2.9 | — |
+
+**The L2 is deliberately not flushed.** Way-partitioning ([../cache/l2-spec.md §16.1](../cache/l2-spec.md))
+is what isolates it; a full L2 flush would cost ~655 µs of write-back at ~200 MB/s and dominate every
+other item on this list by an order of magnitude. Ways are flushed only when a descheduled guest's
+mask is reassigned to a different guest — 16 KB per way, ~82 µs.
+
+**Quantum.** The dominant cost is not the flush sequence, which is a handful of register writes plus
+~1.3 KB of context per four-vCPU gang; it is the **cold cache** the incoming guest starts with —
+roughly 10k cycles to refill a modest working set from SDRAM. Budget **~15k cycles (~0.5 ms at
+30 MHz) per gang switch**, giving ≤5% overhead at a **~10 ms quantum**. Three guests at that quantum
+see ~20 ms worst-case scheduling latency. Both figures are ordinary for a time-sharing system and
+neither requires the guest kernel to change.
+
+**Guest-visible time.** The guest kernel is unaware of gang scheduling and needs no modification,
+but it will observe multi-millisecond gaps in real time. The hypervisor MUST virtualize the guest's
+timer and provide steal-time accounting, or the guest's own scheduler will mis-attribute the gap.
+This is the one place where gang scheduling reaches into guest-visible behaviour.
+
+**Prior art (pre-2006):** gang scheduling / coscheduling is Ousterhout, "Scheduling Techniques for
+Concurrent Systems" (ICDCS 1982), which also documents the fragmentation cost below. Denelcor HEP
+and Tera MTA scheduled thread groups on barrel front ends. Nothing here is post-2005, and it is in
+any case hypervisor software policy rather than hardware.
+
+**Fragmentation — the honest cost.** If the resident guest has fewer runnable vCPUs than the core
+has contexts, the surplus contexts idle for the whole quantum. On J32-LT a guest with one runnable
+vCPU runs at the single-thread floor of ~0.94 IPC
+([../ooo/j32lt-spec.md §2.5](../ooo/j32lt-spec.md)) while three contexts sit empty. Idle *guests*
+cost nothing, since they are not scheduled at all; the loss is confined to a scheduled guest that
+lacks parallelism. This makes the mode's value workload-dependent in a way worth measuring rather
+than assuming: a guest serving concurrent requests keeps the barrel full, while a guest running one
+interactive shell does not.
 
 **Why the hypervisor rather than hardware.** The same reason §4.4.5 puts pinned-mapping duty on the
 hypervisor: hardware cannot know which vCPU belongs to which guest. And the same reason the rule
