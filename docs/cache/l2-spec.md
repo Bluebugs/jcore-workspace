@@ -14,6 +14,7 @@
 
 ## Changelog
 
+- **v0.3** (2026-08): Added §16.1, way partitioning by trust domain. The L2's single shared tag and data arrays make it a cross-tenant channel that the CPU specs' core-granular tenancy rules cannot reach; way partitioning closes it for ~200 gates, and is also what makes gang scheduling ([hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)) affordable, since the alternative is a ~655 µs full-L2 flush per tenant switch.
 - **v0.2** (2026-05-26): Rewrite for SMP coherence (MSI directory at L2), per-L2-line lock replacing bus-lock CAS.L, parameterized `ADDR_WIDTH ∈ {32, 40}`. Tiered presentation (T0/T1/T2). Pre-2006 prior art consolidated.
 - **v0.1** (archived as `archive/l2-v1-single-core-spec.md`): Single-core, non-coherent, locked-access-bypass CAS.L. Carried forward unchanged for T0; bypass path removed at T1.
 
@@ -787,6 +788,64 @@ L2 can issue at most one Recall per line. Eviction is sequenced through the same
 
 Tree pseudo-LRU, unchanged from v1 (§9 of v1 archive). One small addition under T1/T2: when the pLRU pick is a `LOCKED` line, walk to the second-LRU; if all ways are locked, the bank stalls the requester (§7.7). The pLRU update on a hit is unchanged.
 
+### 16.1 Way partitioning by trust domain `[T1/T2]`
+
+The L2 specified here is **one set of tag and data arrays shared by every core** (§2). That is the
+right implementation choice and it has a consequence that the CPU specs' tenancy rules do not reach:
+**two tenants running on two different cores share the L2**, so a prime-and-probe across its sets is
+a cross-tenant channel that no placement policy on the core side can close.
+[ooo/j32ooo-spec.md §20.3](../ooo/j32ooo-spec.md) and [ooo/j32lt-spec.md §16.3](../ooo/j32lt-spec.md)
+make a core the unit of tenant allocation, which closes the L1, TLB and predictor channels; the
+shared L2 sits below all of them and is untouched by that rule. Both of those sections named
+way-partitioning as the escape hatch. This section is that escape hatch, promoted to a specified
+mechanism because the channel exists in the baseline dual-core configuration and not only in some
+future one.
+
+**Mechanism.** One `L2WAYMASK` register per trust domain, consulted on **allocation only**:
+
+```
+L2WAYMASK[d]   8 bits (one per way)   -- ways into which domain d may allocate
+```
+
+- On a fill for a request tagged with domain `d`, the pLRU victim search of §16 is restricted to
+  ways where `L2WAYMASK[d]` is set. Everything else about §16 is unchanged: the walk-past-`LOCKED`
+  rule, the all-locked stall, and the hit-time pLRU update all behave as before.
+- **Hits are not restricted.** A domain may hit on a line in any way. Restricting hits would break
+  coherence and shared read-only mappings (the hypervisor's own text, a shared page) for no
+  security gain, since a hit reveals only that the line is present — which is what the partition
+  already prevents an attacker from *causing*.
+- The domain tag travels with the request. It is the same `PDID` the CPU specs use for predictor
+  tagging ([hypervisor/hardware-spec.md §2.8](../hypervisor/hardware-spec.md)), carried on the
+  fabric alongside the existing `owner` field of §6.
+- `L2WAYMASK` is hyperprivileged. A mask of all-ones is the unpartitioned behaviour, which is the
+  reset state, so T0 and non-virtualized systems are unaffected.
+
+**Why this closes the channel.** Prime-and-probe requires the attacker to *allocate* lines that
+evict the victim's. Restricted to disjoint ways, it cannot: it may observe only the occupancy of
+ways it owns. Partitioning by way rather than by set is what preserves the full address range for
+every domain — a set-partitioned L2 would give each domain a fraction of the physical address space,
+which is useless here.
+
+**Sizing and the residual case.** Eight ways over two-to-three concurrent tenants is comfortable
+(2–4 ways each). With more tenants than ways, domains must share masks, and sharing a mask means
+sharing the channel — so the hypervisor MUST either give mutually distrusting tenants disjoint
+masks, or, when a tenant is descheduled and its ways reassigned, **flush that tenant's ways**. A
+one-way flush is 16 KB of write-back, ~82 µs at ~200 MB/s — against a full-L2 flush at 128 KB,
+~655 µs, which is the reason partitioning is specified here rather than "flush the L2 at every
+tenant switch".
+
+**Cost.** ~200 gates: an 8-bit mask register per domain, and an AND into the pLRU victim-select
+mask. No tag-array change, no data-array change, no change to the state machine of §11 or the
+coherence protocol of §7. The domain tag is already on the fabric.
+
+**Prior art (pre-2006).** MIT **column caching** — Chiou, Jain, Devadas & Rudolph, "Dynamic cache
+partitioning via columnization" (DAC 2000) and Chiou, *Extending the Reach of Microprocessors:
+Column and Curious Caching* (PhD thesis, MIT, 1999), which is precisely "make each way of a
+set-associative cache a column and restrict allocation by software-set mask"; **US6370622**, "Method
+and apparatus for curious and column caching" (MIT, filed 1998, **expired**); Suh & Devadas, dynamic
+partitioning of shared cache memory (2002–2004). This is the mechanism those references describe,
+used for the purpose they describe it for.
+
 ---
 
 ## 17. Write Policy and Dirty Bit Handling `[T0/T1/T2]`
@@ -919,6 +978,21 @@ T2 additional delta over T1: negligible LUT (~+100 for wider compares), +2 EBRs 
 ### 22.1 Unit-level (T0/T1/T2 — common)
 
 - Tag array, data array, pLRU, MSHR, writeback queue: as v1 §19.1, with tag width extended to T1/T2 fields.
+
+### 22.1a Way partitioning (§16.1, T1/T2)
+
+- **Allocation confinement**: with disjoint `L2WAYMASK` values, a domain streaming through memory
+  large enough to thrash the L2 evicts **no** line belonging to another domain. Check by tag-array
+  inspection, not by timing — the point is a structural invariant, not a measurement.
+- **Hits are unrestricted**: a domain hits a line resident in a way outside its own mask, and the
+  hit does not migrate or re-allocate the line.
+- **pLRU interaction**: with a mask of one way, allocation always targets that way; with a mask
+  whose ways are all `LOCKED`, the bank stalls exactly as §16's all-locked case, not silently
+  spilling outside the mask.
+- **Reset behaviour**: an all-ones mask reproduces unpartitioned v0.2 behaviour bit-for-bit — the
+  T0 and non-virtualized regression.
+- **Negative control**: with masks deliberately overlapping, the confinement test above must
+  **fail**. A partitioning test that passes with the partition disabled is not testing anything.
 
 ### 22.2 Coherence-specific (T1/T2)
 
