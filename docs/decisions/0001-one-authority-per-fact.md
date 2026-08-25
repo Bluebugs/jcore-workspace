@@ -153,9 +153,19 @@ The code said "a line containing the word `retired`". The gap between those two
 sentences was the entire hole, and it was opened by the commit that closed the
 previous one.
 
-They are now two named constants with the same narrow contents, and the
-narrowness is the point: every phrase in the set makes the retirement the
-line's *subject*. `retired` and `no longer` do not — they attach to anything.
+They are now **two separately written lists** — `GLOSSARY_QUOTE_PHRASES` and
+`STALE_CLAIM_PHRASES` — with the same narrow contents. The duplication is the
+mechanism, and the code says so, because an earlier attempt at this built both
+from one shared literal and put the comment *"widening one must never widen the
+other"* directly above the thing that made independent widening impossible. Two
+names over one string is not decoupling; it is the same coupling with better
+labelling.
+
+The narrowness is the second half: every phrase makes the retirement the line's
+*subject*. `retired` and `no longer` do not — they attach to anything. Since this
+record argues the glossary must be able to record its own history, somebody will
+eventually want `retired` in the glossary list; the point of the two lists is
+that they can then have it without the merge-status check noticing.
 
 ### The gap this does not close, stated rather than papered over
 
@@ -186,10 +196,29 @@ doc-vs-code checks both reach it.
 
 `scripts/test-check-doc-facts.py` builds a throwaway tree per case and runs the
 checker against it with `--root`. It asserts exit status **and, for a case that
-expects a failure, which check produced it** (`expect_check=`) — exit status
-alone cannot tell "the check I meant fired" from "something else did", so a
-later change could otherwise slide a case onto a different failure and stay
-green.
+expects a failure, which check produced it** (`expect_check=`, on 35 of the 36
+such cases) — exit status alone cannot tell "the check I meant fired" from
+"something else did", so a later change could otherwise slide a case onto a
+different failure and stay green.
+
+A case may also carry `mutate=`, which runs it against a *patched copy* of the
+checker. That is how the decoupling of the two quotation escapes is tested:
+asserting the two regexes merely differ would pass for the wrong reason, since
+their contents are identical today. Instead the test widens one list and asserts
+the other check is unmoved — and a companion case asserts the patch took effect
+at all, so the test cannot pass by silently doing nothing.
+
+**When a run fails, the harness prints which assertion did the catching**
+(`exit status` / `crash detection` / `expect_check`), computed rather than
+inferred. That tally exists because of a specific mistake: an earlier report
+credited `expect_check` with 6 of 11 catches, when the label it read was printed
+whenever the expected check was absent — *including* when the exit status had
+already mismatched. Against the previous revision the honest split is **exit
+status 10, crash detection 2, `expect_check` 1**. The one genuine `expect_check`
+catch is the registry-independence case, where a registry failure supplies a
+non-zero exit while the glossary check silently does not run — invisible to exit
+status by construction, which is exactly the case worth having the assertion
+for. The label is now emitted only when exit status agreed.
 
 To compare against an older checker — the evidence that a fix closes something
 that used to be open — use `--against`:

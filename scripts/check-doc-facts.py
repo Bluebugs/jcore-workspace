@@ -309,22 +309,39 @@ VALUE_SHAPES = [
     ("bare count", re.compile(r"\*\*\d{2,}\*\*")),
 ]
 
-# TWO escapes, deliberately separate constants.
+# TWO escapes, and the two lists below are written out separately ON PURPOSE.
 #
 # They used to be one regex gating both `glossary-is-value-free` and
 # `stale-claim`. Widening it so the glossary could carry its own retirement
 # notes silently exempted 119 lines across 22 files from the merge-status check
 # -- a line saying "the old walker is retired" excused an unrelated "NOT MERGED"
-# on the same line. The coupling was the defect, not the wording, so the fix is
-# two names. Widening one must never widen the other.
+# on the same line. The coupling was the defect, not the wording.
+#
+# The contents are identical today and that is a coincidence of the current
+# requirements, not a constraint. DO NOT refactor them back into one shared
+# literal to remove the duplication: the duplication *is* the mechanism. 0001
+# argues the glossary must be able to record its own history, so somebody will
+# eventually want "retired" in the glossary list -- and that edit must not be
+# able to reach the merge-status list by accident. Adding a phrase means adding
+# it to one list and deciding, deliberately, about the other.
+#
+# `scripts/test-check-doc-facts.py` asserts this is real by widening the
+# glossary list in a copy of this file and checking `stale-claim` is unmoved.
 #
 # Both are narrow on purpose: each phrase makes the *retirement* the subject of
 # the line. "retired" and "no longer" do not -- they can appear in a line whose
 # subject is something else entirely, which is exactly how the hole opened.
-_QUOTING_A_RETIRED_VALUE = (r"promoted from|previously read|previously said|"
-                            r"formerly read|used to read")
-GLOSSARY_QUOTE_EXEMPT = re.compile(_QUOTING_A_RETIRED_VALUE, re.IGNORECASE)
-STALE_CLAIM_EXEMPT = re.compile(_QUOTING_A_RETIRED_VALUE, re.IGNORECASE)
+GLOSSARY_QUOTE_PHRASES = [
+    "promoted from", "previously read", "previously said",
+    "formerly read", "used to read",
+]
+STALE_CLAIM_PHRASES = [
+    "promoted from", "previously read", "previously said",
+    "formerly read", "used to read",
+]
+GLOSSARY_QUOTE_EXEMPT = re.compile("|".join(GLOSSARY_QUOTE_PHRASES),
+                                   re.IGNORECASE)
+STALE_CLAIM_EXEMPT = re.compile("|".join(STALE_CLAIM_PHRASES), re.IGNORECASE)
 
 # Declared, visible exemption for a region of the glossary. Unlike a waiver it
 # lives at the point of use, so a reader sees it -- but it is NOT self-

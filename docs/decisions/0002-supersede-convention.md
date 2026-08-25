@@ -200,9 +200,14 @@ shared a regex with the glossary's equivalent in
 `retired|no longer` — a change made for the glossary, with no thought of this
 check — **exempted 119 lines across 22 files from `stale-claim` in the same
 commit that introduced it**. Appending "the old walker is retired" to a line was
-enough to excuse a `NOT MERGED` sitting on it. The two escapes are now separate
-constants with identical contents, purely so that widening one cannot widen the
-other. If you are tempted to add a phrase, add it to one.
+enough to excuse a `NOT MERGED` sitting on it. The two escapes are now two separately
+written phrase lists with identical contents (`STALE_CLAIM_PHRASES` here,
+`GLOSSARY_QUOTE_PHRASES` for the glossary). The duplication is deliberate and
+must not be refactored away: a first attempt built both from one shared literal,
+which left the coupling exactly where it was under two new names. If you are
+tempted to add a phrase, add it to one list and decide about the other on
+purpose. `scripts/test-check-doc-facts.py` widens one list in a patched copy of
+the checker and asserts this check is unmoved.
 
 Note the shape of that failure, because it is the one this whole task keeps
 producing: a check written to close a hole, which opens a different one in the
