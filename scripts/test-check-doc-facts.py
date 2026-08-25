@@ -17,6 +17,7 @@ failure rather than a silent pass.
 
 """
 
+import collections
 import os
 import re
 import shutil
@@ -99,6 +100,24 @@ def build(tmp, registry=REGISTRY, glossary=GLOSSARY, simd=SIMD, extra=None):
     return tmp
 
 
+def patched_checker(dstdir, *subs):
+    """A copy of the checker with literal text substitutions applied.
+
+    Used to prove a decoupling claim: widen one constant and assert the other
+    check is unmoved. Asserting the two regexes merely *differ* would be a
+    weaker test -- they are identical today -- so the test widens one and looks
+    at behaviour instead.
+    """
+    text = open(CHECKER).read()
+    for old, new in subs:
+        if old not in text:
+            raise AssertionError("patch target not found: %r" % old)
+        text = text.replace(old, new, 1)
+    dst = os.path.join(dstdir, "patched.py")
+    open(dst, "w").write(text)
+    return dst
+
+
 def run(tmp, checker, *flags):
     p = subprocess.run([sys.executable, checker, "--root", tmp] + list(flags),
                        capture_output=True, text=True)
@@ -133,12 +152,14 @@ def _(tmp):
 # --------------------------------------------- #1 glossary-is-value-free
 
 
-@case("glossary carrying a CURRENT value fails", True)
+@case("glossary carrying a CURRENT value fails", True,
+      expect_check="glossary-is-value-free")
 def _(tmp):
     build(tmp, glossary=GLOSSARY + "\n- **X.** It is 520 bytes.\n")
 
 
-@case("glossary carrying a STALE value fails (the VFPUL/272 bug)", True)
+@case("glossary carrying a STALE value fails (the VFPUL/272 bug)", True,
+      expect_check="glossary-is-value-free")
 def _(tmp):
     # The exact reproduction from review: a value that matches no registry
     # pattern, because it is the *old* value. This passed before the fix.
@@ -146,18 +167,21 @@ def _(tmp):
           "\nThe per-task SIMD context image is **272 bytes**.\n")
 
 
-@case("glossary value is NOT excused by linking its owner", True)
+@case("glossary value is NOT excused by linking its owner", True,
+      expect_check="glossary-is-value-free")
 def _(tmp):
     build(tmp, glossary=GLOSSARY +
           "\n- **X.** It is 272 bytes, see [simd.md](simd.md).\n")
 
 
-@case("glossary bit position fails", True)
+@case("glossary bit position fails", True,
+      expect_check="glossary-is-value-free")
 def _(tmp):
     build(tmp, glossary=GLOSSARY + "\n- **SR.FD.** SR bit 15.\n")
 
 
-@case("glossary hex address fails", True)
+@case("glossary hex address fails", True,
+      expect_check="glossary-is-value-free")
 def _(tmp):
     build(tmp, glossary=GLOSSARY + "\n- **P4.** Region 0xE0000000.\n")
 
@@ -216,14 +240,16 @@ def _(tmp):
           "<!-- value-free: on -->\n")
 
 
-@case("unclosed fence fails rather than exempting the rest of the file", True)
+@case("unclosed fence fails rather than exempting the rest of the file", True,
+      expect_check="glossary-is-value-free")
 def _(tmp):
     build(tmp, registry=FENCE_REG,
           glossary=GLOSSARY + "\n<!-- value-free: off (tbl) -->\n"
                               "| J32 | 32-bit |\n")
 
 
-@case("fence does not leak past its close", True)
+@case("fence does not leak past its close", True,
+      expect_check="glossary-is-value-free")
 def _(tmp):
     build(tmp, registry=FENCE_REG,
           glossary=FENCED_GLOSSARY + "\n- **X.** It is 520 bytes.\n")
@@ -288,6 +314,35 @@ def _(tmp):
                                  "MERGED\".\n"})
 
 
+@case("widening the GLOSSARY escape does not widen stale-claim", True,
+      expect_check="stale-claim",
+      mutate=(('GLOSSARY_QUOTE_PHRASES = [\n    "promoted from"',
+               'GLOSSARY_QUOTE_PHRASES = [\n    "retired", "promoted from"'),))
+def _(tmp):
+    # The decoupling claim, tested as behaviour rather than as "the two regexes
+    # differ" -- they are identical today, so that assertion would pass for the
+    # wrong reason. Widen the glossary list only; stale-claim must be unmoved.
+    build(tmp, extra={"spec.md": "# S\n\nStatus: NOT MERGED. The old walker "
+                                 "is retired.\n"})
+
+
+@case("widening the GLOSSARY escape does widen the glossary check", False,
+      mutate=(('GLOSSARY_QUOTE_PHRASES = [\n    "promoted from"',
+               'GLOSSARY_QUOTE_PHRASES = [\n    "retired", "promoted from"'),))
+def _(tmp):
+    # The other half: the patch must actually take effect, or the test above
+    # would pass even if `mutate` silently did nothing.
+    build(tmp, glossary=GLOSSARY + "\n- **X.** 272 bytes; VFPUL is retired.\n")
+
+
+@case("widening the STALE-CLAIM escape does not widen the glossary check", True,
+      expect_check="glossary-is-value-free",
+      mutate=(('STALE_CLAIM_PHRASES = [\n    "promoted from"',
+               'STALE_CLAIM_PHRASES = [\n    "retired", "promoted from"'),))
+def _(tmp):
+    build(tmp, glossary=GLOSSARY + "\n- **X.** 272 bytes; VFPUL is retired.\n")
+
+
 # ------------------------------------------- #2 two markers on one line
 
 
@@ -299,12 +354,14 @@ TWO_MARKERS = """# Spec
 """
 
 
-@case("a bare marker beside a valid one is not hidden", True)
+@case("a bare marker beside a valid one is not hidden", True,
+      expect_check="marker-grammar")
 def _(tmp):
     build(tmp, extra={"spec.md": TWO_MARKERS})
 
 
-@case("a stale claim on a marker line is not hidden", True)
+@case("a stale claim on a marker line is not hidden", True,
+      expect_check="stale-claim")
 def _(tmp):
     build(tmp, extra={"spec.md":
         "# Spec\n\n> **HISTORICAL 2026-08-25.** Status: IMPLEMENTED but NOT MERGED.\n"})
@@ -319,7 +376,8 @@ WAIVED_REG = REGISTRY.replace(
     "| `legacy-marker` | [a.md](a.md) | legacy |\n")
 
 
-@case("legacy-marker waiver does not silence stale-claim", True)
+@case("legacy-marker waiver does not silence stale-claim", True,
+      expect_check="stale-claim")
 def _(tmp):
     build(tmp, registry=WAIVED_REG,
           extra={"a.md": "# A\n\n> **RESOLVED** legacy form.\n"
@@ -335,19 +393,22 @@ def _(tmp):
 # ----------------------------------------------- #4 registry fails closed
 
 
-@case("renamed Registry heading fails, does not silently disable", True)
+@case("renamed Registry heading fails, does not silently disable", True,
+      expect_check="registry")
 def _(tmp):
     build(tmp, registry=REGISTRY.replace("## Registry", "## Registry (seed)"))
 
 
-@case("empty Registry table fails", True)
+@case("empty Registry table fails", True,
+      expect_check="registry")
 def _(tmp):
     build(tmp, registry=REGISTRY.replace(
         "| `simd.context` | SIMD context image: **520 bytes** | "
         "[simd.md](simd.md) | `\\b520[- ]byte` |\n", ""))
 
 
-@case("row missing a cell fails, is not skipped", True)
+@case("row missing a cell fails, is not skipped", True,
+      expect_check="registry")
 def _(tmp):
     build(tmp, registry=REGISTRY.replace(
         "| `simd.context` | SIMD context image: **520 bytes** | "
@@ -355,17 +416,20 @@ def _(tmp):
         "| `simd.context` | SIMD context image | [simd.md](simd.md) |"))
 
 
-@case("missing Waivers heading fails", True)
+@case("missing Waivers heading fails", True,
+      expect_check="registry")
 def _(tmp):
     build(tmp, registry=REGISTRY.replace("## Waivers", "## Notes"))
 
 
-@case("uncompilable pattern fails instead of crashing", True)
+@case("uncompilable pattern fails instead of crashing", True,
+      expect_check="registry")
 def _(tmp):
     build(tmp, registry=REGISTRY.replace("`\\b520[- ]byte`", "`520[`"))
 
 
-@case("owner dropping its own value fails", True)
+@case("owner dropping its own value fails", True,
+      expect_check="owner-has-fact")
 def _(tmp):
     build(tmp, simd="# SIMD\n\nThe image is 999 bytes.\n")
 
@@ -389,6 +453,7 @@ def _(tmp):
 
 
 @case("a waiver that never fires fails under --check-waivers", True,
+      expect_check="check-waivers",
       flags=("--check-waivers",))
 def _(tmp):
     build(tmp, registry=WAIVED_REG, extra={"a.md": "# A\n\nNothing here.\n"})
@@ -408,12 +473,14 @@ def _(tmp):
     build(tmp, extra={"spec.md": PENDING})
 
 
-@case("unverifiable marker fails under --strict", True, flags=("--strict",))
+@case("unverifiable marker fails under --strict", True,
+      expect_check="resolved-is-merged", flags=("--strict",))
 def _(tmp):
     build(tmp, extra={"spec.md": PENDING})
 
 
-@case("PENDING-MERGE naming the wrong integration branch fails", True)
+@case("PENDING-MERGE naming the wrong integration branch fails", True,
+      expect_check="marker-grammar")
 def _(tmp):
     build(tmp, extra={"spec.md": PENDING.replace("Not on master.",
                                                  "Not on trunk.")})
@@ -431,7 +498,8 @@ def _(tmp):
         'mmu/tsb-hw-walker: "no such subject here". Not on master.**\n'})
 
 
-@case("marker naming an unknown repo fails", True)
+@case("marker naming an unknown repo fails", True,
+      expect_check="marker-grammar")
 def _(tmp):
     build(tmp, extra={"spec.md": PENDING.replace("jcore-cpu", "not-a-repo")})
 
@@ -439,7 +507,8 @@ def _(tmp):
 # ------------------------------------------------ decode / crash safety
 
 
-@case("a non-UTF-8 file fails cleanly instead of crashing", True)
+@case("a non-UTF-8 file fails cleanly instead of crashing", True,
+      expect_check="readable")
 def _(tmp):
     build(tmp)
     with open(os.path.join(tmp, "docs", "latin1.md"), "wb") as fh:
@@ -494,35 +563,65 @@ def main():
         checker = backport_root(old, os.path.join(shim_dir, "checker.py"))
         print("running against %s (via --root back-port)\n" % old)
 
-    passed = failed = 0
+    passed = failed = skipped = 0
+    caught_by = collections.Counter()
     try:
         for name, expect_fail, fn, kw in CASES:
             tmp = tempfile.mkdtemp(prefix="cdf-")
             try:
+                if kw.get("mutate") and checker != CHECKER:
+                    # The patch targets source that an older checker does not
+                    # contain. Running the case unmutated would score it for a
+                    # reason unrelated to what it tests, so say so instead.
+                    skipped += 1
+                    print("skip %s  [needs mutate; not applicable to "
+                          "--against]" % name)
+                    continue
                 fn(tmp)
-                rc, out = run(tmp, checker, *kw.get("flags", ()))
+                this = checker
+                if kw.get("mutate"):
+                    this = patched_checker(tmp, *kw["mutate"])
+                rc, out = run(tmp, this, *kw.get("flags", ()))
                 crashed = "Traceback" in out
                 want = kw.get("expect_check")
                 # argparse rejecting a flag is not a check firing.
                 argparse_error = rc == 2 and "unrecognized arguments" in out
-                right_check = (want is None
-                               or ("[%s]" % want) in out)
+                status_ok = (rc != 0) == expect_fail
+                right_check = (want is None or ("[%s]" % want) in out)
+                # `expect_check` is only *load-bearing* where exit status agrees
+                # and the check identity is what disagrees. Labelling a case
+                # "wrong check fired" when the exit status also mismatched
+                # credits expect_check with catches that exit status made on
+                # its own -- which is how a "6 of 11" figure got reported when
+                # the honest number was 1.
+                only_check = status_ok and expect_fail and not right_check
                 ok = ((not crashed) and (not argparse_error)
-                      and ((rc != 0) == expect_fail)
-                      and (right_check or not expect_fail))
+                      and status_ok and (right_check or not expect_fail))
                 if ok:
                     passed += 1
                     status = "pass"
                 else:
                     failed += 1
                     status = "FAIL"
+                    if crashed:
+                        caught_by["crash detection"] += 1
+                    elif argparse_error:
+                        caught_by["argparse guard"] += 1
+                    elif only_check:
+                        caught_by["expect_check"] += 1
+                    else:
+                        caught_by["exit status"] += 1
                 why = ""
                 if crashed:
                     why = "  [CRASH]"
                 elif argparse_error:
                     why = "  [argparse rejected a flag -- not a check]"
-                elif expect_fail and not right_check:
-                    why = "  [wrong check fired; wanted %s]" % want
+                elif only_check:
+                    why = "  [exit status agreed; WRONG CHECK fired, wanted %s]" % want
+                elif expect_fail and not status_ok:
+                    why = "  [exited 0; expected a failure]"
+                elif not expect_fail and not status_ok:
+                    why = "  [exited non-zero; expected a pass]"
                 print("%-4s %s%s" % (status, name, why))
                 if verbose or not ok:
                     for l in out.splitlines():
@@ -532,7 +631,14 @@ def main():
     finally:
         if shim_dir:
             shutil.rmtree(shim_dir, ignore_errors=True)
-    print("\n%d passed, %d failed" % (passed, failed))
+    print("\n%d passed, %d failed%s"
+          % (passed, failed,
+             ", %d not applicable" % skipped if skipped else ""))
+    if failed:
+        # Which assertion actually did the work. Printed so the attribution is
+        # computed rather than eyeballed off diagnostic labels.
+        for k, v in sorted(caught_by.items()):
+            print("    %-18s %d" % (k, v))
     return 1 if failed else 0
 
 
