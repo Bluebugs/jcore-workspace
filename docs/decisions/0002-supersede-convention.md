@@ -91,7 +91,16 @@ its repository's integration branch**:
 | `linux` | `jcore` |
 | `jcore-soc` | `master` |
 | `binutils-gdb` | `jcore` |
+| `gcc` | `master` |
+| `gcc-sh-monitor` | `master` |
+| `llvm-project` | `main` |
 | `jcore-workspace` (this repo) | `main` |
+
+**`INTEGRATION_BRANCH` in `scripts/check-doc-facts.py` is authoritative**; this
+table is the readable copy of it. A marker naming a repo absent from the dict
+fails `marker-grammar` rather than being assumed, so adding a submodule means
+adding a row there first. (The two copies had already drifted: this table
+omitted three of the repos the checker knew about.)
 
 Anything else — implemented, reviewed, approved, sitting in an open PR, sitting
 in a worktree — is **`PENDING-MERGE`**, and names the branch it is on.
@@ -123,7 +132,19 @@ exists only on `origin/mmu/encoding-realign-sh4a`, while the split itself is on
 > **RESOLVED <YYYY-MM-DD> — <repo>@<branch>: artifact `<path>`.**
 ```
 
-The checker verifies the path exists on `origin/<branch>`. Prefer this form over
+An optional ``containing `<symbol>` `` clause makes the citation say what the
+artifact must actually *contain*, which is the difference between "a file with
+this name exists" and "the change is in it":
+
+```markdown
+> **RESOLVED <YYYY-MM-DD> — <repo>@<branch>: artifact `<path>` containing `<symbol>`.**
+```
+
+The checker verifies the path exists on `origin/<branch>`, and that the symbol is
+in it, distinguishing "grep ran and found nothing" (a failure) from "grep could
+not run" (a skip). Those two used to collapse into one code path; the verdict was
+right for the wrong reason, and a genuine git error would have been reported as a
+missing symbol. Prefer this form over
 a weak subject citation: an artifact is *stronger* evidence than a subject line,
 because it is the thing itself rather than a claim about it. Prefer a naming
 subject over an artifact when one exists, because it also says *why*.
@@ -139,12 +160,19 @@ one direction or the other.
 ## Enforcement
 
 `scripts/check-doc-facts.py` (the same script that enforces
-[0001](0001-one-authority-per-fact.md)) implements three supersede checks. It
-resolves markers against the submodules' `origin/<integration-branch>` refs.
+[0001](0001-one-authority-per-fact.md)) implements the four supersede checks
+below. It resolves markers against the submodules'
+`origin/<integration-branch>` refs.
+
+**Every marker on a line is examined, not the first.** A line carrying a valid
+marker *and* a bare legacy one used to hide the second — which is precisely the
+shape §4 tells people to write when they promote something, so the blind spot sat
+exactly where the convention directs traffic. It also let a marker line carry an
+unchecked prose status claim.
 
 | Check | Failure | Notes |
 |---|---|---|
-| `marker-grammar` | A `SUPERSEDED BY` / `RESOLVED` / `PENDING-MERGE` / `HISTORICAL` marker that does not parse | Legacy unstructured markers are listed in the registry's waiver list and warn rather than fail; the list may only shrink |
+| `marker-grammar` | A marker keyword on a line that no `SUPERSEDED BY` / `RESOLVED` / `PENDING-MERGE` / `HISTORICAL` marker accounts for; also a `PENDING-MERGE` whose "Not on …" names the wrong integration branch, or any marker naming an unknown repo | Legacy unstructured markers are listed in the registry's waiver list under the `legacy-marker` ID and are **noted** (visible with `-v`), not warned; the list may only shrink |
 | `resolved-is-merged` | A `RESOLVED` marker whose quoted subject is **not** on `<repo>`'s integration branch, or whose cited artifact (or symbol within it) is not there | This is the check the task asks for, and it is mechanical. It catches both "resolved too early" and "cited a rebased-away commit" |
 | `pending-is-not-merged` | A `PENDING-MERGE` marker whose quoted subject **is** on the integration branch | Fails with "promote to RESOLVED" |
 | `stale-claim` | Any line asserting *not merged* in prose, outside the marker grammar | See below. This is the one that covers the notices that actually rotted |
@@ -166,9 +194,47 @@ note, so `stale-claim` stands down when the line also carries `promoted from`,
 the retired wording on the *same line* as the phrase that excuses it is
 deliberate: it means the excuse cannot drift away from the thing it excuses.
 
-Verification needs the submodule present with an `origin` remote fetched. When a
-submodule is absent the script **warns and skips**, and says which checks it
-could not run — it never reports a pass it did not perform.
+Waiver IDs are per **check**, not per file: `legacy-marker` and `stale-claim` are
+separate rows, so exempting a file from one does not exempt it from the other.
+They used to share a lookup, which gave `mmu/security-review.md` a blanket
+`stale-claim` exemption its waiver row never asked for.
+
+### Skips, and why CI must pass `--strict`
+
+Verification needs the submodule present with a fetched `origin`. When it is not,
+the affected check is reported as a **SKIP** naming what could not be verified.
+Without `--strict` a skip still exits 0.
+
+**That is a trap for CI and is called out here because it will bite otherwise.**
+A checkout without `submodules: recursive` skips *every* `RESOLVED` marker — 50
+of them at the time of writing — and reports success having verified none. So:
+
+> **B0c must run `scripts/check-doc-facts.py --strict --check-waivers` with the
+> submodules checked out and fetched.** Under `--strict` a skip is a failure, so
+> a submodule-less run fails loudly instead of passing vacuously.
+
+`--check-waivers` additionally fails on a waiver row that never fired, so the
+waiver list cannot outlive the restatements it covers.
+
+### What is convention here and not check
+
+Two requirements in §1 are **not** machine-checked, and are listed so nobody
+mistakes a green run for compliance with them:
+
+- **Marker position.** "First content of the section, before any prose" is a
+  convention. Determining a section's first content reliably means parsing
+  Markdown structure, which is more machinery than the rule is worth; review
+  catches it.
+- **Choosing `SUPERSEDED BY` vs `HISTORICAL` correctly.** Both parse. Whether the
+  text is *wrong* (supersede) or *accurate about a past state* (historical) is a
+  judgement no regex reaches.
+
+`Not on <branch>.` in a `PENDING-MERGE` marker **is** checked, and the named
+branch must be the repo's integration branch.
+
+One honest note on coverage: there are currently **zero** real `PENDING-MERGE`
+markers in the tree, so `pending-is-not-merged` and the branch-existence lookup
+have never run against live data. They are covered only by fixtures.
 
 ## Rejected alternatives
 

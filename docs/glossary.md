@@ -75,8 +75,20 @@ Family naming uses the convention: **J<width>[-<variant>]** where width is the i
 > [fgmt/mt2x2-plan.md §9 Q3](fgmt/mt2x2-plan.md), which records the choice as an
 > open decision rather than a settled fact. The column is left in place, rather
 > than guessed at, until Wave-2 task **B1** decides it; see
-> [fact-ownership.md](fact-ownership.md) §Unresolved. Every other column of this
-> table is naming, which this document does own.
+> [fact-ownership.md](fact-ownership.md) §Unresolved.
+>
+> **The `Addr width` column is fenced out of `glossary-is-value-free`.** "J*N*"
+> *is* the width by the naming convention above, so that column's entry on a
+> J*N* row is self-referential naming rather than a borrowed constant — but the
+> parenthesised **VA** width on the J64 row is an MMU fact this document does
+> not own, and a regex cannot tell the two apart. The fence is declared here
+> rather than hidden in a waiver so a
+> reader sees it, and it is registered in
+> [fact-ownership.md](fact-ownership.md) §Waivers so it gets burnt down. Wave-2
+> **B1** should split the column: keep the naming width, move the VA width to
+> the MMU spec, and delete the fence.
+
+<!-- value-free: off -->
 
 | Name        | ISA baseline                              | MMU                | FPU tier              | SIMD tier      | OoO | Threading   | Addr width | Endianness | Status        |
 |-------------|-------------------------------------------|--------------------|-----------------------|----------------|-----|-------------|------------|------------|---------------|
@@ -88,6 +100,8 @@ Family naming uses the convention: **J<width>[-<variant>]** where width is the i
 | **J32-LT**  | J32 + 2-wide light OoO (no rename)        | yes                | Tier 1                | Tier 0+1       | light | FGMT 4-way (barrel) | 32-bit | little   | spec'd        |
 | **J32-FM**  | J32-OOO + full memory subsystem (L2 v2)   | yes                | Tier 1+2 (hyp-aware)  | Tier 0+1+2     | yes | FGMT 2-way  | 32-bit     | little     | target        |
 | **J64**     | J32-FM + 64-bit integer regs + COMPAT     | yes (48-bit VA)    | Tier 1+2              | Tier 0+1+2+3   | yes | FGMT 2-way  | 64-bit     | little     | research      |
+
+<!-- value-free: on -->
 
 Notes:
 - "Tier 0/1/2/3" refer to FPU and SIMD spec tiers; see those specs for tier contents.
@@ -126,8 +140,8 @@ A *thread context* is a complete architectural register set (R0–R15, SR, GBR, 
 - **ASIDR — Address Space Identifier Register.** New dedicated control register holding the current `ASID_TAG`. Written by the kernel at context switch (`LDC Rn, ASIDR`). Hardware reads it on every TLB lookup and on LDTLB. *Width, layout, the read alias, and per-thread-context replication: [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md).*
 - **VMID — Virtual Machine Identifier.** Reserved in earlier MMU/IOMMU drafts; **removed from the hardware spec** (this project achieves hypervisor isolation via ASID partitioning, see hypervisor docs). Do not introduce VMID in new specs.
 - **BMID — Bus Master Identifier.** Tag attached to every bus transaction by the fabric, identifying the initiating master (CPU core, DMA engine, peripheral). Used by the IOMMU to look up the correct page table. Set by the bus fabric at the master port; not software-writable from the initiator. The authoritative definition — assignment policy, immutability guarantee, reserved values, partitioning for hypervisor guests — lives in [bus/fabric-spec.md §4](bus/fabric-spec.md). Prior art: ARM AMBA AXI `AxID` (≤2003); PCI Requester ID (PCI 2.0, 1993).
-- **P4.** The SH-4 architectural privileged-MMIO region (`0xE0000000`–`0xFFFFFFFF`). All on-chip control registers live here. Within P4, the quarter `0xE0000000`–`0xEFFFFFFF` is allocated to the **Store Queue (SQ)** (see **Store Queue** below), of which only `0xE0000000`–`0xE3FFFFFF` is actually SQ-decoded ([sq/spec.md §2](sq/spec.md)); `0xE4000000`–`0xEFFFFFFF` is reserved. The decoded range is *not* MMIO in the ordinary sense, and it is the exact extent of the guest-mode P4 trap carve-out ([hypervisor/hardware-spec.md §4.4.3](hypervisor/hardware-spec.md)) — everything else in P4, reserved SQ range included, traps for a guest. Allocation is governed by the canonical [soc/p4-mmio-map.md](soc/p4-mmio-map.md). Prior art: SH-4 hardware manual (Renesas, 1998).
-- **Store Queue (SQ).** Two 32-byte write-combining buffers at `0xE0000000` and `0xE0000020`, drained by `PREF` into a physical address formed from `QACR0`/`QACR1`. The primary bulk-store path on SH-4 systems. Allocation governed by [sq/spec.md](sq/spec.md). Prior art: SH-4 hardware manual (Renesas, 1998).
+- **P4.** The SH-4 architectural privileged-MMIO region. All on-chip control registers live here. Its lowest quarter is allocated to the **Store Queue (SQ)** (see below), of which only the low part is actually SQ-decoded ([sq/spec.md §2](sq/spec.md)); the remainder of that quarter is reserved. The decoded range is *not* MMIO in the ordinary sense, and it is the exact extent of the guest-mode P4 trap carve-out ([hypervisor/hardware-spec.md §4.4.3](hypervisor/hardware-spec.md)) — everything else in P4, reserved SQ range included, traps for a guest. *Region bounds and every register offset within P4 are governed by the canonical [soc/p4-mmio-map.md](soc/p4-mmio-map.md).* Prior art: SH-4 hardware manual (Renesas, 1998).
+- **Store Queue (SQ).** A pair of write-combining buffers at the base of P4, drained by `PREF` into a physical address formed from `QACR0`/`QACR1`. The primary bulk-store path on SH-4 systems. *Buffer count, buffer size and addresses: [sq/spec.md §2](sq/spec.md).* Prior art: SH-4 hardware manual (Renesas, 1998).
 - **Emulation aperture.** A physical-address window (`HEMUB`/`HEMUM`) tested *after* TLB translation; a guest access resolving into it raises an emulated-MMIO trap to the hypervisor instead of reaching the bus. Replaces a per-PTE "emulated" bit, which the J-Core PTE has no room for. Prior art: IBM S/370 storage keys (1970) as the nearest pre-2006 physical-address-indexed access-control test.
 - **Complete-on-resume.** The J-Core emulated-MMIO trap model: hardware latches the faulting access's address, size, direction, and destination register, and performs the register writeback when the hypervisor executes `HRTE`. The hypervisor never decodes the faulting instruction. Prior art: IBM SIE interception controls (1980/1983).
 - **Generation counter.** **Retired 2026-08-25** — the kernel no longer carries a generation discriminator in `ASID_TAG`; see [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md) and [mmu/design-spec.md §3.5](mmu/design-spec.md) for the supersede note and the merged commit. The entry formerly read: *"Top 4 bits of `ASID_TAG`; incremented on full-ASID-space wraparound to logically invalidate stale TLB entries without a full flush."* Prior art, retained for the idea: MIPS R4000 ASID generation scheme (1991); Linux mm/context.c circa 2.4 (2001).
