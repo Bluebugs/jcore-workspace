@@ -151,6 +151,20 @@ A) and measurement work (Track D) are exempt.
 ### B0. Stand up the documentation system (do this first — it's the cheapest
 high-leverage fix)
 
+> **B0a — DONE (2026-08-25).** Both bullets below are decided and landed on
+> `wave1/foundations`. Decision: **demote the glossary** —
+> [decisions/0001](decisions/0001-one-authority-per-fact.md), registry at
+> [fact-ownership.md](fact-ownership.md). Supersede convention:
+> [decisions/0002](decisions/0002-supersede-convention.md). Both are enforced by
+> `scripts/check-doc-facts.py`, which still needs wiring into CI by **B0c** (this
+> superproject has no workflow file yet).
+>
+> One correction to the text below, recorded rather than silently fixed: **there
+> is no "hypervisor §2.11".** No hypervisor spec has a §2.11. The single-vector
+> text is in `hypervisor/hardware-spec.md` **§4.2** (and its §2.3.1 table); §2.11
+> belongs to `mmu/hardware-spec.md` (MMUFSR). Headers were applied to the real
+> sections.
+
 - **One authority per fact.** The `glossary.md` claims to be authoritative but is
   itself stale (VFPUL, 272-byte SIMD context, endianness). Either make it truly
   authoritative by fixing it and *deriving* the specs' repeated constants from

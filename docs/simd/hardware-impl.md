@@ -56,7 +56,7 @@ For each governed instruction, the EX stage is extended into **VLEN/32 sequentia
 
 A wider ALU (e.g. a 64-bit or 128-bit SIMD datapath) reduces the beat count proportionally (VLEN/64, VLEN/128).
 
-Carry chains are broken at lane boundaries within each beat using AND gates on the carry-out of each *w*-bit segment. The horizontal-mode reduction sums into an internal 64-bit accumulator that is written back to MACL/MACH (integer) or FR0/DR0 (FP) at WB — the FP writeback reuses the FPU's existing FR/DR write ports (spec.md §2.3; VFPUL retired).
+Carry chains are broken at lane boundaries within each beat using AND gates on the carry-out of each *w*-bit segment. The horizontal-mode reduction sums into an internal 64-bit accumulator that is written back to MACL/MACH (integer) or FR0/DR0 (FP) at WB — the FP writeback reuses the FPU's existing FR/DR write ports ([spec.md §2.3](spec.md); VFPUL retired).
 
 Adjacent governed instructions may interleave their beats provided source/destination conflicts are honoured. On a single-ALU J32 implementation, beats are sequential. On a dual-issue J32-OOO ([../ooo/j32ooo-spec.md](../ooo/j32ooo-spec.md)), a second ALU may consume beats in parallel for distinct lane subsets, halving the per-instruction beat count.
 

@@ -1,0 +1,43 @@
+# Decision records
+
+**This directory is new (created 2026-08-25 by Wave-1 task B0a).** Before it, the
+workspace had no decision-record convention. It had a *practice*, which is
+different and which stays: a decision about a subsystem is written **inline, in
+the spec that owns the subsystem**, together with the alternative it rejected.
+Two worked examples of that practice, both good, both retained:
+
+- [priv-arch/design-spec.md §4.5](../priv-arch/design-spec.md) — "**Decision
+  (RESOLVED — collision closed)**" followed by "**Superseded proposal (recorded,
+  not silently dropped)**".
+- [soc/p4-mmio-map.md §7](../soc/p4-mmio-map.md) — "**Three-way conflict at
+  `0x020`/`0x024`/`0x028` — RESOLVED**".
+
+**The rule: a decision goes inline in its owning spec whenever there is one.**
+This directory exists only for decisions that have *no* owning spec — decisions
+about the documentation system itself, about cross-cutting process, or about
+which document owns what. Putting those inline would require choosing a host
+spec arbitrarily, and an arbitrarily-hosted rule is a rule nobody knows to read.
+
+## Format
+
+One file per decision, `NNNN-kebab-case-title.md`, numbered in landing order.
+Each record carries, in this order:
+
+1. **Status** — `Accepted` / `Superseded by NNNN` / `Withdrawn`, and a date.
+2. **Context** — what forced the decision, with evidence. Claims about the tree
+   are verified against the tree, not remembered.
+3. **Decision** — the thing decided, stated so it can be complied with.
+4. **Enforcement** — the mechanical check that makes it true. A decision with no
+   enforcement is a preference, and this project has already paid for the
+   difference; see [0001](0001-one-authority-per-fact.md) §Context.
+5. **Rejected alternatives** — recorded, not silently dropped, with the argument
+   that killed each.
+6. **What would reopen this** — the trigger to revisit, per the remediation
+   plan's guiding principle 4 ("this plan is a hypothesis tree").
+
+## Index
+
+| # | Title | Status |
+|---|---|---|
+| [0001](0001-one-authority-per-fact.md) | One authority per fact; the glossary is an index, not an authority | Accepted 2026-08-25 |
+| [0002](0002-supersede-convention.md) | Supersede, RESOLVED and PENDING-MERGE headers | Accepted 2026-08-25 |

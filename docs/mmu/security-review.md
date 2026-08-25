@@ -1,5 +1,45 @@
 # J-core J4 MMU — Multi-Tenant Security Review
 
+> **SUPERSEDED BY [Wave-1 task C0, the threat-model rewrite](../j4-execution-plan.md) — 2026-08-25.**
+> This document's §0 and §1 reason from a premise that is no longer true: *"the
+> walker is software"*, *"There is no hardware walker whose page-table-cache
+> footprint can be timed"*. **The TLB is installed by hardware.** Read §2–§5 for
+> the finding-by-finding record, which is still substantially accurate; do not
+> rely on §0's verdict or §1's applicability matrix.
+>
+> **What changed, and where it is merged.**
+> **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer".**
+> The companion kernel change is
+> **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: stop installing TLB entries from software".**
+> A TLB miss is now serviced by an RTL FSM (`core/tlb_walk.vhd`, `tsb_ways => 2`)
+> that probes the TSB over the memory system and installs the entry with no
+> exception at all. Software reaches `VBR + 0x400` ([hardware-spec.md §5.0, §7.0](hardware-spec.md))
+> only when that walk fails, and then walks the page tables to fill the TSB.
+>
+> **Why this is a security change and not a wording change.** Three of §1's
+> verdicts rested on the absent walker and must be re-derived, not patched:
+>
+> - **AnC / ASLR⊕Cache is rated "NO — no hardware walker, no page-table caches".**
+>   There is now a hardware walker, and its TSB reads go through the cache
+>   hierarchy — deliberately, see jcore-cpu@master
+>   *"fix(mmu): pin walker TSB cacheability to the walker's own address"*. Whether
+>   AnC's specific requirement (a *page-table* walk whose cache footprint is
+>   attacker-observable) is met by a *TSB* walk is exactly the question C0 must
+>   answer. The old answer was "the premise cannot arise"; that is no longer
+>   available.
+> - **"Software miss-handler timing is a J4-specific surface"** (TLB row) now
+>   describes only the slow path. The fast path's timing is hardware and
+>   data-dependent on TSB way hit/miss (3 reads for way 0, 5 for way 1, 4 for a
+>   both-ways miss — [hardware-spec.md §7.0](hardware-spec.md)).
+> - **The "Software-TLB-specific" family** (LDTLB non-atomicity, PTE-read→install
+>   TOCTOU) is re-scoped: the hardware install is atomic, but the TSB *fill* is
+>   still software, and its store order is now load-bearing
+>   ([hardware-spec.md §7.0](hardware-spec.md), "TSB store order").
+>
+> Also note that §2's threat model was written against a single-tenant,
+> trusted-kernel assumption. C0's adversary is a **guest kernel on a shared
+> core**, which is a different document, not an edit to this one.
+
 **Date:** 2026-06-27 · **Scope:** the SH-4-class J4 MMU (software-loaded TLB, ASID isolation, SH-4 privileged architecture, VIPT→PIPT L1 caches) as a multi-tenant isolation boundary. Covers (1) the modern MMU/TLB/cache attack landscape and its applicability to this design, (2) a security review of the specification, (3) a security review of the RTL implementation, and (4) verification that design, implementation, and **tests** line up — with the concrete test/hardening gaps.
 
 ---
@@ -50,7 +90,7 @@ The spec gets the *plumbing* right (all MMU registers/instructions privileged; A
 | S-C3 | Critical | No threat model / isolation-guarantee section anywhere. | No yardstick to tell a bug from intended behavior; side-channel posture undefined. | Add threat model: TCB = kernel; adversary = unprivileged tenant; guaranteed properties + explicit non-guarantees (timing channels, DMA/IOMMU, Rowhammer). – Resolved by SP0 (2026-07-10) |
 | S-I1 | Important | `LDTLB.R` (spec, "has a delay slot") vs `LDTLB.RN` (decode TOML, opcode 0x0078, "NO delay slot"). | A handler written to the spec's delay-slot framing silently mis-executes on the no-delay-slot impl. | Reconcile to one name/semantics across all docs + TOML (impl is authoritative: no delay slot). – Resolved by SP0 (2026-07-10) |
 | S-I2 | Important | `design-spec §4.1/§4.3` says the ASID is compared against **PTEH**; architecture/RTL compare **ASIDR**. | If implemented per design-spec, the context tag would change every miss → ASID isolation broken. (Our RTL correctly uses ASIDR.) | Correct design-spec to `ASIDR`. – Resolved by SP0 (2026-07-10) |
-| S-I3 | Important | Stale-TSB rejection relies on a **4-bit** generation discriminator; spec claims entries are "naturally rejected." | After 16 ASID-generation wraps, a stale TSB slot can false-hit and be installed → cross-tenant translation. | **RESOLVED** (2026-07-17, linux@jcore mmu/asid-generation): generation is threaded into `ASID_TAG` by `set_asid()`; kernel rebuilds TSB on `gen_low` wrap via `jcore_tsb_flush_on_generation()`, ensuring stale-TSB rejection is a real generation-tagged guarantee (exact for single-core; on SMP the TSB-zero-on-wrap follows `local_flush_tlb_all`'s local-only scope, revisited when jcore MMU-SMP lands). |
+| S-I3 | Important | Stale-TSB rejection relies on a **4-bit** generation discriminator; spec claims entries are "naturally rejected." | After 16 ASID-generation wraps, a stale TSB slot can false-hit and be installed → cross-tenant translation. | **RESOLVED** (2026-07-17, linux@jcore mmu/asid-generation): generation is threaded into `ASID_TAG` by `set_asid()`; kernel rebuilds TSB on `gen_low` wrap via `jcore_tsb_flush_on_generation()`, ensuring stale-TSB rejection is a real generation-tagged guarantee (exact for single-core; on SMP the TSB-zero-on-wrap follows `local_flush_tlb_all`'s local-only scope, revisited when jcore MMU-SMP lands). **The resolution above has itself been superseded — 2026-08-25.** The generation nibble no longer exists: **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: retire the ASID generation nibble"** deleted `ASID_TAG[15:12]`, `jcore_tsb_flush_on_generation()` and its stub, on the grounds that `local_flush_tlb_all()` already zeroes the TSB on *every* version wrap and per-CPU TSBs removed the cross-CPU sharing the nibble protected. `ASID_TAG` stays 16 bits in RTL with the top nibble always zero. The **finding** S-I3 is therefore closed by a different mechanism than the one recorded here; C0 must re-derive it rather than inherit this row. |
 | S-I4 | Important | No hardware double-fault protection; re-entry gated on `SR.RB`, fault-while-RB=1 silently overwrites SPC/SSR. | No hardware backstop; a handler-path fault corrupts saved context rather than trapping. | **RESOLVED** — any exception taken while RB=1 (exception context live) is redirected to the defined register-model-free Reset-CPU entry instead of clobbering SPC/SSR. Design note: jcore has SR.BL and sets it on entry, but the SW-TLB handlers are non-reentrant by design (they run untranslated in P1 and TLB faults are suppressed at RB=1 — proven by `mmunest.S`), so RB=1 is the "in a handler / blocked" indicator and "any exception while RB=1 → reset" is the correct policy; adopting full SH-4 `SR.BL` reentrancy is a documented, deferred future option. **Part 1** (2026-07-17): async Interrupt/Error + nested General-Illegal, via a synthesized RESET_CPU on cpu.vhd's `g_dblflt` at the illegal_instr/event *dispatch* point (guard `mmudblflt.S`); RB=1⇒MD=1 assertion added. **Part 2 / S-I4b** (2026-07-18): the two residuals — a nested **TRAPA** and a **Slot-Illegal in a delay slot** — extend the *same dispatch point* (key insight: the double-fault must be injected at the exception-dispatch decision, not at the downstream SSR-save where the harm lands — by then `next_op` has already committed to the handler vector). Fix: `g_dblflt` adds a TRAPA-opcode term (`if_dr(15:8)=0xC3`, since TRAPA is a normal_op invisible to `illegal_instr`); `decode_core.vhm` adds a highest-priority `next_op` arm that accepts an injected RESET_CPU even in a delay slot (MMU_ARCH-gated → j1/j2 byte-identical). Guards `mmunest_trapa.S` + `mmunest_slotill.S` (both RED on base, GREEN after). |
 | S-I5 | Important | Multiple-TLB-match -> "behavior undefined," no hardware guard. | A duplicate-entry kernel bug yields undefined PA selection (possibly another tenant's frame). | **RESOLVED** (2026-07-18, jcore-cpu mmu/hardening-si457): LDTLB now **dedups** on install (reuses the matching VPN+ASID slot in place, SH-4 replace semantics), so a benign re-install of a resident page -- e.g. a Linux permission/dirty-bit upgrade on a write fault -- can never manufacture a duplicate; any residual multiple-match (reachable only via page-size aliasing) is detected (sticky flag over the 32-entry scan) and dispatched to the defined non-recoverable General-Illegal exception (EXPEVT=0x180), never a silent PA pick. Guard mmumultihit.S (dedup + aliasing multi-hit). |
 | S-I6 | Important | Accessed/Referenced bit used by the C-walker and NRU is **undefined** in the PTEL layout. | Undefined bit could collide with a permission bit; NRU keyed on an unspecified bit is divergent. | Allocate/document the Accessed bit; reconcile the flag lists. – Resolved by SP0 (2026-07-10) |

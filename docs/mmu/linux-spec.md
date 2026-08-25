@@ -248,10 +248,18 @@ Consequences for the `pgtable.h` plumbing:
 ## 4. TLB Miss Handler
 
 > **Amendment — hardware TSB walker ([hardware-spec.md §5.0](hardware-spec.md)).**
-> *(Implementation status: **DONE**. `linux@jcore` `a9417bda9766`; `jcore-cpu`
-> branch `mmu/tsb-hw-walker` `09304a3`/`957e940`; MMU guard suite 98 PASS /
-> 0 FAIL. Not merged to master.)* **§4.1 below is HISTORICAL** — read it for
-> what the walker replaced, not for what the kernel runs.
+> **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: retire inlined TLB fast path and STC ASIDR/TSBPTR reads".**
+> Companion RTL:
+> **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer".**
+> **§4.1 below is HISTORICAL** — read it for what the walker replaced, not for
+> what the kernel runs.
+>
+> *(This block previously read "Not merged to master" and cited `jcore-cpu`
+> `09304a3`/`957e940` plus a "98 PASS / 0 FAIL" tally. Checked 2026-08-25:
+> **neither SHA is an ancestor of `jcore-cpu` `origin/master`** — the branch was
+> rebased before merge. The tally has been dropped rather than restated, because
+> it names no base and this task did not re-run the suite; see
+> [../decisions/0002 §3](../decisions/0002-supersede-convention.md).)*
 >
 > **§4.1's assembly hot path is deleted.** The nine-instruction TSB probe is
 > hardware now. `VBR + 0x400` is reached only on a walk failure, and its
@@ -288,8 +296,12 @@ Consequences for the `pgtable.h` plumbing:
 > ordinary process context, outside any exception, where its `SR ← SSR`
 > is not obviously correct. Likely should be plain `LDTLB`.
 >
-> **Phase 2 — status: IMPLEMENTED on `linux@jcore` branch `mmu/tsb-phase2`
-> and `jcore-cpu` branch `mmu/tsb-hw-walker`, NOT MERGED.** See §4.3 below for
+> **Phase 2 —
+> RESOLVED 2026-08-25 — linux@jcore: "Merge pull request #10 from mountain-reverie/mmu/tsb-phase2".**
+> Companion RTL:
+> **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer".**
+> *(Promoted from "IMPLEMENTED on … NOT MERGED"; neither branch exists on
+> `origin` any more.)* See §4.3 below for
 > the fill contract this establishes. In one line: the TSB is 2-way with
 > 32-byte sets, `TSBPTR` and the new `TSBSLOT` register both present a **set**
 > address, `jcore_tsb_slot_offset()` is **deleted**, and every TSB entry write
@@ -467,8 +479,9 @@ For J64, the walker grows additional levels (P4D, PUD already). Compile-time lev
 
 ### 4.3 The TSB fill contract (Phase 2)
 
-> **Status: IMPLEMENTED on `linux@jcore` branch `mmu/tsb-phase2` and
-> `jcore-cpu` branch `mmu/tsb-hw-walker`, NOT MERGED.** The code listings in
+> **RESOLVED 2026-08-25 — linux@jcore: "Merge pull request #10 from mountain-reverie/mmu/tsb-phase2".**
+> *(Promoted from "IMPLEMENTED on `linux@jcore` branch `mmu/tsb-phase2` and
+> `jcore-cpu` branch `mmu/tsb-hw-walker`, NOT MERGED".)* The code listings in
 > §4.1/§4.2 above still show the pre-Phase-2 shape; this subsection is
 > normative where they disagree.
 
