@@ -2,7 +2,30 @@
 
 **Status:** Living document. Update before introducing a new product point, threading mode, or memory term anywhere else in the docs.
 
-**Audience:** Anyone reading the design docs in this workspace. This document is the single source of truth for naming. If another doc disagrees with this one, this one wins and the other doc is wrong.
+**Audience:** Anyone reading the design docs in this workspace.
+
+> **What this document is, and what it is not — changed 2026-08-25 by
+> [decisions/0001](decisions/0001-one-authority-per-fact.md).**
+>
+> This is a **glossary**: it defines terms and names the spec that owns each one.
+> It is authoritative on **naming** — if another doc uses a different word for the
+> same thing, this document wins and the other doc is wrong.
+>
+> It is **not** authoritative on **values**. It carries no normative number, bit
+> position, address, or encoding; where a term has one, the entry links to the
+> owning spec and stops. If a value appears to be stated here anyway, the owning
+> spec wins.
+>
+> This is a demotion from an earlier claim to be "the single source of truth",
+> and it was made because that claim was false. For five weeks this file
+> described a live `VFPUL` register and a 272-byte SIMD context image, after [simd/spec.md](simd/spec.md) had retired the one and changed the other;
+> and it tabulated a little-endian J2 that ships big-endian.
+> The argument, and the alternative that was rejected, are in
+> [decisions/0001](decisions/0001-one-authority-per-fact.md).
+>
+> **To look up a value, start at [fact-ownership.md](fact-ownership.md)**, which
+> maps each normative constant to its one owning document and section, and is
+> checked by `scripts/check-doc-facts.py`.
 
 ---
 
@@ -45,6 +68,15 @@ Neither this section nor the specs that cite it constitute legal advice or a fre
 ## 3. Product points (CPU/SoC variants)
 
 Family naming uses the convention: **J<width>[-<variant>]** where width is the integer-register width.
+
+> **The `Endianness` column is NOT normative — 2026-08-25.** It reads "little"
+> for every row, and that is contradicted by the shipping J2 toolchain target
+> `sh2eb-linux-muslfdpic` (big-endian) and by
+> [fgmt/mt2x2-plan.md §9 Q3](fgmt/mt2x2-plan.md), which records the choice as an
+> open decision rather than a settled fact. The column is left in place, rather
+> than guessed at, until Wave-2 task **B1** decides it; see
+> [fact-ownership.md](fact-ownership.md) §Unresolved. Every other column of this
+> table is naming, which this document does own.
 
 | Name        | ISA baseline                              | MMU                | FPU tier              | SIMD tier      | OoO | Threading   | Addr width | Endianness | Status        |
 |-------------|-------------------------------------------|--------------------|-----------------------|----------------|-----|-------------|------------|------------|---------------|
@@ -89,20 +121,19 @@ A *thread context* is a complete architectural register set (R0–R15, SR, GBR, 
 
 ## 5. Memory and address-space terms
 
-- **ASID — Address Space Identifier.** Identifies which page-table tree an address belongs to. **Width: 12 bits** (4096 ASIDs). Stored (per-CPU current) in the dedicated **ASIDR** register and in each TLB entry's tag, combined with a 4-bit generation counter into a single 16-bit `ASID_TAG` (see next entry). Prior art: SH-4 hardware manual (Renesas, pre-2006); MIPS R4000 user manual (1991).
-- **ASID_TAG.** The full per-TLB-entry identifier compared on every translation: low 12 bits are the ASID proper, top 4 bits are the generation discriminator (lets recycled ASIDs be distinguished in the TLB after rollover without a full flush — Linux mm/context.c pattern, pre-2006). Total field width: **16 bits**. Held in the dedicated **ASIDR** register (LDC/STC-only — no P4 MMIO address, see [soc/p4-mmio-map.md §3.2](soc/p4-mmio-map.md); `0xFF000024` is **EXPEVT**), separate from PTEH — modeled on UltraSPARC `PRIMARY_CONTEXT` (sun4u, 1995). The split keeps the full SH-4-plus-PageMask page-size range (4 KB through 1 GB) available even with the wider 16-bit ASID_TAG; PTEH stays VPN-only. The total ASID space available for hypervisor partitioning is **4096** (12-bit ASID); the generation discriminator does not enlarge the ASID space, only the TLB-distinguishability of recycled values.
-- **ASIDR — Address Space Identifier Register.** New dedicated control register holding the current 16-bit `ASID_TAG`. Written by the kernel at context switch (`LDC Rn, ASIDR`). Hardware reads it on every TLB lookup and on LDTLB. See [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md).
+- **ASID — Address Space Identifier.** Identifies which page-table tree an address belongs to. Stored (per-CPU current) in the dedicated **ASIDR** register and in each TLB entry's tag, as part of the composite `ASID_TAG` (see next entry). *Widths and the ASID space available for hypervisor partitioning: [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md).* Prior art: SH-4 hardware manual (Renesas, pre-2006); MIPS R4000 user manual (1991).
+- **ASID_TAG.** The full per-TLB-entry identifier compared on every translation. The low bits are the ASID proper; the top bits **used to be** a generation discriminator and are now always zero (retired 2026-08-25 — see [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md)). Held in the dedicated **ASIDR** register, separate from PTEH — modeled on UltraSPARC `PRIMARY_CONTEXT` (sun4u, 1995). The split keeps the full SH-4-plus-PageMask page-size range available even with the wider tag; PTEH stays VPN-only. *Field widths: [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md). Whether ASIDR has a P4 MMIO alias, and at what address: [soc/p4-mmio-map.md §3.2](soc/p4-mmio-map.md).*
+- **ASIDR — Address Space Identifier Register.** New dedicated control register holding the current `ASID_TAG`. Written by the kernel at context switch (`LDC Rn, ASIDR`). Hardware reads it on every TLB lookup and on LDTLB. *Width, layout, the read alias, and per-thread-context replication: [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md).*
 - **VMID — Virtual Machine Identifier.** Reserved in earlier MMU/IOMMU drafts; **removed from the hardware spec** (this project achieves hypervisor isolation via ASID partitioning, see hypervisor docs). Do not introduce VMID in new specs.
-- **BMID — Bus Master Identifier.** Tag attached to every bus transaction by the fabric, identifying the initiating master (CPU core, DMA engine, peripheral). Used by the IOMMU to look up the correct page table. Set by the bus fabric at the master port; not software-writable from the initiator. **Width: 8 bits**, with `0x00` and `0xFF` reserved. The authoritative definition — assignment policy, immutability guarantee, reserved values, partitioning for hypervisor guests — lives in [bus/fabric-spec.md §4](bus/fabric-spec.md). Prior art: ARM AMBA AXI `AxID` (≤2003); PCI Requester ID (PCI 2.0, 1993).
+- **BMID — Bus Master Identifier.** Tag attached to every bus transaction by the fabric, identifying the initiating master (CPU core, DMA engine, peripheral). Used by the IOMMU to look up the correct page table. Set by the bus fabric at the master port; not software-writable from the initiator. The authoritative definition — assignment policy, immutability guarantee, reserved values, partitioning for hypervisor guests — lives in [bus/fabric-spec.md §4](bus/fabric-spec.md). Prior art: ARM AMBA AXI `AxID` (≤2003); PCI Requester ID (PCI 2.0, 1993).
 - **P4.** The SH-4 architectural privileged-MMIO region (`0xE0000000`–`0xFFFFFFFF`). All on-chip control registers live here. Within P4, the quarter `0xE0000000`–`0xEFFFFFFF` is allocated to the **Store Queue (SQ)** (see **Store Queue** below), of which only `0xE0000000`–`0xE3FFFFFF` is actually SQ-decoded ([sq/spec.md §2](sq/spec.md)); `0xE4000000`–`0xEFFFFFFF` is reserved. The decoded range is *not* MMIO in the ordinary sense, and it is the exact extent of the guest-mode P4 trap carve-out ([hypervisor/hardware-spec.md §4.4.3](hypervisor/hardware-spec.md)) — everything else in P4, reserved SQ range included, traps for a guest. Allocation is governed by the canonical [soc/p4-mmio-map.md](soc/p4-mmio-map.md). Prior art: SH-4 hardware manual (Renesas, 1998).
 - **Store Queue (SQ).** Two 32-byte write-combining buffers at `0xE0000000` and `0xE0000020`, drained by `PREF` into a physical address formed from `QACR0`/`QACR1`. The primary bulk-store path on SH-4 systems. Allocation governed by [sq/spec.md](sq/spec.md). Prior art: SH-4 hardware manual (Renesas, 1998).
 - **Emulation aperture.** A physical-address window (`HEMUB`/`HEMUM`) tested *after* TLB translation; a guest access resolving into it raises an emulated-MMIO trap to the hypervisor instead of reaching the bus. Replaces a per-PTE "emulated" bit, which the J-Core PTE has no room for. Prior art: IBM S/370 storage keys (1970) as the nearest pre-2006 physical-address-indexed access-control test.
 - **Complete-on-resume.** The J-Core emulated-MMIO trap model: hardware latches the faulting access's address, size, direction, and destination register, and performs the register writeback when the hypervisor executes `HRTE`. The hypervisor never decodes the faulting instruction. Prior art: IBM SIE interception controls (1980/1983).
-- **Generation counter.** Top 4 bits of `ASID_TAG`; incremented on full-ASID-space wraparound to logically invalidate stale TLB entries without a full flush. Prior art: MIPS R4000 ASID generation scheme (1991); Linux mm/context.c circa 2.4 (2001).
+- **Generation counter.** **Retired 2026-08-25** — the kernel no longer carries a generation discriminator in `ASID_TAG`; see [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md) and [mmu/design-spec.md §3.5](mmu/design-spec.md) for the supersede note and the merged commit. The entry formerly read: *"Top 4 bits of `ASID_TAG`; incremented on full-ASID-space wraparound to logically invalidate stale TLB entries without a full flush."* Prior art, retained for the idea: MIPS R4000 ASID generation scheme (1991); Linux mm/context.c circa 2.4 (2001).
 - **Lazy TLB shootdown.** Cross-CPU TLB invalidation performed via cache-coherent PTE updates rather than an IPI. Requires coherent L1-D / L2. Prior art: Sun UltraSPARC III hardware-walked TLB invalidate (2001); Linux ARM lazy TLB tracking (pre-2006).
-- **SR.FD — FPU disable (SR bit 15).** SH-4 standard. When set, any FPU instruction raises FPU-disabled exception. Enables the OS / hypervisor lazy-FPU-context-switch idiom (set on context-out, trap on first use, save/restore only the previous and incoming owners, clear). On Tier 2 (hypervisor) FPU implementations the trap is reported as `EXC_FPU_DISABLED` (EXPEVT `0x1B0`, HEDR bit 3, delegatable). See [fpu/spec.md §6.3, §7](fpu/spec.md). Prior art: SH-4 hardware manual (1998); Intel `CR0.TS` (i486, 1990); 4.4BSD lazy-FP (1996).
-- **SR.VD — SIMD disable (SR bit 13).** J-Core SIMD extension; SR.FD's direct analogue for the V0..V15 + P0 + VCSR + VFPUL state. When set, any SIMD-touching instruction or control-register access raises SIMD-disabled exception. Enables the OS lazy-SIMD-context-switch idiom and avoids the 272-byte save/restore for tasks that never touch SIMD (~95% of typical Linux processes). On Tier 2 (hypervisor) implementations the trap is reported as `EXC_SIMD_DISABLED` (EXPEVT `0x1C0`, HEDR bit 24, delegatable). See [simd/spec.md §2.6](simd/spec.md). Prior art: PowerPC G4 AltiVec `MSR.VEC` (1999); SH-4 `SR.FD` (1998); Apple Mac OS X lazy AltiVec save.
-- **VFPUL — Vector FP scalar register.** 64-bit SIMD-side scalar FP register holding the result of SIMD horizontal FP reductions and the FP lane-bridge operations (VEXTF.L / VINSF.L). The design choice that decouples SIMD lazy save (SR.VD) from FPU lazy save (SR.FD) — no SIMD instruction writes FR / DR / FPUL directly. Cross-file moves between VFPUL and FR/DR use the four `FMOV.VS` / `FMOV.VD` boundary instructions in [simd/spec.md §5.8](simd/spec.md), which trap under both SR.VD and SR.FD and execute only outside a SIMD block. Part of SIMD architectural state (8 bytes added to the per-task context image, total 272 bytes). Prior art: Cray-1 VL register (1976); Intel SSE MOVD/MOVQ between XMM and x87/general (1999); MIPS-3D paired-single (1999).
+- **SR.FD — FPU disable.** SH-4 standard. When set, any FPU instruction raises FPU-disabled exception. Enables the OS / hypervisor lazy-FPU-context-switch idiom (set on context-out, trap on first use, save/restore only the previous and incoming owners, clear). On Tier 2 (hypervisor) FPU implementations the trap is reported as `EXC_FPU_DISABLED`, delegatable via HEDR. *Bit position, EXPEVT value, HEDR bit, and the context-image size: [fpu/spec.md §6.3, §7](fpu/spec.md).* Prior art: SH-4 hardware manual (1998); Intel `CR0.TS` (i486, 1990); 4.4BSD lazy-FP (1996).
+- **SR.VD — SIMD disable.** J-Core SIMD extension; SR.FD's direct analogue for the V0..V15 + P0 + VCSR state. When set, any SIMD-touching instruction or control-register access raises SIMD-disabled exception. Enables the OS lazy-SIMD-context-switch idiom and avoids the SIMD save/restore for tasks that never touch SIMD (~95% of typical Linux processes). On Tier 2 (hypervisor) implementations the trap is reported as `EXC_SIMD_DISABLED`, delegatable via HEDR. *Bit position, EXPEVT value, HEDR bit, and the context-image size: [simd/spec.md §2.5, §2.6](simd/spec.md).* Prior art: PowerPC G4 AltiVec `MSR.VEC` (1999); SH-4 `SR.FD` (1998); Apple Mac OS X lazy AltiVec save.
 
 ---
 
@@ -148,6 +179,14 @@ When a doc refers to "existing hardware," it almost always means the J2 implemen
 
 - **SMT** — superseded by FGMT.
 - **VMID** — removed from hardware (see §5).
+- **VFPUL** — **retired 2026-07-17 by [simd/spec.md §2.3](simd/spec.md)**; see
+  [simd/spec.md Appendix B](simd/spec.md) for why. FP scalar results now land
+  directly in the SH-4 `FR`/`DR` file; there is no SIMD-side FP scalar register,
+  and the four `FMOV.VS`/`FMOV.VD` boundary instructions that existed only to
+  bridge it are deleted. Do not reintroduce the name.
+  *This glossary carried a full entry describing the register as live for five
+  weeks after it was retired — one of the three staleness findings behind
+  [decisions/0001](decisions/0001-one-authority-per-fact.md).*
 - **"Self-hosted" meaning native compilation** — see §1; this platform does not natively develop itself.
 - **J4** — earlier drafts mentioned J4 alongside J32; treated as a synonym for J32 baseline in spec text. Prefer J32. Update on sight.
 - **"SH-Compact"** — used once in [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md) for "SH-2 + J-core extensions." Prefer "SH-2 + J-core ext" or simply "J32 ISA baseline" depending on context.

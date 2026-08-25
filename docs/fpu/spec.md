@@ -1318,6 +1318,37 @@ adder; the architecture does not penalise this choice.
 
 ## 7. Tier 2 — Hypervisor-aware FPU
 
+> **SUPERSEDED BY [../simd/spec.md §2.3](../simd/spec.md) — 2026-08-25.** The
+> paragraph immediately below is wrong on the one point it exists to make. It
+> says the FPU and SIMD facilities are *"fully independent at the register-file
+> level"* because *"SIMD never writes FR / DR / FPUL directly (it routes scalar
+> FP through its own VFPUL register)"*. **VFPUL was retired on 2026-07-17 and FP
+> reductions now write `FR0`/`DR0` directly** — the exact opposite of the claim.
+> The four `FMOV.VS` / `FMOV.VD` boundary instructions this section points at
+> ([../simd/spec.md §5.8](../simd/spec.md)) are **deleted**; that section number
+> is retained only so cross-references resolve.
+>
+> **What is actually true**, per [../simd/spec.md §2.3](../simd/spec.md) and its
+> Appendix B decision-log entry of 2026-07-17:
+> - FP horizontal reductions, `VFIPR` and `VFTRV` write the SH-4 FPU file
+>   directly, at an implied `FR0` base, committing at **block exit** so the
+>   `SR.FD` ownership check is hoisted to prefix/block decode and never fires
+>   mid-block.
+> - Therefore a task doing **FP SIMD** owns the FPU: `SR.VD` and `SR.FD` lazy save
+>   are **coupled** for it. **Integer** SIMD (reductions to `MACL`/`MACH`) and
+>   FPU-only tasks keep full independence. The blanket independence claimed below
+>   is the pre-retirement design.
+>
+> This is a change of record inside this repository, not of code — there is no
+> merged commit to cite, and per
+> [../decisions/0002](../decisions/0002-supersede-convention.md) a
+> `RESOLVED` marker would be wrong here. Rewriting the paragraph, rather than
+> heading it, belongs to Wave-2 **B1**.
+>
+> The rest of §7 — `EXC_FPU_DISABLED`, the per-vCPU ownership flag, the lazy ABI,
+> the 132-byte image — is unaffected and current, with the exception noted at
+> [§7.1](#71-exc_fpu_disabled-cause-and-hedr-interaction).
+
 The Tier 2 lazy-FPU-context-switch mechanism documented in this section
 has a direct **SIMD parallel**: `SR.VD` (SR bit 13) and `EXC_SIMD_DISABLED`
 (EXPEVT `0x1C0`, HEDR bit 24) implement the same trap-on-first-use idiom
@@ -1343,12 +1374,25 @@ HEDR cause table per
 [../hypervisor/hardware-spec.md §4.3](../hypervisor/hardware-spec.md),
 which currently allocates:
 
+> **SUPERSEDED BY [../hypervisor/hardware-spec.md §4.2](../hypervisor/hardware-spec.md) — 2026-08-25.**
+> The table below is the **pre-reconciliation** allocation. `HCALL` no longer has
+> `EXPEVT 0x180` and hyperprivileged-register access no longer has `0x1A0`: both
+> squatted on stock SH-4 code points (general illegal, slot illegal) that a
+> handler could not distinguish them from. Per [../hypervisor/hardware-spec.md §4.2](../hypervisor/hardware-spec.md) they moved to **`0x1D0`** and **`0x1F0`** respectively,
+> and `0x180`/`0x1A0` reverted to their SH-4 meanings.
+> `0x190` and `0x1B0` are unchanged, so **this section's own value, `0x1B0`, is
+> still correct** — only the surrounding table is stale.
+>
+> This is a change of record inside this repository (the hypervisor extension is
+> unimplemented in RTL), so there is no merged commit to cite and no `RESOLVED`
+> marker is appropriate. Correcting the table belongs to Wave-2 **B1**.
+
 | Code  | Cause                                                  |
 | ----- | ------------------------------------------------------ |
 | 0x040–0x130 | Existing SH-4 EXPEVT values                      |
-| 0x180 | HCALL instruction                                      |
+| 0x180 | HCALL instruction  *(stale — now `0x1D0`, [hyp §4.2](../hypervisor/hardware-spec.md))* |
 | 0x190 | Guest LDTLB/LDTLB.R trap                               |
-| 0x1A0 | Hyperprivileged register access from non-HS mode       |
+| 0x1A0 | Hyperprivileged register access from non-HS mode  *(stale — now `0x1F0`, [hyp §4.2](../hypervisor/hardware-spec.md))* |
 | 0x1B0 | **FPU disabled (SR.FD trap) — Tier 2** (new)           |
 
 **HEDR delegation semantics.** Per the trap-entry logic in

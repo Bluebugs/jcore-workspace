@@ -139,9 +139,13 @@ Earlier drafts of this spec, of the Phase 1 MMU spec, and of the Phase 2 IOMMU s
 ### 3.8a Per-domain TSB partitioning composes on this machinery
 
 > **Amendment — Phase 2 of the hardware-walker work
-> ([../mmu/hardware-spec.md §2.13a](../mmu/hardware-spec.md)). Status: the
-> `jcore-cpu` and `linux@jcore` side is IMPLEMENTED but NOT MERGED; the
-> hypervisor itself is unimplemented (this whole document is Phase 3).**
+> ([../mmu/hardware-spec.md §2.13a](../mmu/hardware-spec.md)).**
+> **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer"**
+> and
+> **RESOLVED 2026-08-25 — linux@jcore: "Merge pull request #10 from mountain-reverie/mmu/tsb-phase2".**
+> *(Promoted from "IMPLEMENTED but NOT MERGED".)* **The hypervisor itself remains
+> unimplemented — this whole document is Phase 3.** Only the machinery it composes
+> on has landed.
 
 [mmu/hardware-spec.md §2.13a](../mmu/hardware-spec.md) makes per-domain TSB
 partitioning — disjoint index sets per trust domain, selected by writing

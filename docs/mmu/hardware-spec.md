@@ -69,6 +69,22 @@ New in this revision. Holds the 16-bit `ASID_TAG` that hardware compares on ever
 
 **ASID_TAG width is 16 bits** (canonical, project-wide). The kernel packs the 12-bit ASID proper and a 4-bit generation discriminator:
 
+> **SUPERSEDED BY the merged kernel — 2026-08-25.** The generation nibble no
+> longer exists.
+> **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: retire the ASID generation nibble".**
+> `ASID_TAG[15:12]` and `jcore_tsb_flush_on_generation()` are deleted;
+> `get_asid()` returns a plain 12-bit ASID and `MMU_NO_ASID` is back to
+> `MMU_CONTEXT_FIRST_VERSION`. The nibble stopped isolating anything once
+> `local_flush_tlb_all()` zeroed the TSB on *every* version wrap and every CPU
+> got its own TSB, and it was actively wrong for `tlbflush_32.c`'s
+> save/restore.
+>
+> **`ASID_TAG` is still 16 bits and the comparators are unchanged** — that
+> commit makes no RTL change; the top nibble is simply always zero on both
+> sides. So the width above is correct and the *packing* below is not. Rewriting
+> the packing formula, and §3.5 of [design-spec.md](design-spec.md)
+> ("ASID-generation tagging") with it, belongs to Wave-2 **B1**.
+
 ```
 ASID_TAG[15:0] = (ASID[11:0] | (gen_low[3:0] << 12))
 ```
@@ -91,6 +107,17 @@ Cost on a 4-way implementation: 3 additional 16-bit registers and a 4:1 mux on t
 
 Consumers: [ooo/j32lt-spec.md §11](../ooo/j32lt-spec.md) (`n_tc = 4`), [ooo/j32ooo-spec.md §13.1](../ooo/j32ooo-spec.md) (`n_tc = 2`).
 
+> **SUPERSEDED BY [§2.1a](#21a-asidr--address-space-identifier-register) — 2026-08-25.** The obligation
+> below is discharged by a *different* mechanism than the one it names. The
+> generation nibble, `set_asid()`'s threading of it, and
+> `jcore_tsb_flush_on_generation()` are all deleted —
+> **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: retire the ASID generation nibble"** —
+> because `local_flush_tlb_all()` already zeroes the TSB on **every** version
+> wrap, which is strictly stronger than an every-16th-wrap rebuild, and per-CPU
+> TSBs removed the cross-CPU sharing the nibble was protecting. There is no
+> residual wrap hazard and no 16-generation window; the paragraph below describes
+> a mechanism that no longer exists. Wave-2 **B1** rewrites it.
+>
 > **Security obligation (generation wrap) — RESOLVED:** only **4 bits** of `ASID_TAG` are the generation discriminator. The TLB is flushed at every rollover, so stale **TLB** entries are always rejected. **TSB** entries are not flushed and are rejected only by the tag compare — so after the generation field wraps (every 16 rollovers), a stale TSB slot with a matching `ASID[11:0]` and matching `gen_low[3:0]` can be a **false hit**. The Linux port (mmu/asid-generation branch) satisfies this obligation: the kernel threads generation into `ASID_TAG` at `set_asid()` and rebuilds the TSB on `gen_low` wrap via `jcore_tsb_flush_on_generation()`, ensuring stale-TSB rejection is an unconditional generation-tagged guarantee (exact for single-core; on SMP the TSB-zero-on-wrap follows `local_flush_tlb_all`'s local-only scope, revisited when jcore MMU-SMP lands). Resolved 2026-07-17 (linux@jcore mmu/asid-generation).
 
 **Context-switch sequence (Linux):**
@@ -258,8 +285,14 @@ TSBPTR = (TSBBR & ~0x1F) | ((hash & mask) << 5)
 
 The `<< 5` is because each **set** is 32 bytes. TSBPTR is therefore naturally aligned to a 32-byte boundary — one cache line — within the TSB.
 
-> **Amendment — Phase 2. Status: IMPLEMENTED on `jcore-cpu` branch
-> `mmu/tsb-hw-walker`, NOT MERGED.** The formula above **is** the RTL
+> **Amendment — Phase 2.**
+> **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer".**
+> *(Promoted from "IMPLEMENTED on `jcore-cpu` branch `mmu/tsb-hw-walker`, NOT
+> MERGED". That branch no longer exists on `origin`; `core/tlb_walk.vhd` and
+> `core/datapath_pkg.vhd`'s `tsb_ptr()` are on `master`, with
+> `core/cpu.vhd` instantiating the walker at `tsb_ways => 2`. The kernel half is
+> **RESOLVED 2026-08-25 — linux@jcore: "Merge pull request #10 from mountain-reverie/mmu/tsb-phase2".**)*
+> The formula above **is** the RTL
 > (`core/datapath_pkg.vhd`, `tsb_ptr()`); it is not a plan. Two things changed
 > from Phase 1: the scale went `<< 4` → `<< 5` (2-way sets), and `ASID` is
 > now folded into the **index**, not only compared as a tag.
@@ -816,10 +849,15 @@ If more than one matches: behavior undefined — software must not write duplica
 
 ### 5.0 A hardware TSB walk precedes the exception
 
-> **Implementation status (2026-08-10): DESIGNED, PARTIALLY IMPLEMENTED.**
-> The walker is being built on `jcore-cpu` branch `mmu/tsb-hw-walker` in
-> phases. **What is true of the RTL today is stated per-item below; do not
-> read this subsection as describing shipped hardware.** The full design is
+> **Implementation status — updated 2026-08-25 (was: "DESIGNED, PARTIALLY
+> IMPLEMENTED", 2026-08-10).**
+> **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer".**
+> This subsection **does** describe shipped hardware. `core/tlb_walk.vhd` is on
+> `master`, instantiated at `tsb_ways => 2`; branch `mmu/tsb-hw-walker` is gone
+> from `origin`. The kernel side is
+> **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: stop installing TLB entries from software".**
+> The per-item table at the end of this subsection is corrected in place.
+> The full design is
 > `docs/superpowers/specs/2026-08-09-hardware-tsb-walker-design.md`.
 
 A TLB **miss** is no longer an exception in the first instance. It is a
@@ -860,9 +898,9 @@ empirically by the Phase-1 feasibility spike, `jcore-cpu` commit `90e6cbc`.)
 
 | item | status |
 |---|---|
-| Stall-and-walk mechanism (ack withheld, external `db_o` borrowed) | proven on RTL by spike `90e6cbc`; walker FSM in progress |
+| Stall-and-walk mechanism (ack withheld, external `db_o` borrowed) | **merged**; `core/tlb_walk.vhd` on `jcore-cpu` `master`. *(This row read "proven on RTL by spike `90e6cbc`; walker FSM in progress". `90e6cbc` is **not** an ancestor of `origin/master` — the branch was rebased before merge, which is why [../decisions/0002](../decisions/0002-supersede-convention.md) forbids citing a SHA.)* |
 | Exception path on walk failure (§5.1) | unchanged and shipped |
-| TSB entry format | **Phase 2: 2-way, 32-byte set, `tsb_ptr()` scaling by `<< 5`, `ASID` folded into the index** (§2.8). IMPLEMENTED on `mmu/tsb-hw-walker`, **not merged**. Phase 1's 1-way 16-byte slot is superseded. |
+| TSB entry format | **Phase 2: 2-way, 32-byte set, `tsb_ptr()` scaling by `<< 5`, `ASID` folded into the index** (§2.8). **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer"** *(promoted from "IMPLEMENTED on `mmu/tsb-hw-walker`, not merged")*. Phase 1's 1-way 16-byte slot is superseded. |
 | Two-way probe in the walker FSM | Phase 2, IMPLEMENTED (`core/tlb_walk.vhd`, generic `tsb_ways => 2` from `core/cpu.vhd`); guard `mmuwalkway1` |
 | `TSBSLOT` / `TSBVSEED` / `TSBVICT` (§2.12, §2.13) | Phase 2, IMPLEMENTED and decoded in `core/datapath.vhm` |
 | Instruction retirement (§3.1) | **Phase 3, not yet started.** All seven instructions still exist and still work. |
@@ -934,12 +972,21 @@ The TLB-miss handler's hot path (described in §7) uses only R0–R3 of bank 1, 
 
 ## 7. TLB Miss Handling
 
-> **Implementation status (2026-08-10).** §7.0 is the design going forward and
-> is **partially implemented** (`jcore-cpu` branch `mmu/tsb-hw-walker`). §7.1
-> is what the RTL and linux@jcore run **today** and remains the shipped
-> behaviour until Phase 3 completes. Both are accurate; they describe
-> different points in time. If you are changing code right now, §7.1 is what
-> you will find in the tree.
+> **SUPERSEDED — 2026-08-25.** The status block below was written 2026-08-10 and
+> said: *"§7.0 … is **partially implemented** (`jcore-cpu` branch
+> `mmu/tsb-hw-walker`). §7.1 is what the RTL and linux@jcore run **today** …
+> If you are changing code right now, §7.1 is what you will find in the tree."*
+> **Both halves are now false, and it contradicted §7.1 of this same document,
+> which already said "removed".**
+>
+> - §7.0 is merged and shipped:
+>   **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer".**
+> - §7.1 is retired, not shipped:
+>   **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: retire inlined TLB fast path and STC ASIDR/TSBPTR reads".**
+>   Its sequence no longer assembles.
+>
+> **§7.0 is what you will find in the tree. §7.1 is `HISTORICAL` and is marked so
+> at its own heading.**
 
 ### 7.0 The hardware TSB walk (design; see §5.0)
 
@@ -967,8 +1014,10 @@ so `tag_hi` must be the **commit point**: software writes `data`, then
 Otherwise a walk can observe a torn entry — correct VPN, stale `ASID`/`PTEL` —
 and install a wrong translation *silently*, with no exception.
 `tlb-jcore.c` used to write `tag_hi` **first**; that was a defect independent
-of the walker. **Fixed in Phase 2** (`linux@jcore` branch `mmu/tsb-phase2`,
-not merged): all three words are now stored by a single helper,
+of the walker. **Fixed in Phase 2** —
+**RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: commit TSB entries tag_hi-last, not tag_hi-first"**
+*(promoted from "`linux@jcore` branch `mmu/tsb-phase2`, not merged")*:
+all three words are now stored by a single helper,
 `jcore_tsb_write_entry()`, which is the only place in the kernel that writes a
 TSB entry. Hardware cannot distinguish a torn entry from a legitimate one, so
 no bare-metal guard can catch a regression of this order — concentrating the
@@ -982,11 +1031,14 @@ loads.
 
 ### 7.1 The software handler (HISTORICAL — retired in Phase 3)
 
-> *(Implementation status: **removed**. `linux@jcore` `a9417bda9766` deleted
-> `JCORE_TLB_FASTPATH` from `arch/sh/kernel/cpu/jcore/ex.S`; jcore-cpu
-> `09304a3` retired the four instructions it depended on. The sequence below
-> **no longer assembles** — `stc tsbptr`, `cmp/eq pteh`, `cmp/eq asidr` and
-> `ldtlb.rn Rm` are all General Illegal now.)*
+> **HISTORICAL 2026-08-25.** The sequence below **no longer assembles** —
+> `stc tsbptr`, `cmp/eq pteh`, `cmp/eq asidr` and `ldtlb.rn Rm` are all General
+> Illegal now.
+> **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: retire inlined TLB fast path and STC ASIDR/TSBPTR reads"**
+> deleted `JCORE_TLB_FASTPATH` from `arch/sh/kernel/cpu/jcore/ex.S`;
+> **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer"**
+> retired the four instructions it depended on. *(This block previously cited
+> jcore-cpu `09304a3`, which is not an ancestor of `origin/master`.)*
 
 Kept as the record of what the hardware walker replaced, and of the cost
 baseline the walker is measured against. `VBR + 0x400` today is

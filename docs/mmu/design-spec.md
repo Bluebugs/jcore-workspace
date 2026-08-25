@@ -31,9 +31,18 @@ The MMU does not walk page tables in hardware. On a TLB miss, hardware vectors t
 **Rationale:** A hardware page-table walker costs significant gates and bakes the page-table format into the ISA, which is exactly what makes 32→64-bit transitions painful on architectures like PowerPC and ARM. With a software-loaded TLB, the page-table layout is entirely an OS decision — Linux uses one format on J32 and a wider variant on J64 from the same source tree, with no hardware change.
 
 > **This decision stands, and the hardware TSB walker does not weaken it.**
-> (Walker status: DESIGNED, partially implemented on `jcore-cpu` branch
-> `mmu/tsb-hw-walker` — see [hardware-spec.md §5.0](hardware-spec.md) for
-> what is and is not in the tree.)
+> **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer".**
+> *(Promoted from "Walker status: DESIGNED, partially implemented on `jcore-cpu`
+> branch `mmu/tsb-hw-walker`". The branch is gone from `origin`; the walker is
+> shipped.)*
+>
+> **Read the heading of this subsection carefully, because it is now half
+> right.** The **TLB** is loaded by *hardware*, from the TSB. The **page
+> tables** are still walked by *software*, on a TSB miss. The paragraph above
+> ("hardware vectors to a software trap handler which is responsible for finding
+> the translation and installing it") describes only the slow path. The
+> distinction is the point of the rest of this note, and Wave-2 **B1** should
+> retitle the subsection accordingly.
 > The walker of [hardware-spec.md §5.0](hardware-spec.md) probes the **TSB**,
 > never the page tables. The distinction is the whole point: the TSB is a flat
 > hash array whose format this specification defines, while `pgd`/`pmd`/`pte`
@@ -69,6 +78,23 @@ Each TLB entry is tagged with a 12-bit Address Space Identifier (ASID), giving 4
 **Rationale:** MIPS used 8 bits (256 contexts); SH-4 used 8 bits. Modern process and container counts make 4096 a more comfortable working size. The cost is 4 extra bits of state per TLB entry — negligible.
 
 ### 3.5 ASID-generation tagging
+
+> **SUPERSEDED BY [hardware-spec.md §2.1a](hardware-spec.md) — 2026-08-25.** The
+> generation discriminator described below **no longer exists in the kernel**:
+> **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: retire the ASID generation nibble".**
+> `ASID_TAG[15:12]` is gone, `get_asid()` returns a plain 12-bit ASID, and
+> `jcore_tsb_flush_on_generation()` is deleted. It stopped isolating anything
+> once `local_flush_tlb_all()` began zeroing the TSB on **every** version wrap
+> and each CPU got its own TSB — both strictly stronger than the every-16th-wrap
+> scheme this subsection argues for.
+>
+> **What survives:** `ASID_TAG` is still 16 bits in RTL and the comparators are
+> unchanged (the retirement makes no RTL change; the top nibble is simply always
+> zero). The PTEH/ASIDR split and its UltraSPARC `PRIMARY_CONTEXT` lineage are
+> untouched. **What does not:** the four "otherwise-difficult problems" the
+> Rationale credits to the generation counter are now solved by full-flush and
+> per-CPU TSBs instead, so the rationale as written no longer supports the
+> design as built. Rewriting this subsection belongs to Wave-2 **B1**.
 
 The TSB tag includes both the ASID and a 4-bit generation discriminator drawn from a per-CPU 64-bit generation counter. The kernel encodes the 16-bit `ASID_TAG = (asid | gen_low << 12)` and writes it on every context switch — into the dedicated **ASIDR** register (not PTEH; see [hardware-spec.md §2.1a](hardware-spec.md)). Hardware compares this composite tag against the TSB entry's tag word on every TLB lookup. The PTEH/ASIDR split (modeled on UltraSPARC `PRIMARY_CONTEXT`) keeps the full 4 KB–1 GB page-size range available even with the wider 16-bit ASID_TAG.
 
@@ -145,11 +171,16 @@ Routing protection to `VBR + 0x100` excludes the livelock by construction and re
 
 ### 4.2 TLB-miss software flow
 
-> **HISTORICAL.** *(Implementation status: superseded. The hardware TSB walker
-> does steps 1–2 (hardware-spec.md §5.0), and Phase 3 retired the four
-> instructions this flow used: jcore-cpu `09304a3`, `linux@jcore`
-> `a9417bda9766`.)* Software now enters `VBR + 0x400` only on a walk failure,
-> and goes straight to step 3.
+> **HISTORICAL 2026-08-25.** Kept as the record of what the hardware TSB walker
+> replaced. The walker does steps 1–2
+> ([hardware-spec.md §5.0](hardware-spec.md)), and Phase 3 retired the four
+> instructions this flow used:
+> **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: retire inlined TLB fast path and STC ASIDR/TSBPTR reads"**
+> with
+> **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer".**
+> Software now enters the miss vector only on a walk failure, and goes straight
+> to step 3. *(This block previously cited jcore-cpu `09304a3`, which is not an
+> ancestor of `origin/master`.)*
 
 The handler runs in supervisor mode with `SR.RB=1` (bank 1 selected, providing 8 scratch registers without save/restore):
 

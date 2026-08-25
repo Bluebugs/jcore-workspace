@@ -141,6 +141,13 @@ HEDR has 32 bits, each corresponding to an exception cause. The cause-to-bit map
 
 #### 2.3.1 EXPEVT-to-HEDR-bit mapping (normative)
 
+> **SUPERSEDED BY [../mmu/hardware-spec.md §5](../mmu/hardware-spec.md) (Vector column only) — 2026-08-25.**
+> Bits **6** (`0x0A0`) and **7** (`0x0C0`) —
+> TLB protection violation — are listed below at `+0x400`. They are delivered at
+> **`+0x100`**; only misses (bits 4, 5) use `+0x400`. See [§4.2](#42-vector-layout-normative)
+> for the full statement and the merged commit. HEDR bit *positions*, EXPEVT
+> *values* and delegatability are unaffected.
+
 The mapping is dense from the low bits up so a typical hypervisor configuration looks like a small bitmask. SH-4-inherited EXPEVT values are grouped by class; J-Core hyperprivileged-extension causes (`0x190`, `0x1B0`–`0x1F0`) follow. The extension causes deliberately avoid every SH-4-inherited code point.
 
 | HEDR bit | EXPEVT     | Cause                                                    | Delegatable? | Vector (from VBR / VBR_HYP) |
@@ -470,6 +477,43 @@ on exception(cause):
 These are the exceptions where delegation makes no sense.
 
 ### 4.2 Vector layout (normative)
+
+> **SUPERSEDED BY [../mmu/hardware-spec.md §5](../mmu/hardware-spec.md), in part — 2026-08-25.**
+> **The mirror rule below is correct and stands. The single TLB vector it mirrors
+> does not exist any more.**
+>
+> This section says "**all** TLB miss/protection faults `+0x400` (a single
+> vector)", and the offset table below puts the three protection causes (`0x0A0`,
+> `0x0C0` ×2) at `0x400`. J-Core split them: **miss stays at `+0x400`; protection
+> moved to `+0x100`**, the general-exception offset, as SH-4 itself does (SH7750
+> hardware manual Rev 2.0 02/99).
+>
+> **RESOLVED 2026-08-25 — jcore-cpu@master: artifact `sim/tests/mmuvecsplit.S`.**
+> That guard makes each vector write a distinct marker, precisely so a silent
+> regression of the split fails rather than passing quietly; it is in
+> `full-regression.yml`. The commit that named the change,
+> *"mmu: split TLB protection faults onto VBR+0x100, as SH-4 does"*, survives only
+> on `origin/mmu/encoding-realign-sh4a` — it was rebased on the way to `master`,
+> so the artifact is the citable evidence
+> ([../decisions/0002 §3](../decisions/0002-supersede-convention.md)).
+>
+> **Consequences for this section, which a reader must apply by hand until the
+> table is corrected:**
+> - Rows `0x0A0` / `0x0C0` / `0x0C0` move from the `0x400` block to the `0x100`
+>   block. The `0x400` block keeps only `0x040` / `0x060` / `0x080`.
+> - The `§2.3.1` mapping table's `+0x400` entries for HEDR bits 6 and 7 are wrong
+>   in the same way and by the same amount.
+> - The paragraph beginning "The single `0x400` TLB vector …" is superseded
+>   outright.
+> - **A delegating hypervisor must forward *two* vectors, not one.**
+>   [design-spec.md §4.5](design-spec.md) already states this correctly; this
+>   section is the one that did not follow.
+>
+> Nothing else here is affected: the mirror rule, the four Phase-3 extension
+> offsets, the `HCALL`→`0x1D0` / hyp-register→`0x1F0` decision and the normative
+> closure are all independent of how many offsets the supervisor layout uses.
+> Rewriting the table belongs to Wave-2 **B1** (EXPEVT/vector worklist), not to
+> the header that flags it.
 
 Hyperprivileged traps are delivered from the `VBR_HYP` base using the **same offset conventions as
 `VBR`**. **These offsets are normative.** An implementation MUST place each handler at the stated
