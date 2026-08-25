@@ -187,7 +187,7 @@ def load_registry(cfg, report):
         return None, {}
     try:
         body = read(cfg.registry)
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         report.fail("registry", cfg.rel(cfg.registry), "unreadable: %s" % exc)
         return None, {}
 
@@ -290,23 +290,49 @@ class Waivers:
 # the registry's current patterns, because the failure this rule exists to stop
 # is a value going *stale* -- and a stale value matches no current pattern by
 # definition. Scanning for the shape catches "272 bytes" as readily as "520".
+#
+# This list is the *reach* of the rule and is deliberately enumerated in 0001,
+# because a shape that is absent here is a third escape and readers are entitled
+# to know which ones exist.
 VALUE_SHAPES = [
-    ("size", re.compile(r"\b\d[\d,]*\s*-?\s*(?:bytes?|KB|MB|GB|KiB|MiB)\b")),
+    ("size", re.compile(
+        r"\b\d[\d,]*\s*-?\s*(?:bytes?|[KMGT]i?B|kb|kilobytes?|megabytes?"
+        r"|gigabytes?)\b", re.IGNORECASE)),
     ("width", re.compile(r"\b\d+\s*-?\s*bits?\b")),
-    ("address", re.compile(r"\b0[xX][0-9A-Fa-f]{2,}\b")),
+    ("address", re.compile(r"\b0[xX][0-9A-Fa-f]+\b")),
     ("bit position", re.compile(r"\bbits?\s+\d+\b")),
+    ("bit range", re.compile(r"\[\s*\d+\s*:\s*\d+\s*\]")),
+    ("count", re.compile(
+        r"\b\d[\d,]*\s*(?:entries|entry|ways|slots?|levels?|contexts?"
+        r"|registers?)\b")),
+    ("frequency", re.compile(r"\b\d[\d,.]*\s*[kMGT]?Hz\b")),
+    ("bare count", re.compile(r"\*\*\d{2,}\*\*")),
 ]
 
-# A line may quote a value it is in the act of retiring.
-QUOTATION_RE = re.compile(
-    r"promoted from|previously read|previously said|formerly read|"
-    r"used to read|retired|no longer",
-    re.IGNORECASE)
+# TWO escapes, deliberately separate constants.
+#
+# They used to be one regex gating both `glossary-is-value-free` and
+# `stale-claim`. Widening it so the glossary could carry its own retirement
+# notes silently exempted 119 lines across 22 files from the merge-status check
+# -- a line saying "the old walker is retired" excused an unrelated "NOT MERGED"
+# on the same line. The coupling was the defect, not the wording, so the fix is
+# two names. Widening one must never widen the other.
+#
+# Both are narrow on purpose: each phrase makes the *retirement* the subject of
+# the line. "retired" and "no longer" do not -- they can appear in a line whose
+# subject is something else entirely, which is exactly how the hole opened.
+_QUOTING_A_RETIRED_VALUE = (r"promoted from|previously read|previously said|"
+                            r"formerly read|used to read")
+GLOSSARY_QUOTE_EXEMPT = re.compile(_QUOTING_A_RETIRED_VALUE, re.IGNORECASE)
+STALE_CLAIM_EXEMPT = re.compile(_QUOTING_A_RETIRED_VALUE, re.IGNORECASE)
 
 # Declared, visible exemption for a region of the glossary. Unlike a waiver it
-# lives at the point of use, so a reader sees it. Each fence still needs a
-# registry row under `glossary-fence`.
-FENCE_OFF = re.compile(r"<!--\s*value-free:\s*off\s*-->")
+# lives at the point of use, so a reader sees it -- but it is NOT self-
+# authorising: each fence carries an id, and that id must have its own
+# `glossary-fence:<id>` row in the registry. One row therefore licenses one
+# region, not the file.
+FENCE_OFF = re.compile(r"<!--\s*value-free:\s*off\s*\(([A-Za-z0-9._-]+)\)\s*-->")
+FENCE_OFF_UNNAMED = re.compile(r"<!--\s*value-free:\s*off\s*-->")
 FENCE_ON = re.compile(r"<!--\s*value-free:\s*on\s*-->")
 
 
@@ -319,28 +345,54 @@ def check_glossary_is_value_free(cfg, report, waivers):
         return
     fenced = False
     fence_opened_at = None
-    for n, line in enumerate(read(cfg.glossary).splitlines(), 1):
-        if FENCE_OFF.search(line):
-            # A fence is an exemption, so it must be registered like one --
-            # otherwise it is a waiver that hides in the file it exempts.
-            if not waivers.allows("glossary-fence", cfg.glossary):
-                report.fail("glossary-is-value-free",
-                            "%s:%d" % (cfg.rel(cfg.glossary), n),
-                            "'value-free: off' fence with no `glossary-fence` "
-                            "row in the registry's Waivers table. An exemption "
-                            "has to be counted somewhere it will be reviewed.")
+    seen_ids = set()
+    try:
+        body = read(cfg.glossary)
+    except (OSError, UnicodeDecodeError) as exc:
+        report.fail("glossary-is-value-free", cfg.rel(cfg.glossary),
+                    "unreadable: %s" % exc)
+        return
+    for n, line in enumerate(body.splitlines(), 1):
+        where = "%s:%d" % (cfg.rel(cfg.glossary), n)
+        m = FENCE_OFF.search(line)
+        if m or FENCE_OFF_UNNAMED.search(line):
+            fence_id = m.group(1) if m else None
+            if fence_id is None:
+                report.fail("glossary-is-value-free", where,
+                            "'value-free: off' with no id. Write "
+                            "'<!-- value-free: off (some-id) -->' and add a "
+                            "matching `glossary-fence:some-id` row to the "
+                            "registry: one row licenses one region, not the "
+                            "whole file.")
+            elif fence_id in seen_ids:
+                report.fail("glossary-is-value-free", where,
+                            "fence id %r is used more than once; ids must be "
+                            "unique so each region is separately reviewable"
+                            % fence_id)
+            elif not waivers.allows("glossary-fence:" + fence_id,
+                                    cfg.glossary):
+                report.fail("glossary-is-value-free", where,
+                            "fence %r has no `glossary-fence:%s` row in the "
+                            "registry's Waivers table. An exemption has to be "
+                            "counted somewhere it will be reviewed."
+                            % (fence_id, fence_id))
+            if fence_id:
+                seen_ids.add(fence_id)
+            if fenced:
+                report.fail("glossary-is-value-free", where,
+                            "fence opened while one opened at line %d is still "
+                            "open" % fence_opened_at)
             fenced = True
             fence_opened_at = n
             continue
         if FENCE_ON.search(line):
             if not fenced:
-                report.fail("glossary-is-value-free",
-                            "%s:%d" % (cfg.rel(cfg.glossary), n),
+                report.fail("glossary-is-value-free", where,
                             "'value-free: on' with no matching 'off'")
             fenced = False
             fence_opened_at = None
             continue
-        if fenced or QUOTATION_RE.search(line):
+        if fenced or GLOSSARY_QUOTE_EXEMPT.search(line):
             continue
         for kind, rx in VALUE_SHAPES:
             m = rx.search(line)
@@ -364,7 +416,7 @@ def check_facts(cfg, report, facts, waivers):
     for p in cfg.markdown_files():
         try:
             corpus[p] = read(p)
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             report.fail("readable", cfg.rel(p), "unreadable: %s" % exc)
 
     # 1. owner-has-fact
@@ -382,8 +434,9 @@ def check_facts(cfg, report, facts, waivers):
                         "ownership moved."
                         % (cfg.rel(fact.owner), fact.pattern))
 
-    # 2. glossary-is-value-free -- registry-independent, see above.
-    check_glossary_is_value_free(cfg, report, waivers)
+    # NB: `glossary-is-value-free` is deliberately NOT called from here. It does
+    # not read the registry, so it must not be gated on the registry parsing --
+    # main() runs it independently.
 
     # 3. restatement-is-linked
     for fact in facts:
@@ -601,9 +654,11 @@ def check_pending(cfg, report, repos, where, m):
                     % (subject, repo_name, integration))
         return
     if repos.branch_exists(repo_name, branch, where) is False:
-        report.warn("pending-is-not-merged", where,
-                    "branch %s no longer exists on %s origin: it either merged "
-                    "(promote) or was abandoned (delete)."
+        report.fail("pending-is-not-merged", where,
+                    "branch %s no longer exists on %s origin, so this marker "
+                    "describes nothing: it either merged (promote to RESOLVED) "
+                    "or was abandoned (delete the marker). 0002 section 4 "
+                    "calls this a defect in one direction or the other."
                     % (branch, repo_name))
 
 
@@ -616,7 +671,7 @@ def check_supersede(cfg, report, waivers):
             continue
         try:
             body = read(path)
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             report.fail("readable", cfg.rel(path), "unreadable: %s" % exc)
             continue
         for n, line in enumerate(body.splitlines(), 1):
@@ -653,7 +708,8 @@ def check_supersede(cfg, report, waivers):
             # Prose "not merged" claims carry no keyword at all, so nothing
             # above sees them. Checked independently of the marker branches so
             # a marker on the same line cannot mask one.
-            if STALE_CLAIM_RE.search(line) and not QUOTATION_RE.search(line):
+            if (STALE_CLAIM_RE.search(line)
+                    and not STALE_CLAIM_EXEMPT.search(line)):
                 if waivers.allows("stale-claim", path):
                     report.note("waived prose status claim at %s" % where)
                 else:
@@ -700,17 +756,34 @@ def main():
     facts, waiver_table = load_registry(cfg, report)
     waivers = Waivers(waiver_table)
 
-    if run_facts and facts:
-        check_facts(cfg, report, facts, waivers)
+    if run_facts:
+        # Registry-independent, so it runs even when the registry is broken --
+        # that is the whole point of scanning for value *shapes*. Gating it on
+        # `facts` would have made the strongest rule in 0001 collapse along
+        # with the weakest.
+        check_glossary_is_value_free(cfg, report, waivers)
+        if facts:
+            check_facts(cfg, report, facts, waivers)
     if run_super:
         check_supersede(cfg, report, waivers)
 
     if args.check_waivers:
+        # Only judge waivers whose consuming check actually ran, or a scoped
+        # run reports every waiver for the other half as dead.
+        consumers = {"legacy-marker": run_super, "stale-claim": run_super}
         for wid, path in waivers.unfired():
+            if wid.startswith("glossary-fence"):
+                ran = run_facts
+            else:
+                ran = consumers.get(wid, run_facts)
+            if not ran:
+                report.note("waiver %s not judged: its check did not run in "
+                            "this invocation" % wid)
+                continue
             report.fail("check-waivers", cfg.rel(path),
                         "waiver for %s never fired -- the restatement is gone, "
-                        "or the check that would have used it is not running. "
-                        "Delete the row." % wid)
+                        "or the fence it authorises is gone. Delete the row."
+                        % wid)
 
     if report.failures:
         print("\n%d failure(s). See docs/decisions/0001-one-authority-per-fact.md"

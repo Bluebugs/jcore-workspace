@@ -90,28 +90,72 @@ matches no current pattern by construction). It also exempted any line linking
 its owner, and by then nearly every glossary entry linked its owner. It was
 `restatement-is-linked` scoped to one file, wearing another name.
 
+*(A figure quoted in an earlier revision of this section needs correcting too:
+"23 hits, no false positives" was the **raw** match count with the quotation
+escape disabled. What the shipped check reported on the same file was **10** — 8
+inside what is now the `Addr width` fence, plus the two entries that were
+rewritten. Every hit in both counts was a real value; the 23 overstated the
+check's reach by 2.3×, which is exactly the kind of unbased number this project
+keeps having to retract.)*
+
 The check now scans for value **shapes**, independent of the registry and
 independent of links. A stale value is caught exactly as readily as a current
-one, which is the property the claim needs. Measured on this glossary the scan
-produced 23 hits and no false positives; years, product names (`ECP5`, `4.4BSD`,
-`SPARC v9`) and section references do not match, because none of them is a number
-followed by a unit.
+one, which is the property the claim needs.
 
-The claim, stated at the strength it actually holds: **an unfenced value cannot
-survive in `docs/glossary.md`.** Two escapes exist and both are visible:
+**The reach is an enumerated list, not "numbers".** These shapes are covered:
 
-- A line that is *retiring* the value it quotes (`retired`, `no longer`,
-  `formerly read`, …). Without this the glossary could not record its own
-  history, which is worse.
-- A declared `<!-- value-free: off -->` fence. A fence must be closed, and must
-  have a `glossary-fence` row in the registry's Waivers table or the check fails
-  — so an exemption appears both where it applies and where exemptions get
-  reviewed. There is exactly one today, on the product table's `Addr width`
-  column, and B1 is named to remove it.
+| Shape | Matches |
+|---|---|
+| size | `520 bytes`, `272-byte`, `16 kB`, `16 kilobytes`, `4 MiB` |
+| width | `16-bit`, `12 bits` |
+| address | `0xFF00002C`, `0x0` |
+| bit position | `bit 15`, `bits 12` |
+| bit range | `ASID_TAG[15:12]` |
+| count | `32 entries`, `2 ways`, `4 contexts` |
+| frequency | `400 MHz`, `40MHz` |
+| bare count | `**4096**` — a bolded bare number, the form the retired ASID-space sentence used |
+
+**A shape absent from that list is a third escape**, and pretending otherwise is
+how the first version of this section went wrong. Known gaps: an unbolded bare
+number (`the space is 4096`), a spelled-out number, and a value in a unit nobody
+has used yet. The list grows when a gap is found; it is not a claim of
+completeness.
+
+Two further escapes, both visible in the file:
+
+- **A line whose subject is the retirement**, marked by a scoped phrase:
+  `formerly read`, `previously read`, `previously said`, `used to read`,
+  `promoted from`. Without this the glossary could not record its own history,
+  which is worse. The phrase must be on the same line as the value.
+  Bare `retired` / `no longer` are deliberately **not** in the set — see below.
+- **A declared, id-carrying fence**, `<!-- value-free: off (some-id) -->`, which
+  must be closed and must have its own `glossary-fence:some-id` row in the
+  registry. One row licenses one region; an unnamed fence, a reused id, or an
+  unregistered id all fail. There is exactly one fence today, on the product
+  table's `Addr width` column, and B1 is named to remove it.
 
 **Waivers are refused outright.** The checker fails if a waiver row targets
-`docs/glossary.md`. The fence is deliberately *not* a waiver: it is narrower, it
-is legible in the file it affects, and it is counted.
+`docs/glossary.md`. The fence is not a softer waiver: a restatement waiver is
+fact × file, so an id-less fence would be *broader* than the thing it replaced —
+anything × file. Keying each fence to a registry row is what makes it narrower
+in fact and not just in description.
+
+### Why the escape is two constants and not one
+
+`glossary-is-value-free` and `stale-claim` (0002) both need "this line is quoting
+something it has retired". They briefly shared one regex, and widening it to
+`retired|no longer` so the glossary could carry its own history **silently
+exempted 119 lines across 22 files from the merge-status check** — a line saying
+"the old walker is retired" excused an unrelated `NOT MERGED` sitting on it.
+
+The rule as written here said "a line that is *retiring* the value it quotes".
+The code said "a line containing the word `retired`". The gap between those two
+sentences was the entire hole, and it was opened by the commit that closed the
+previous one.
+
+They are now two named constants with the same narrow contents, and the
+narrowness is the point: every phrase in the set makes the retirement the
+line's *subject*. `retired` and `no longer` do not — they attach to anything.
 
 ### The gap this does not close, stated rather than papered over
 
@@ -141,8 +185,26 @@ doc-vs-code checks both reach it.
 ### How this check is tested, and why it is not tested against this tree
 
 `scripts/test-check-doc-facts.py` builds a throwaway tree per case and runs the
-checker against it with `--root`. It asserts **exit status**, so a check that
-does not exist fails the test rather than quietly passing.
+checker against it with `--root`. It asserts exit status **and, for a case that
+expects a failure, which check produced it** (`expect_check=`) — exit status
+alone cannot tell "the check I meant fired" from "something else did", so a
+later change could otherwise slide a case onto a different failure and stay
+green.
+
+To compare against an older checker — the evidence that a fix closes something
+that used to be open — use `--against`:
+
+```
+scripts/test-check-doc-facts.py --against /path/to/old-check-doc-facts.py
+```
+
+`--against` **back-ports `--root` into a copy of the old script** before running,
+and this matters more than it sounds. A script predating `--root` exits 2 on
+every case, and a harness asserting only "non-zero" scores all of those as
+passes: run naively, the old script appears to pass 22 of 28 cases; with the
+back-port it passes 10. The harness now also treats an argparse rejection as a
+test failure rather than a pass, so the naive comparison cannot be made by
+accident.
 
 This is a correction, not a preference. The first version of the suite mutated
 the real `docs/` and asserted the checker went red. Every case therefore

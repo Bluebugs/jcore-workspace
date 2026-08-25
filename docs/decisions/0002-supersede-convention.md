@@ -174,7 +174,7 @@ unchecked prose status claim.
 |---|---|---|
 | `marker-grammar` | A marker keyword on a line that no `SUPERSEDED BY` / `RESOLVED` / `PENDING-MERGE` / `HISTORICAL` marker accounts for; also a `PENDING-MERGE` whose "Not on …" names the wrong integration branch, or any marker naming an unknown repo | Legacy unstructured markers are listed in the registry's waiver list under the `legacy-marker` ID and are **noted** (visible with `-v`), not warned; the list may only shrink |
 | `resolved-is-merged` | A `RESOLVED` marker whose quoted subject is **not** on `<repo>`'s integration branch, or whose cited artifact (or symbol within it) is not there | This is the check the task asks for, and it is mechanical. It catches both "resolved too early" and "cited a rebased-away commit" |
-| `pending-is-not-merged` | A `PENDING-MERGE` marker whose quoted subject **is** on the integration branch | Fails with "promote to RESOLVED" |
+| `pending-is-not-merged` | A `PENDING-MERGE` marker whose quoted subject **is** on the integration branch, **or** whose branch no longer exists on that repo's `origin` | Both fail. §4 calls a marker whose branch is gone "a defect in one direction or the other", so reporting it as an advisory warning contradicted this record |
 | `stale-claim` | Any line asserting *not merged* in prose, outside the marker grammar | See below. This is the one that covers the notices that actually rotted |
 
 **`stale-claim` exists because the marker checks did not cover the failure that
@@ -193,6 +193,21 @@ note, so `stale-claim` stands down when the line also carries `promoted from`,
 `previously read`, `previously said`, `formerly read` or `used to read`. Keeping
 the retired wording on the *same line* as the phrase that excuses it is
 deliberate: it means the excuse cannot drift away from the thing it excuses.
+
+**That exemption is `stale-claim`'s own, and must stay that way.** It briefly
+shared a regex with the glossary's equivalent in
+[0001](0001-one-authority-per-fact.md), and widening the shared regex to
+`retired|no longer` — a change made for the glossary, with no thought of this
+check — **exempted 119 lines across 22 files from `stale-claim` in the same
+commit that introduced it**. Appending "the old walker is retired" to a line was
+enough to excuse a `NOT MERGED` sitting on it. The two escapes are now separate
+constants with identical contents, purely so that widening one cannot widen the
+other. If you are tempted to add a phrase, add it to one.
+
+Note the shape of that failure, because it is the one this whole task keeps
+producing: a check written to close a hole, which opens a different one in the
+same commit, and a suite that goes green because it tests the case the author
+was thinking about.
 
 Waiver IDs are per **check**, not per file: `legacy-marker` and `stale-claim` are
 separate rows, so exempting a file from one does not exempt it from the other.

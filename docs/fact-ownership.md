@@ -82,10 +82,13 @@ Granularity is *waiver-ID × file*. A waiver ID is either a **fact ID** (silenci
 deliberately separate: a file exempted for one may not be exempted for the other,
 which is why `mmu/security-review.md` appears once and not twice.
 
-`glossary-is-value-free` accepts **no** waiver, and the checker refuses one; the
-glossary's only escape is the declared `<!-- value-free: off -->` fence, which
-lives at the point of use and is registered below so it burns down like any other
-row.
+`glossary-is-value-free` accepts **no** waiver, and the checker refuses one. Its
+only escape is a declared, **id-carrying** fence —
+`<!-- value-free: off (some-id) -->` — which lives at the point of use *and*
+must have its own `glossary-fence:some-id` row below. **The checker reads those
+rows**: a fence with no matching row fails, an unnamed fence fails, a reused id
+fails, and a row whose fence is gone fails under `--check-waivers`. One row
+licenses one region, never the file.
 
 `scripts/check-doc-facts.py --check-waivers` fails on a row that never fires, so
 this list cannot quietly outlive the restatements it covers.
@@ -132,5 +135,5 @@ or delete the duplicated value. Both are one-line changes.
 | `simd.sr.vd` | [fpu/spec.md](fpu/spec.md) | §7 preamble; **superseded** by B0a, text rewritten by Wave 2 |
 | `simd.vfpul` | [fpu/spec.md](fpu/spec.md) | §7 preamble still describes VFPUL as live; **superseded** by B0a, text deleted by Wave 2 |
 | `simd.vfpul` | [j4-remediation-plan.md](j4-remediation-plan.md) | the plan quotes the review finding verbatim; clears when the plan is retired |
-| `glossary-fence` | [glossary.md](glossary.md) §3 | one `<!-- value-free: off -->` region: the product table's `Addr width` column, which mixes self-referential naming (J*N* is *N*-bit) with a borrowed MMU fact (the J64 VA width). Not a waiver row the checker reads — recorded here so the fence is counted and burnt down. Wave-2 **B1** splits the column and deletes the fence. |
+| `glossary-fence:product-table-addr-width` | [glossary.md](glossary.md) §3 | Authorises exactly one fenced region — the product table's `Addr width` column, which mixes self-referential naming (J*N* is *N*-bit) with a borrowed MMU fact (the J64 VA width). **The checker reads this row**: delete it and the fence fails; add a fence with any other id and it fails until that id has its own row. Wave-2 **B1** splits the column, then this row and the fence go together. |
 | `legacy-marker` | [mmu/security-review.md](mmu/security-review.md) | eight `**RESOLVED**` markers predating [0002](decisions/0002-supersede-convention.md)'s grammar (findings S-C2, S-I3, S-I4, S-I5, S-I7, H-I1, H-M1, H-M3). Each was checked by hand on 2026-08-25 and each **is** backed by merged work on `jcore-cpu` `master` — the guards `mmustale.S`, `mmuglobal.S`, `mmumultihit.S`, `mmuremap.S`, `mmudblflt.S`, `mmunest*.S` are all present there. They are unstructured, not untrue. Wave-1 **C0** rewrites this document and reformats them. |
