@@ -66,12 +66,49 @@ exit non-zero on failure. It has no dependencies beyond Python 3 and `git`.
 | Check | What it fails on | Why this one |
 |---|---|---|
 | `owner-has-fact` | The owning document no longer contains its own registered constant | Catches an owner changing a value without updating the registry — the registry cannot silently outlive the fact |
-| `glossary-is-value-free` | Any registered constant's pattern matches inside `docs/glossary.md` | This is the structural rule. It makes the *class* of failure that produced VFPUL/272 impossible rather than merely discouraged, and it is one grep over one file |
+| `glossary-is-value-free` | Any registered constant's pattern matches inside `docs/glossary.md` without a link to the owner on that line | This is the structural rule. It makes the *class* of failure that produced VFPUL/272 impossible rather than merely discouraged, and it is one grep over one file |
 | `restatement-is-linked` | A non-owning document restates a registered constant with no link to the owner on that line | Catches new bare copies. Existing ones are enumerated in the registry's waiver list, which may only shrink |
+| `registry-value-is-short` | A registry `Constant` cell longer than 100 characters | See "the gap this does not close", below |
 
 Rule 2 is the load-bearing one. Rules 1 and 3 are hygiene; rule 2 is what makes
 the decision self-enforcing, because it does not depend on anyone remembering
 the decision — it depends on a file being value-free, which a machine can see.
+
+**`glossary-is-value-free` takes no waivers, and that is enforced, not merely
+observed.** The checker *refuses* a waiver row targeting `docs/glossary.md` and
+fails if one is added. An earlier draft of this record said "no waivers" when
+what was true was only "no waivers today" — the waiver mechanism would have
+honoured one. Since the argument above leans on the glossary being
+*structurally* unable to carry a value, the mechanism now matches the claim
+rather than the claim being softened to match the mechanism.
+
+### The gap this does not close, stated rather than papered over
+
+`owner-has-fact` greps the registry's **pattern** against the owning document.
+It never reads the registry's own **prose**. So a `Constant` cell can describe a
+mechanism that the owner has since retired, and every check still passes — which
+is exactly what happened on this decision's first commit: the
+`mmu.asidtag.width` row read "16 bits (12-bit ASID + 4-bit generation)" while the
+owner's own supersede header, added in the same commit, said the generation
+nibble no longer exists. The index that replaces the glossary reproduced the
+glossary's failure on day one.
+
+**What was decided.** Not to add prose-vs-owner checking: it needs a second
+pattern per row describing what the owner must *not* say, and a negative pattern
+is defeated by the owner legitimately quoting the retired text inside its own
+supersede header — which every superseded section here does. The check would
+have to be wrong or noisy.
+
+Instead the room for drift is removed: **a `Constant` cell states the value, not
+the mechanism**, capped at 100 characters and enforced by
+`registry-value-is-short`. It is a crude bound, and it is the same move as
+`glossary-is-value-free` — make the prose too short to hold an explanation, so
+there is nothing to go stale, rather than trusting a rule to be remembered.
+Explanation belongs in the owning spec, where `owner-has-fact` and B0c's
+doc-vs-code checks both reach it.
+
+Residual risk, named: a cell can still be wrong within 100 characters. B0c
+inherits the table and is the check that compares each row's owner to the code.
 
 **What this check does not do**, stated so nobody relies on it wrongly: it does
 not compare a document against the **code**. A spec can own a fact, satisfy
@@ -149,3 +186,7 @@ carry a value and the right to win a disagreement.
 - **`check-doc-facts.py`'s waiver list stops shrinking across two waves.** That
   would mean the restatement rule is being worked around rather than complied
   with, and the rule needs to change rather than be re-asserted.
+- **`registry-value-is-short` starts being fought** — rows that genuinely need
+  more than 100 characters to state a value, as opposed to to explain one. That
+  would mean the cap is standing in for a check that should exist, and the
+  prose-vs-owner question reopens.

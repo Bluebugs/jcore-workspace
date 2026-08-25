@@ -27,16 +27,24 @@ The `Pattern` column is the Python regular expression the checker uses to
 recognise the constant in prose. Keep it tight enough to avoid unrelated hits and
 loose enough to catch a restatement.
 
+**The `Constant` column states a value; it does not explain a mechanism**, and is
+capped at 100 characters by `registry-value-is-short`. This is not tidiness: on
+this file's first commit the `mmu.asidtag.width` row described a generation
+nibble that its own owner's supersede header, added in the same commit, said had
+been retired. Nothing caught it, because no check reads this prose. Short cells
+are the substitute for a check that cannot be written cleanly — see
+[decisions/0001 §Enforcement](decisions/0001-one-authority-per-fact.md).
+
 | ID | Constant | Owner | Pattern |
 |---|---|---|---|
-| `simd.vfpul` | VFPUL is **retired**; there is no SIMD-side scalar FP register, and the `FMOV.VS`/`FMOV.VD` boundary instructions are deleted | [simd/spec.md §2.3](simd/spec.md) | `\bVFPUL\b` |
+| `simd.vfpul` | VFPUL: **retired**, no such register | [simd/spec.md §2.3](simd/spec.md) | `\bVFPUL\b` |
 | `simd.context.j32` | SIMD per-task context image, J32: **520 bytes** | [simd/spec.md §2.5](simd/spec.md) | `\b520[- ]byte` |
 | `simd.context.j64` | SIMD per-task context image, J64: **1036 bytes** | [simd/spec.md §2.5](simd/spec.md) | `\b1036[- ]byte` |
 | `simd.sr.vd` | `SR.VD` is **SR bit 13** | [simd/spec.md §2.6](simd/spec.md) | `SR bit 13` |
 | `fpu.context.t2` | Tier-2 FPU context image: **132 bytes** | [fpu/spec.md §7.4](fpu/spec.md) | `\b132[- ]byte` |
 | `fpu.sr.fd` | `SR.FD` is **SR bit 15** | [fpu/spec.md §6.3](fpu/spec.md) | `SR bit 15` |
 | `mmu.asid.width` | ASID proper: **12 bits** (4096 ASIDs) | [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md) | `12-bit ASID\b` |
-| `mmu.asidtag.width` | `ASID_TAG`: **16 bits** (12-bit ASID + 4-bit generation) | [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md) | `16-bit .?ASID_TAG` |
+| `mmu.asidtag.width` | `ASID_TAG`: **16 bits** (12-bit ASID; top nibble reserved, always zero) | [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md) | `16-bit .?ASID_TAG` |
 | `mmu.page.base` | Base page size: **16 KB** | [mmu/design-spec.md §3.3](mmu/design-spec.md) | `16 KB base page` |
 | `mmu.tsb.entry` | TSB entry: **16 bytes** | [mmu/hardware-spec.md §2.8](mmu/hardware-spec.md) | `16-byte entr` |
 | `mmu.tsb.set` | TSB set: **32 bytes, 2-way** (way 0 at `+0`, way 1 at `+16`) | [mmu/hardware-spec.md §2.8](mmu/hardware-spec.md) | `32-byte (set\b\|cache line)` |

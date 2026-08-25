@@ -29,14 +29,16 @@ rebased and merged, so the marker now points at nothing.
 **Two failure modes, both observed in the tree today, both of which this record
 exists to make impossible:**
 
-1. **`RESOLVED` against unmerged work.**
-   [mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md) and
-   [mmu/linux-spec.md §4, §4.3](../mmu/linux-spec.md) carried
+1. **Status claims that outlive their own merge.** **Eleven** sections across
+   `mmu/hardware-spec.md`, `mmu/design-spec.md`, `mmu/linux-spec.md` and
+   `hypervisor/design-spec.md` carried a prose claim of the shape
    "IMPLEMENTED on `mmu/tsb-hw-walker` / `mmu/tsb-phase2`, **NOT MERGED**"
-   for weeks. That is honest, and it is exactly what `PENDING-MERGE` is for —
-   but nothing distinguished it from `RESOLVED` except prose, and nothing
-   noticed when it *did* merge. Both are merged now; nothing in the repository
-   said so until this task looked.
+   for weeks. That is honest *when written*, and it is exactly what
+   `PENDING-MERGE` is for — but nothing distinguished it from `RESOLVED` except
+   prose, and nothing noticed when it *did* merge. All eleven are merged;
+   nothing in the repository said so until this task looked, and both branches
+   are now gone from their `origin`s. Note that this is the failure the marker
+   grammar alone does **not** catch — see `stale-claim` under Enforcement.
 
 2. **Citation by SHA, which rebasing silently invalidates.**
    `mmu/linux-spec.md §4` cites `jcore-cpu` `09304a3`/`957e940`;
@@ -142,9 +144,27 @@ resolves markers against the submodules' `origin/<integration-branch>` refs.
 
 | Check | Failure | Notes |
 |---|---|---|
-| `marker-grammar` | A `SUPERSEDED BY` / `RESOLVED` / `PENDING-MERGE` marker that does not parse | Legacy unstructured markers are listed in the registry's waiver list and warn rather than fail; the list may only shrink |
-| `resolved-is-merged` | A `RESOLVED` marker whose quoted subject is **not** on `<repo>`'s integration branch | This is the check the task asks for, and it is mechanical. It catches both "resolved too early" and "cited a rebased-away commit" |
-| `pending-is-not-merged` | A `PENDING-MERGE` marker whose quoted subject **is** on the integration branch | Fails with "promote to RESOLVED". This is the check nothing in the repository had, and it is why five stale `NOT MERGED` notices survived their own merges |
+| `marker-grammar` | A `SUPERSEDED BY` / `RESOLVED` / `PENDING-MERGE` / `HISTORICAL` marker that does not parse | Legacy unstructured markers are listed in the registry's waiver list and warn rather than fail; the list may only shrink |
+| `resolved-is-merged` | A `RESOLVED` marker whose quoted subject is **not** on `<repo>`'s integration branch, or whose cited artifact (or symbol within it) is not there | This is the check the task asks for, and it is mechanical. It catches both "resolved too early" and "cited a rebased-away commit" |
+| `pending-is-not-merged` | A `PENDING-MERGE` marker whose quoted subject **is** on the integration branch | Fails with "promote to RESOLVED" |
+| `stale-claim` | Any line asserting *not merged* in prose, outside the marker grammar | See below. This is the one that covers the notices that actually rotted |
+
+**`stale-claim` exists because the marker checks did not cover the failure that
+happened, and the first version of this record said they did.** All eleven of
+this tree's implemented-but-unmerged notices used a prose form —
+`**Amendment — Phase 2. Status: IMPLEMENTED on <branch>, NOT MERGED.**` — which
+carries no marker keyword and therefore matched nothing in the grammar above.
+`pending-is-not-merged` protects *future* `PENDING-MERGE` markers and could
+never have caught a single one of the eleven. `stale-claim` is what closes the
+class: it flags the phrase itself, wherever it appears, and it independently
+rediscovered the four notices that the first pass of this task promoted only
+seven of.
+
+Quoting a claim you have just retired is legitimate and common in a promotion
+note, so `stale-claim` stands down when the line also carries `promoted from`,
+`previously read`, `previously said`, `formerly read` or `used to read`. Keeping
+the retired wording on the *same line* as the phrase that excuses it is
+deliberate: it means the excuse cannot drift away from the thing it excuses.
 
 Verification needs the submodule present with an `origin` remote fetched. When a
 submodule is absent the script **warns and skips**, and says which checks it

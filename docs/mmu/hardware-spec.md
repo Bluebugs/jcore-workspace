@@ -235,10 +235,19 @@ Holds the base address of the per-CPU TSB and configuration bits.
 
 On J64, TSB_BASE widens to a 64-bit physical address. The low 4 bits remain `TSB_SIZE_LOG`.
 
-> **Amendment — Phase 2 of the hardware-walker work. Status: IMPLEMENTED on
-> `jcore-cpu` branch `mmu/tsb-hw-walker`, NOT MERGED** (MMU suite 97 PASS /
-> 0 FAIL at `a2522ed`). Later phases (instruction retirement) are **not**
-> implemented.
+> **Amendment — Phase 2 of the hardware-walker work.**
+> **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer".**
+> *(Promoted from a claim that `mmu/tsb-hw-walker` was implemented but unmerged;
+> the branch is gone from `origin`. The block also carried "MMU suite 97 PASS /
+> 0 FAIL at `a2522ed`" — `a2522ed` is **not** an ancestor of `origin/master`, so
+> the tally names a base that no longer exists and has been dropped rather than
+> restated. This task did not re-run the suite.)*
+> Instruction retirement — the phase this note called "later" — is also done:
+> **RESOLVED 2026-08-25 — jcore-cpu@master: "decode(mmu): retire LDTLB (0x0038) and LDTLB.RN (0x0078)"**,
+> and the read side with it —
+> **RESOLVED 2026-08-25 — jcore-cpu@master: artifact `decode/gen-go/spec/sh4/mmu.toml` containing `All seven were retired`.**
+> Kernel side:
+> **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: retire inlined TLB fast path and STC ASIDR/TSBPTR reads".**
 >
 > `TSB_SIZE_LOG` counts **sets**, not entries. Phase 1 and everything before
 > it counted 16-byte entries, and the layout above has been rewritten in
@@ -480,9 +489,11 @@ Read-only MMIO register at `0xFF00002C`, latched on every TLB exception (I-fetch
 
 ### 2.12 TSBSLOT — TSB set-address helper (NEW, MMIO only)
 
-> **Amendment — Phase 2. Status: IMPLEMENTED on `jcore-cpu` branch
-> `mmu/tsb-hw-walker`, NOT MERGED.** Decoded in `core/datapath.vhm` as
-> `P4_TSBSLOT`, alongside `TSBBR`/`TSBCFG`/`TSBPTR`.
+> **Amendment — Phase 2.**
+> **RESOLVED 2026-08-25 — jcore-cpu@master: artifact `core/datapath.vhm` containing `P4_TSBSLOT`.**
+> Decoded alongside `TSBBR`/`TSBCFG`/`TSBPTR`.
+> *(Promoted from a claim that `mmu/tsb-hw-walker` was implemented but unmerged;
+> the branch is gone from `origin`.)*
 
 **Access:** MMIO at `0xFF000048`, read **and** write. There is no LDC/STC form.
 
@@ -510,10 +521,12 @@ atomicity is required of the pair, and none is provided.
 
 ### 2.13 TSBVSEED / TSBVICT — TSB victim selector (NEW, MMIO only)
 
-> **Amendment — Phase 2. Status: IMPLEMENTED on `jcore-cpu` branch
-> `mmu/tsb-hw-walker`, NOT MERGED.** Decoded in `core/datapath.vhm` as
-> `P4_TSBVSEED` / `P4_TSBVICT`; the LFSR itself is `tsb_lfsr_next()` in
-> `core/datapath_pkg.vhd`.
+> **Amendment — Phase 2.**
+> **RESOLVED 2026-08-25 — jcore-cpu@master: artifact `core/datapath.vhm` containing `P4_TSBVSEED`.**
+> `P4_TSBVICT` is decoded alongside it, and the LFSR itself is
+> **RESOLVED 2026-08-25 — jcore-cpu@master: artifact `core/datapath_pkg.vhd` containing `tsb_lfsr_next`.**
+> *(Promoted from a claim that `mmu/tsb-hw-walker` was implemented but unmerged;
+> the branch is gone from `origin`.)*
 
 With a 2-way set, software that finds neither tag matching must choose a way to
 replace. Hardware nominates one, pseudo-randomly, so that the choice is not
@@ -903,7 +916,7 @@ empirically by the Phase-1 feasibility spike, `jcore-cpu` commit `90e6cbc`.)
 | TSB entry format | **Phase 2: 2-way, 32-byte set, `tsb_ptr()` scaling by `<< 5`, `ASID` folded into the index** (§2.8). **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer"** *(promoted from "IMPLEMENTED on `mmu/tsb-hw-walker`, not merged")*. Phase 1's 1-way 16-byte slot is superseded. |
 | Two-way probe in the walker FSM | Phase 2, IMPLEMENTED (`core/tlb_walk.vhd`, generic `tsb_ways => 2` from `core/cpu.vhd`); guard `mmuwalkway1` |
 | `TSBSLOT` / `TSBVSEED` / `TSBVICT` (§2.12, §2.13) | Phase 2, IMPLEMENTED and decoded in `core/datapath.vhm` |
-| Instruction retirement (§3.1) | **Phase 3, not yet started.** All seven instructions still exist and still work. |
+| Instruction retirement (§3.1) | **RESOLVED 2026-08-25 — jcore-cpu@master: artifact `decode/gen-go/spec/sh4/mmu.toml` containing `All seven were retired`.** *(This row previously read "Phase 3, not yet started. All seven instructions still exist and still work." They do not: the whole `0000 nnnn xxxx 1011` read family is retired and the encoding space is back in the free pool. The write side — `LDC Rm,{PTEH,PTEL,ASIDR}` — is deliberately kept.)* |
 
 ### 5.1 Exception sequence (when the walk does not resolve the miss)
 

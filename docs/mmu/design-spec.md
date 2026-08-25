@@ -207,9 +207,12 @@ Offset  Field        Width   Description
 
 The same layout works for J32 (with upper VPN/PPN bits unused) and J64 (with all bits populated). Hash function for indexing: XOR-fold the VPN with itself shifted right by `log2(TSB_entries)`, masked to entry count.
 
-> **Amendment — Phase 2 of the hardware-walker work. Status: IMPLEMENTED on
-> `jcore-cpu` branch `mmu/tsb-hw-walker` and `linux@jcore` branch
-> `mmu/tsb-phase2`, NOT MERGED.**
+> **Amendment — Phase 2 of the hardware-walker work.**
+> **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer".**
+> Kernel half:
+> **RESOLVED 2026-08-25 — linux@jcore: "Merge pull request #10 from mountain-reverie/mmu/tsb-phase2".**
+> *(Promoted from a claim that both branches were implemented but unmerged;
+> neither branch exists on its `origin` any more.)*
 >
 > **The TSB is 2-way.** Entries stay 16 bytes; a **set** is one 32-byte cache
 > line holding two contiguous entries — way 0 at `+0`, way 1 at `+16`.
