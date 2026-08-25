@@ -18,8 +18,9 @@
 >
 > This is a demotion from an earlier claim to be "the single source of truth",
 > and it was made because that claim was false. For five weeks this file
-> described a live `VFPUL` register and a 272-byte SIMD context image, after [simd/spec.md](simd/spec.md) had retired the one and changed the other;
-> and it tabulated a little-endian J2 that ships big-endian.
+> described a live `VFPUL` register; its SIMD context entry previously read **272 bytes**
+> where [simd/spec.md](simd/spec.md) had long since said otherwise; and it
+> tabulated a little-endian J2 that ships big-endian.
 > The argument, and the alternative that was rejected, are in
 > [decisions/0001](decisions/0001-one-authority-per-fact.md).
 >
@@ -88,7 +89,7 @@ Family naming uses the convention: **J<width>[-<variant>]** where width is the i
 > **B1** should split the column: keep the naming width, move the VA width to
 > the MMU spec, and delete the fence.
 
-<!-- value-free: off -->
+<!-- value-free: off (product-table-addr-width) -->
 
 | Name        | ISA baseline                              | MMU                | FPU tier              | SIMD tier      | OoO | Threading   | Addr width | Endianness | Status        |
 |-------------|-------------------------------------------|--------------------|-----------------------|----------------|-----|-------------|------------|------------|---------------|
