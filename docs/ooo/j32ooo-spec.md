@@ -1133,6 +1133,27 @@ S6 is not optional. The MMU guard suite in this project once false-passed six su
 
 ### 20.10 `PDID` — predictor domain ID
 
+> **SUPERSEDED BY [../mmu/hardware-spec.md §2.1a](../mmu/hardware-spec.md) (one premise only) — 2026-08-25.**
+> "**Why not a truncated ASID**" below argues from
+> `ASID_TAG`'s top-4-bit generation discriminator, citing `glossary §5`. **That
+> field no longer exists** —
+> **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: retire the ASID generation nibble"** —
+> and the glossary is no longer an authority for values
+> ([../decisions/0001](../decisions/0001-one-authority-per-fact.md)); the owner
+> is [../mmu/hardware-spec.md §2.1a](../mmu/hardware-spec.md).
+>
+> **The conclusion stands on its other leg.** Truncating to `ASID_TAG[7:0]` no
+> longer "discards the generation field", but it still discards `ASID[11:8]` —
+> "half the range" in the text is in fact 15/16ths of it — and guests are still
+> separated **only** by ASID range partitioning, there being no VMID. Two guests
+> in different ASID ranges can still collide in the predictor index by
+> construction. So `PDID` is still needed and truncation is still wrong; the
+> sentence *"the single mechanism guest-to-guest separation rests on"* is now the
+> **range**, not the generation field.
+>
+> Not re-derived here — Wave-1 **C0** owns the security argument. Flagged so a
+> reader does not inherit the reasoning along with the conclusion.
+
 The domain identifier `DOM` of §3.2 needs a source. It cannot be `ASID_TAG` alone, for two reasons that only become visible once the hypervisor extension is in scope.
 
 **Why not `SR.MD` and the ASID alone.** [hypervisor/hardware-spec.md](../hypervisor/hardware-spec.md) does not change `ASIDR` on trap entry, so the hypervisor executes with whatever `ASID_TAG` the guest left in it. Host and guest would share a predictor domain, and a guest could train the branch target of the HCALL dispatcher, the `LDTLB` trap handler, or the emulated-MMIO device model — all of which run at `SR.HPRIV = 1` on addresses the guest chose. This is [VMScape (CVE-2025-40300)](https://comsec.ethz.ch/research/microarch/vmscape-exposing-and-exploiting-incomplete-branch-predictor-isolation-in-cloud-environments/) exactly, where the finding was that "the branch predictor cannot distinguish between host and guest execution" on every AMD Zen generation.

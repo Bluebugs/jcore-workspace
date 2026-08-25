@@ -29,6 +29,9 @@ DOCS = os.path.join(ROOT, "docs")
 REGISTRY = os.path.join(DOCS, "fact-ownership.md")
 GLOSSARY = os.path.join(DOCS, "glossary.md")
 
+# Max length of a registry Constant cell. See `registry-value-is-short`.
+VALUE_CELL_MAX = 100
+
 # Per 0002 section 2. A change is "merged" only when it is on this branch.
 INTEGRATION_BRANCH = {
     "jcore-cpu": "master",
@@ -166,6 +169,16 @@ def load_registry(report):
             report.fail("registry", rel(REGISTRY),
                         "fact %s has no link to an owning document" % fid)
             continue
+        # 0001: the registry states a value, it does not explain a mechanism.
+        # A long cell is room for prose to drift away from the owner, and that
+        # drift is not otherwise checkable -- `owner-has-fact` greps the
+        # pattern, never this text. Keeping the cell short is the structural
+        # substitute. See 0001 section Enforcement.
+        if len(fact.value) > VALUE_CELL_MAX:
+            report.fail("registry-value-is-short", fid,
+                        "Constant cell is %d chars (max %d). State the value; "
+                        "explanation belongs in the owning spec."
+                        % (len(fact.value), VALUE_CELL_MAX))
         facts.append(fact)
 
     waivers = {}
@@ -173,21 +186,29 @@ def load_registry(report):
         if len(cells) < 2:
             continue
         fid = unbacktick(cells[0])
-        for target in links_on(cells[1], REGISTRY):
-            waivers.setdefault(fid, set()).add(target)
+        targets = set(links_on(cells[1], REGISTRY))
         # Also accept a bare path, for files that are not linked.
         bare = unbacktick(cells[1])
         if bare and "](" not in cells[1]:
-            waivers.setdefault(fid, set()).add(os.path.normpath(
-                os.path.join(ROOT, bare)))
+            targets.add(os.path.normpath(os.path.join(ROOT, bare)))
+        # 0001 leans on the glossary being *structurally* unable to carry a
+        # value. A waiver would make that a preference again, so the mechanism
+        # refuses one rather than the tree merely happening not to have one.
+        if GLOSSARY in targets:
+            report.fail("registry", rel(REGISTRY),
+                        "waiver for %s targets the glossary. "
+                        "`glossary-is-value-free` does not accept waivers; "
+                        "link the owner on the line instead." % fid)
+            targets.discard(GLOSSARY)
+        if targets:
+            waivers.setdefault(fid, set()).update(targets)
     return facts, waivers
 
 
 # ------------------------------------------------------------- 0001 checks
 
 
-def check_facts(report):
-    facts, waivers = load_registry(report)
+def check_facts(report, facts, waivers):
     if not facts:
         return
 
@@ -268,7 +289,17 @@ RESOLVED_RE = re.compile(
 # integration branch: cite the artifact instead. See 0002 section 3.
 RESOLVED_ARTIFACT_RE = re.compile(
     r'\*\*RESOLVED (\d{4}-\d{2}-\d{2}) — ([A-Za-z0-9._-]+)@([A-Za-z0-9._/-]+): '
-    r'artifact `([^`]+)`')
+    r'artifact `([^`]+)`(?: containing `([^`]+)`)?')
+
+# A prose status claim that work is implemented-but-unmerged. This is the form
+# eleven notices in this tree used, and it matches none of the markers above --
+# see 0002 section Enforcement. Spans lines in practice ("IMPLEMENTED on\n
+# branch X, NOT MERGED"), so the trailing half is what is matched.
+STALE_CLAIM_RE = re.compile(r"\bNOT[ _-]?MERGED\b", re.IGNORECASE)
+# ... unless the line is quoting a claim it has just retired.
+QUOTATION_RE = re.compile(
+    r"promoted from|previously read|previously said|formerly read|used to read",
+    re.IGNORECASE)
 PENDING_RE = re.compile(
     r'\*\*PENDING-MERGE (\d{4}-\d{2}-\d{2}) — ([A-Za-z0-9._-]+) branch '
     r'([A-Za-z0-9._/-]+): "([^"]+)"')
@@ -336,7 +367,10 @@ def check_supersede(report, waived_files):
 
             m = RESOLVED_ARTIFACT_RE.search(line)
             if m:
-                _, repo_name, branch, path = m.groups()
+                # NB: do not bind `path` here -- it is the loop variable naming
+                # the file being scanned, and shadowing it misattributes every
+                # later marker in the file and drops its waiver lookup.
+                _, repo_name, branch, artifact, symbol = m.groups()
                 expected = INTEGRATION_BRANCH.get(repo_name)
                 if expected is None:
                     report.fail("marker-grammar", where,
@@ -349,12 +383,20 @@ def check_supersede(report, waived_files):
                 elif subjects_on(repo_name, branch, report) is not None:
                     repo = os.path.join(ROOT, repo_name)
                     listing = git(repo, "ls-tree", "origin/%s" % branch, "--",
-                                  path)
+                                  artifact)
                     if not (listing or "").strip():
                         report.fail("resolved-is-merged", where,
                                     "RESOLVED cites artifact %s, which is not "
                                     "on %s origin/%s."
-                                    % (path, repo_name, branch))
+                                    % (artifact, repo_name, branch))
+                    elif symbol and git(repo, "grep", "-q", "--fixed-strings",
+                                        "-e", symbol, "origin/%s" % branch,
+                                        "--", artifact) is None:
+                        report.fail("resolved-is-merged", where,
+                                    "RESOLVED cites artifact %s containing %r, "
+                                    "but %s origin/%s's copy does not contain "
+                                    "it." % (artifact, symbol, repo_name,
+                                             branch))
                 continue
 
             m = RESOLVED_RE.search(line)
@@ -410,6 +452,20 @@ def check_supersede(report, waived_files):
                 report.fail("marker-grammar", where,
                             "%r marker does not match the 0002 grammar"
                             % loose.group(1))
+                continue
+
+            # Prose "NOT MERGED" claims. These carry no marker at all, so they
+            # are invisible to everything above -- which is exactly how eleven
+            # of them outlived their merges.
+            if STALE_CLAIM_RE.search(line) and not QUOTATION_RE.search(line):
+                if path in waived_files:
+                    report.note("waived prose status claim at %s" % where)
+                    continue
+                report.fail("stale-claim", where,
+                            "prose 'not merged' status claim. Use the "
+                            "PENDING-MERGE marker so it can be checked, or "
+                            "promote it. Quoting a retired claim needs "
+                            "'promoted from' / 'previously read' on the line.")
 
 
 # --------------------------------------------------------------------- main
@@ -430,13 +486,11 @@ def main():
 
     report = Report(verbose=args.verbose)
 
-    _, waivers = load_registry(report)
-    legacy = set()
-    for target in waivers.get("legacy-marker", ()):
-        legacy.add(target)
+    facts, waivers = load_registry(report)
+    legacy = set(waivers.get("legacy-marker", ()))
 
     if run_facts:
-        check_facts(report)
+        check_facts(report, facts, waivers)
     if run_super:
         check_supersede(report, legacy)
 

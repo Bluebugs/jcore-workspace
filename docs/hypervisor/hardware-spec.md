@@ -300,6 +300,34 @@ HSQCR   Hypervisor Store-Queue Status Register    32-bit
 
 ### 2.8 PDID — Predictor Domain ID (speculative-execution implementations only)
 
+> **SUPERSEDED BY [../mmu/hardware-spec.md §2.1a](../mmu/hardware-spec.md) (one premise only) — 2026-08-25.**
+> This section twice argues from `ASID_TAG`'s generation field, and **that field
+> no longer exists**:
+> **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: retire the ASID generation nibble".**
+> `ASID_TAG[15:12]` is reserved and always zero.
+>
+> **Two consequences, and the second is the security-relevant one.**
+>
+> 1. Both affected sentences cite **`glossary.md §5`** as their authority for the
+>    generation field. That citation is now dangling twice over: the glossary no
+>    longer carries the claim, and per
+>    [../decisions/0001](../decisions/0001-one-authority-per-fact.md) it is no
+>    longer an authority for values at all. The owner is
+>    [../mmu/hardware-spec.md §2.1a](../mmu/hardware-spec.md).
+> 2. *"Any predictor index that truncates `ASID_TAG` discards the one field that
+>    separation depends on"* — **the reasoning is void, the conclusion is not.**
+>    Truncation no longer discards a generation field, because there is none. It
+>    still discards `ASID[11:8]`, i.e. **15/16ths of the 4096-ASID range**, and
+>    guest-to-guest separation still rests **entirely** on ASID range
+>    partitioning because this design still has no VMID (§12). So "do not
+>    truncate `ASID_TAG` into the predictor index" survives on the range
+>    argument alone.
+>
+> **This header does not re-derive the security argument** — that is Wave-1
+> **C0**, whose adversary model (guest kernel on a shared core) is the one that
+> should settle it. The premise is flagged, not patched, and a reviewer must not
+> read the surviving conclusion as evidence that the stated reasoning holds.
+
 ```
 PDID    Predictor Domain ID     6 bits, [31:6] RAZ/WI
 ```

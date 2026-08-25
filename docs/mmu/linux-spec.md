@@ -480,10 +480,9 @@ For J64, the walker grows additional levels (P4D, PUD already). Compile-time lev
 ### 4.3 The TSB fill contract (Phase 2)
 
 > **RESOLVED 2026-08-25 — linux@jcore: "Merge pull request #10 from mountain-reverie/mmu/tsb-phase2".**
-> *(Promoted from "IMPLEMENTED on `linux@jcore` branch `mmu/tsb-phase2` and
-> `jcore-cpu` branch `mmu/tsb-hw-walker`, NOT MERGED".)* The code listings in
-> §4.1/§4.2 above still show the pre-Phase-2 shape; this subsection is
-> normative where they disagree.
+> *(Promoted from "IMPLEMENTED on `mmu/tsb-phase2` / `mmu/tsb-hw-walker`, NOT MERGED"; neither branch exists on its `origin` any more.)*
+> The code listings in §4.1/§4.2 above still show the pre-Phase-2 shape; this
+> subsection is normative where they disagree.
 
 The TSB is 2-way. `TSBPTR` and `TSBSLOT` both present a 32-byte-aligned **set**
 address, and the set is a single cache line holding two contiguous 16-byte
@@ -545,6 +544,20 @@ is not the prober. That mismatch, not the hashing, is what makes skewing unsafe
 here.
 
 ## 5. ASID Allocation and Context Switching
+
+> **SUPERSEDED BY [hardware-spec.md §2.1a](hardware-spec.md) (generation nibble only) — 2026-08-25.**
+> §5.1's `GEN_LOW_BITS` / `GEN_LOW_MASK` and §5.3's `encode_asid_tag()` are
+> presented below as the live kernel design. **They are not in the kernel** —
+> `git grep GEN_LOW_BITS origin/jcore -- arch/sh/` returns nothing.
+> **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: retire the ASID generation nibble".**
+> `get_asid()` returns a plain 12-bit ASID ([hardware-spec.md §2.1a](hardware-spec.md)),
+> `MMU_NO_ASID` is back to `MMU_CONTEXT_FIRST_VERSION`, and `ASIDR` is written
+> with that value alone.
+>
+> **What survives:** the per-CPU allocator, the version-wrap flush, and the
+> `switch_mm` shape. **What does not:** every appearance of `gen_low`, the
+> `ASIDR[15:12]` packing, and `jcore_tsb_flush_on_generation()`. Rewriting the
+> listings belongs to Wave-2 **B1**.
 
 ### 5.1 Per-CPU ASID state
 

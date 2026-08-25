@@ -2,3 +2,6 @@
 # Local brainstorming specs/designs — keep out of git
 docs/superpowers/
 docs/no-gpu-decision.md
+
+# Python bytecode from scripts/
+__pycache__/
