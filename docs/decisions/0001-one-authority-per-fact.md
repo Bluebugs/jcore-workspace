@@ -60,27 +60,58 @@ exactly one owning spec.** Concretely:
 ## Enforcement
 
 An unenforced convention is what produced the problem, so the convention lands
-with its check: **`scripts/check-doc-facts.py`**, run from the workspace root,
-exit non-zero on failure. It has no dependencies beyond Python 3 and `git`.
+with its check: **`scripts/check-doc-facts.py`**, exit non-zero on failure. It
+has no dependencies beyond Python 3 and `git`. Its own tests are
+`scripts/test-check-doc-facts.py`, which build fixture trees via `--root` —
+see "how this check is tested", below, because that part has already been got
+wrong once.
 
 | Check | What it fails on | Why this one |
 |---|---|---|
 | `owner-has-fact` | The owning document no longer contains its own registered constant | Catches an owner changing a value without updating the registry — the registry cannot silently outlive the fact |
-| `glossary-is-value-free` | Any registered constant's pattern matches inside `docs/glossary.md` without a link to the owner on that line | This is the structural rule. It makes the *class* of failure that produced VFPUL/272 impossible rather than merely discouraged, and it is one grep over one file |
+| `glossary-is-value-free` | `docs/glossary.md` carrying a value-**shaped** token at all: `N bytes`, `N-bit`, `0x…`, `bit N` | The structural rule; see below for exactly how strong the claim is |
 | `restatement-is-linked` | A non-owning document restates a registered constant with no link to the owner on that line | Catches new bare copies. Existing ones are enumerated in the registry's waiver list, which may only shrink |
 | `registry-value-is-short` | A registry `Constant` cell longer than 100 characters | See "the gap this does not close", below |
+| `registry` | The registry is missing, has no `## Registry` table, has zero rows, or has a malformed row | Fails **closed**: a registry that parses to nothing would disable every check above while still exiting 0 |
 
-Rule 2 is the load-bearing one. Rules 1 and 3 are hygiene; rule 2 is what makes
-the decision self-enforcing, because it does not depend on anyone remembering
-the decision — it depends on a file being value-free, which a machine can see.
+Decision rule **1** — the glossary carries no values — is the load-bearing one.
+Rules 3 and 4 are hygiene. Rule 1 is what makes the decision self-enforcing,
+because it does not depend on anyone remembering the decision; it depends on a
+file being value-free, which a machine can see.
 
-**`glossary-is-value-free` takes no waivers, and that is enforced, not merely
-observed.** The checker *refuses* a waiver row targeting `docs/glossary.md` and
-fails if one is added. An earlier draft of this record said "no waivers" when
-what was true was only "no waivers today" — the waiver mechanism would have
-honoured one. Since the argument above leans on the glossary being
-*structurally* unable to carry a value, the mechanism now matches the claim
-rather than the claim being softened to match the mechanism.
+### How strong the `glossary-is-value-free` claim is
+
+An earlier draft of this record said the check "makes the class of failure that
+produced VFPUL/272 **impossible**". That was false as implemented, and the way it
+was false is instructive. The check then grepped the glossary for the registry's
+**current** value patterns — so it fired on `520 bytes` (harmless, the right
+answer) and was **silent** on `272 bytes` (the actual bug, because a stale value
+matches no current pattern by construction). It also exempted any line linking
+its owner, and by then nearly every glossary entry linked its owner. It was
+`restatement-is-linked` scoped to one file, wearing another name.
+
+The check now scans for value **shapes**, independent of the registry and
+independent of links. A stale value is caught exactly as readily as a current
+one, which is the property the claim needs. Measured on this glossary the scan
+produced 23 hits and no false positives; years, product names (`ECP5`, `4.4BSD`,
+`SPARC v9`) and section references do not match, because none of them is a number
+followed by a unit.
+
+The claim, stated at the strength it actually holds: **an unfenced value cannot
+survive in `docs/glossary.md`.** Two escapes exist and both are visible:
+
+- A line that is *retiring* the value it quotes (`retired`, `no longer`,
+  `formerly read`, …). Without this the glossary could not record its own
+  history, which is worse.
+- A declared `<!-- value-free: off -->` fence. A fence must be closed, and must
+  have a `glossary-fence` row in the registry's Waivers table or the check fails
+  — so an exemption appears both where it applies and where exemptions get
+  reviewed. There is exactly one today, on the product table's `Addr width`
+  column, and B1 is named to remove it.
+
+**Waivers are refused outright.** The checker fails if a waiver row targets
+`docs/glossary.md`. The fence is deliberately *not* a waiver: it is narrower, it
+is legible in the file it affects, and it is counted.
 
 ### The gap this does not close, stated rather than papered over
 
@@ -106,6 +137,27 @@ the mechanism**, capped at 100 characters and enforced by
 there is nothing to go stale, rather than trusting a rule to be remembered.
 Explanation belongs in the owning spec, where `owner-has-fact` and B0c's
 doc-vs-code checks both reach it.
+
+### How this check is tested, and why it is not tested against this tree
+
+`scripts/test-check-doc-facts.py` builds a throwaway tree per case and runs the
+checker against it with `--root`. It asserts **exit status**, so a check that
+does not exist fails the test rather than quietly passing.
+
+This is a correction, not a preference. The first version of the suite mutated
+the real `docs/` and asserted the checker went red. Every case therefore
+exercised its check in the single configuration this tree happens to have, and
+the suite reported nine-for-nine while six fail-open paths sat underneath —
+among them a `glossary-is-value-free` blind to the exact bug it was named for,
+and a registry parser that disabled all of 0001 if you renamed a heading. Two
+further traps in that suite are worth naming because both nearly shipped: a
+mutation that made the script crash was scored as a **pass** (it grepped for
+`FAIL` instead of checking exit status), and a mutation applied to text the check
+did not read was scored as a **gap in the check**.
+
+Testing a guard against the tree it guards tells you the guard runs. It does not
+tell you the guard would catch anything. That distinction is the same one the RTL
+guards in this project keep re-learning, one level up.
 
 Residual risk, named: a cell can still be wrong within 100 characters. B0c
 inherits the table and is the check that compares each row's owner to the code.
