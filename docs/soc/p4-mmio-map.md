@@ -104,7 +104,8 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 | `0x04C`     | TSBVSEED   | TSB victim-selector seed — **decoded in RTL** (`core/datapath.vhm`, `P4_TSBVSEED`). **WRITE-ONLY**: there is no read case, so a read returns the decoder's hard zero *deliberately*, not by omission. Seeds the LFSR that nominates which way of a 2-way TSB set to replace when neither tag matches. The seed comes from the OS at MMU init precisely because it must not be public — this is an open-source core, so the polynomial and any constant seed compiled into the RTL are readable by anyone. If software could read the seed back, so could an attacker. Kernel side is `JCORE_TSB_VSEED`. See [mmu/hardware-spec.md §2.13](../mmu/hardware-spec.md). |
 | `0x050`     | TSBVICT    | TSB victim nomination — **decoded in RTL** (`core/datapath.vhm`, `P4_TSBVICT`). **READ-ONLY**, and only bit 0 is meaningful: the way to replace. **The read advances the LFSR**, so each read consumes one bit and no two reads observe the same state; neither the seed nor the LFSR state is ever readable. Kernel side is `JCORE_TSB_VICTIM`. |
 | `0x054`     | TSBCNT     | Walker counters, **read-only, decoded in RTL** (`core/datapath.vhm`, `P4_TSBCNT`): `[31:16]` = `cnt_walks`, `[15:0]` = `cnt_hits`, exported by `core/tlb_walk.vhd`. **Not scaffolding** — the pair is the TSB hit-rate signal used for TSB sizing and hash tuning, and nine anti-vacuity guards assert on it. They were moved here from the P2 debug window `0xABCD0F00` (**retired**) precisely because guest P4 is trapped wholesale, so a hypervisor can virtualize or deny them; a guest reading `cnt_hits` otherwise observes TSB behaviour caused by *other* guests. See [../hypervisor/design-spec.md](../hypervisor/design-spec.md) and [mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md). |
-| `0x058`–`0xFFC` | reserved | future registers                                  |
+| `0x058`     | TLBINST    | TLB slot-write counters, **read-only, decoded in RTL** (`core/datapath.vhm`, `P4_TLBINST`): `[31:16]` = ITLB slot writes, `[15:0]` = DTLB slot writes. Anti-vacuity instrumentation for the I→D shadow fill; **not architectural**, and a hypervisor may virtualize or deny it for the same guest-observability reason as `TSBCNT` above. This row was added by the B0c doc-vs-code check, which found the register decoded in RTL while this table still called `0x058` reserved. |
+| `0x05C`–`0xFFC` | reserved | future registers                                  |
 
 **Decision: `0x020`/`0x024`/`0x028` are TRA / EXPEVT / INTEVT.** This closes the three-way
 conflict formerly recorded as §7 open question 4. CPUINFO moves from `0x020` to `0x030`, and
@@ -259,7 +260,17 @@ All references pre-2006, satisfying the project-wide prior-art policy ([glossary
 1. **Pre-this-map peripheral addresses.** Several jcore-soc peripherals currently sit at ad-hoc P4 addresses outside this map. A coordinated re-allocation across the existing RTL and the Linux DTS is required to bring them into conformance. Owner: jcore-soc maintainer + Linux DTS maintainer.
 2. **Cross-CPU debug access.** Reserved range `0xFF003000`–`0xFF00EFFF` is currently empty. If a cross-CPU register-poke debug facility is desired (e.g. for halt-mode debugging), specify the protocol and consume some of this range.
 3. **L1 array access for diagnostics.** SH-4 used the `0xF0000000`–`0xF7FFFFFF` region for direct cache-array access. J-Core has not yet committed to whether to implement an equivalent facility; the region is reserved either way.
-4. **Three-way conflict at `0x020`/`0x024`/`0x028` — RESOLVED.** Three documents used to disagree
+4. **Three-way conflict at `0x020`/`0x024`/`0x028` — RESOLVED.** *(This item said
+   "CPUINFO moves to `0x02C`" until 2026-08-25. It was wrong and had been since
+   §3.2 was written: `0x02C` is MMUFSR, as §3.2 states twice, and CPUINFO is at
+   `0x030`. The error had already propagated to
+   [../priv-arch/j4-implementation-design.md](../priv-arch/j4-implementation-design.md),
+   which still carries `0xFF00002C` for CPUINFO — left for B1, which owns that
+   file's P4 reconciliation. Note that this is a doc-vs-**doc** contradiction and
+   B0c's `p4-offsets-match-rtl` did not find it; review did, while building the
+   check. What the check does catch is the shape the CPUINFO defect originally
+   had — a name in the map sitting on an offset the RTL decodes as something
+   else.)* Three documents used to disagree
    about this half-dozen bytes: this map allocated `0x020` = CPUINFO and (formerly) `0x024` =
    ASIDR; Linux `arch/sh/include/cpu-jcore/cpu/mmu_context.h` assigned `0xff000020` = TRA,
    `0xff000024` = EXPEVT, `0xff000028` = INTEVT; and the RTL
@@ -267,7 +278,7 @@ All references pre-2006, satisfying the project-wide prior-art policy ([glossary
    `0x0C` TEA, `0x10` MMUCR, `0x14` TSBBR, `0x18` TSBCFG, `0x1C` TSBPTR.
    **Decision:** `0x020` = TRA, `0x024` = EXPEVT, `0x028` = INTEVT — the stock SH-4 architectural
    placement (SH-4 hardware manual, Renesas/Hitachi, 1998), which is also what Linux already
-   defines. CPUINFO moves to `0x02C` and remains allocated-but-not-implemented. This supersedes
+   defines. CPUINFO moves to `0x030` and remains allocated-but-not-implemented. This supersedes
    [../priv-arch/design-spec.md §4.6](../priv-arch/design-spec.md)'s `0x028`/`0x02C`/`0x030`
    relocation proposal, whose only motivation — dodging CPUINFO and ASIDR — has dissolved now that
    ASIDR is LDC/STC-only and CPUINFO has moved. Nothing had to be displaced: CPUINFO was a paper

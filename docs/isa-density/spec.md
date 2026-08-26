@@ -311,7 +311,7 @@ These encodings are byte-identical to SH-2A `MOVI20`/`MOVI20S`.
 | `movml.l Rm,@-r15`  | `0100 mmmm 1111 0001` | push `Rm … R0` |
 | `movml.l @r15+,Rn`  | `0100 nnnn 1111 0101` | pop `R0 … Rn` |
 
-Semantics (verified against the SH-2A manual; matches the `insns.json` operation
+Semantics (verified against the SH-2A manual; matches the `jcore-cpu/docs/insns.json` operation
 pseudocode in the repo):
 
 ```
@@ -392,7 +392,7 @@ void LEA (int d, int m, int n)   # disp = sign_extend_12(d), unscaled (bytes)
   disp12 group whose 16-bit prefix is `0011nnnnmmmm0001`. SH-2A defines minors
   `0000`–`1001` (the disp12 loads/stores, §3.4.1); `1010`–`1111` are unallocated.
   Verified collision-free against SH-2, SH-2A, SH-4/SH-4A, and the J32 decoder
-  (`docs/insns.json` sweep; see §6).
+  (`jcore-cpu/docs/insns.json` sweep; see §6).
 
 #### 3.4.1 Companion: GOT-slot load via existing SH-2A `mov.l @(disp12,Rm),Rn`
 
@@ -447,7 +447,7 @@ void RTVN (int m)  { R[0] = R[m]; PC = PR; }
 - 16-bit instructions; PC advances per the transfer (no `+2` straight-line step).
   No flags affected. `T` unchanged.
 - These are **byte-identical SH-2A** encodings, verified collision-free against
-  SH-2, SH-2A, SH-4/SH-4A, and the J32 decoder (`docs/insns.json` sweep; see §6).
+  SH-2, SH-2A, SH-4/SH-4A, and the J32 decoder (`jcore-cpu/docs/insns.json` sweep; see §6).
 
 **What they recover (and the ceiling).** The SH scheduler must emit a 2-byte
 `NOP` whenever it cannot fill a delayed branch's slot. Measured on CSiBE (m2a,
@@ -734,11 +734,11 @@ These cases are enumerated as a checklist in [`hardware-impl.md`](hardware-impl.
   present. `lea` is a J-core addition with no SH-2A counterpart, so a `lea`-using
   object is J32-only. The reverse (J32 binaries using any of these on a stock
   SH-2) is not supported — they are a J32 superset.
-- **`jsr/n`/`rts/n`/`rtv/n` collision check (`docs/insns.json`):** the encodings
+- **`jsr/n`/`rts/n`/`rtv/n` collision check (`jcore-cpu/docs/insns.json`):** the encodings
   `0100mmmm01001011`, `0000000001101011`, `0000mmmm01111011` are illegal in SH-2
   and unclaimed by the J32 decoder (verified). A `/N`-using object on a stock
   SH-2 faults illegal-instruction — fail-stop, not silent.
-- **`lea` collision check (`docs/insns.json`):** the 16-bit prefix
+- **`lea` collision check (`jcore-cpu/docs/insns.json`):** the 16-bit prefix
   `0011nnnnmmmm0001` is used *only* by the SH-2A 32-bit disp12 family and is
   illegal in SH-2, SH-2A's 16-bit space, SH-4/SH-4A, and J32. Within that prefix,
   word1-minors `1010`–`1111` are unallocated; `lea` takes `1010`. A `lea`-using

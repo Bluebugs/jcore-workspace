@@ -265,6 +265,520 @@ def load_registry(cfg, report):
     return facts, waivers
 
 
+# --------------------------------------------------- 0003 / B0c: code bindings
+
+
+class Binding:
+    """One row of the `## Code bindings` table: an instruction to extract a
+    number from the *owning document* and the same number from a file in a
+    submodule, and to fail if they disagree.
+
+    Deliberately, a binding row carries **no value of its own**. It names two
+    patterns, each with one capture group, and a relation between the captures.
+    That is 0001's argument applied one level up: a row that restated the value
+    would be a third copy, and copies rot. The row can go stale only by ceasing
+    to match, which is a failure, not a silent pass."""
+
+    def __init__(self, fid, doc_re, repo, path, code_re, relation):
+        self.id = fid
+        self.doc_re = doc_re
+        self.repo = repo
+        self.path = path
+        self.code_re = code_re
+        self.relation = relation
+
+    @property
+    def code_ref(self):
+        return "%s:%s" % (self.repo, self.path)
+
+
+def _num(text, base):
+    try:
+        return int(text.strip().replace("_", "").lstrip("#"), base)
+    except ValueError:
+        return None
+
+
+# The relations a binding may assert, enumerated. As with VALUE_SHAPES in 0001,
+# this list is the *reach* of the mechanism: a relation that is not here cannot
+# be written, and an unknown name in the table is a failure rather than a
+# no-op. Each entry is (doc_base, code_base, predicate).
+RELATIONS = {
+    # Both sides are plain decimal counts of the same unit.
+    "eq": (10, 10, lambda d, c: d == c),
+    # Both sides are hexadecimal (`0x02C` in the map, x"2C" in VHDL). Compared
+    # numerically, so 0x02C == 0x2c == 2C and formatting churn is not a defect.
+    "eq-hex": (16, 16, lambda d, c: d == c),
+    # The doc states a size in KB, the code states a shift: 16 KB <-> 14.
+    "kb-from-shift": (10, 10, lambda d, c: d * 1024 == 1 << c),
+    # The doc states a size in bytes, the code states a shift.
+    "bytes-from-shift": (10, 10, lambda d, c: d == 1 << c),
+}
+
+
+def load_bindings(cfg, report, facts):
+    """Parse `## Code bindings`. Fails CLOSED, exactly like the registry: a
+    missing heading or an empty table means B0c verifies nothing, and a check
+    that verifies nothing must never be reported as a passing one."""
+    known = {f.id: f for f in (facts or [])}
+    try:
+        body = read(cfg.registry)
+    except (OSError, UnicodeDecodeError):
+        return None            # load_registry has already failed on this
+    rows = parse_table(body, "## Code bindings")
+    if rows is None:
+        report.fail("code-bindings", cfg.rel(cfg.registry),
+                    "no '## Code bindings' heading followed by a table. "
+                    "doc-vs-code checking would verify nothing; this is a "
+                    "failure, not a skip.")
+        return None
+    if not rows:
+        report.fail("code-bindings", cfg.rel(cfg.registry),
+                    "'## Code bindings' table has no rows. Every doc-vs-code "
+                    "comparison would silently pass.")
+        return None
+
+    out = []
+    for cells in rows:
+        if len(cells) < 5:
+            report.fail("code-bindings", cfg.rel(cfg.registry),
+                        "malformed binding row (%d cells, need 5): %s"
+                        % (len(cells), " | ".join(cells)[:80]))
+            continue
+        fid = unbacktick(cells[0])
+        # An orphaned binding is the failure mode that would quietly switch a
+        # check off: rename a fact in the Registry and the binding stops
+        # applying to anything. Name it as an error.
+        if facts is not None and fid not in known:
+            report.fail("code-bindings", fid,
+                        "binding names a fact that is not in the Registry "
+                        "table. A renamed or deleted fact must not silently "
+                        "disable its code check.")
+            continue
+        code_ref = unbacktick(cells[2])
+        if ":" not in code_ref:
+            report.fail("code-bindings", fid,
+                        "Code cell %r is not `<repo>:<path>`" % code_ref)
+            continue
+        repo, path = code_ref.split(":", 1)
+        repo, path = repo.strip(), path.strip()
+        if repo not in INTEGRATION_BRANCH:
+            report.fail("code-bindings", fid,
+                        "unknown repo %r; add it to INTEGRATION_BRANCH before "
+                        "binding to it" % repo)
+            continue
+        relation = unbacktick(cells[4])
+        if relation not in RELATIONS:
+            report.fail("code-bindings", fid,
+                        "unknown relation %r (have: %s)"
+                        % (relation, ", ".join(sorted(RELATIONS))))
+            continue
+        pats = []
+        bad = False
+        for label, cell in (("Doc pattern", cells[1]), ("Code pattern", cells[3])):
+            pat = unbacktick(cell)
+            try:
+                rx = re.compile(pat)
+            except re.error as exc:
+                report.fail("code-bindings", fid,
+                            "%s %r does not compile: %s" % (label, pat, exc))
+                bad = True
+                break
+            if rx.groups != 1:
+                report.fail("code-bindings", fid,
+                            "%s %r has %d capture groups; exactly 1 is "
+                            "required (it is the value being compared)"
+                            % (label, pat, rx.groups))
+                bad = True
+                break
+            pats.append(rx)
+        if bad:
+            continue
+        out.append(Binding(fid, pats[0], repo, path, pats[1], relation))
+    return out
+
+
+def _sole_capture(report, check, where, rx, text, what):
+    """The one value `rx` captures in `text`, or None having reported why not.
+
+    Two distinct captures is a failure and not a "take the first": a document
+    that says 16 KB in one place and 32 KB in another has no single value to
+    compare, and picking one would make the check's verdict depend on file
+    order."""
+    found = rx.findall(text)
+    if not found:
+        report.fail(check, where,
+                    "%s pattern %s matches nothing" % (what, rx.pattern))
+        return None
+    distinct = sorted(set(f.strip() for f in found))
+    if len(distinct) > 1:
+        report.fail(check, where,
+                    "%s pattern %s captures %d different values (%s); there is "
+                    "no single value to compare"
+                    % (what, rx.pattern, len(distinct), ", ".join(distinct)))
+        return None
+    return distinct[0]
+
+
+def check_code_bindings(cfg, report, repos, facts, bindings):
+    """0001 decides which single document owns a constant; this asks whether
+    that document agrees with the code. Wave-1 task B0c."""
+    if not bindings:
+        return
+    owners = {f.id: f for f in facts}
+    for b in bindings:
+        fact = owners[b.id]
+        where = b.id
+        try:
+            doc_body = read(fact.owner)
+        except (OSError, UnicodeDecodeError) as exc:
+            report.fail("doc-matches-code", where,
+                        "owning document %s unreadable: %s"
+                        % (cfg.rel(fact.owner), exc))
+            continue
+        branch = INTEGRATION_BRANCH[b.repo]
+        # Read the code from origin/<integration-branch>, NOT from the
+        # submodule's checked-out pointer. 0002 section 2: the pointer is not
+        # evidence -- it lags the integration branches by design. Checking the
+        # docs against a months-old pointer would report agreement with code
+        # nobody is running.
+        code_body = repos.file_at(b.repo, branch, b.path, where)
+        if code_body is None:
+            continue           # already reported as a skip or a failure
+        doc_raw = _sole_capture(report, "doc-matches-code", where,
+                                b.doc_re, doc_body,
+                                "doc (%s)" % cfg.rel(fact.owner))
+        code_raw = _sole_capture(report, "doc-matches-code", where,
+                                 b.code_re, code_body,
+                                 "code (%s@%s)" % (b.code_ref, branch))
+        if doc_raw is None or code_raw is None:
+            continue
+        doc_base, code_base, agree = RELATIONS[b.relation]
+        doc_val = _num(doc_raw, doc_base)
+        code_val = _num(code_raw, code_base)
+        if doc_val is None or code_val is None:
+            report.fail("doc-matches-code", where,
+                        "captured %r (doc) / %r (code) but relation %s needs "
+                        "base-%d / base-%d numbers"
+                        % (doc_raw, code_raw, b.relation, doc_base, code_base))
+            continue
+        if not agree(doc_val, code_val):
+            report.fail("doc-matches-code", where,
+                        "%s says %s, but %s@%s says %s -- these do not satisfy "
+                        "`%s`. One of them is wrong; decide which."
+                        % (cfg.rel(fact.owner), doc_raw, b.code_ref, branch,
+                           code_raw, b.relation))
+        else:
+            # Emitted so a green run says which comparisons were actually
+            # made. "OK" with no list cannot be told apart from "OK, having
+            # compared nothing", and that ambiguity is the failure mode this
+            # whole task exists to remove.
+            report.note("doc-matches-code: %s -- %s says %s, %s@%s says %s (%s)"
+                        % (b.id, cfg.rel(fact.owner), doc_raw, b.code_ref,
+                           branch, code_raw, b.relation))
+
+
+# ------------------------------------------------- B0c: the P4 register map
+
+# The two files this check reads. Named here rather than in the registry
+# because this is a structural table-vs-table comparison, not a scalar binding
+# -- the same reason `glossary-is-value-free` names cfg.glossary directly.
+P4_MAP_DOC = os.path.join("soc", "p4-mmio-map.md")
+P4_RTL_REPO = "jcore-cpu"
+P4_RTL_PATH = "core/datapath.vhm"
+
+# The doc table is located by its COLUMN HEADER, not by its section heading.
+# Renumbering or rewording a heading is an ordinary edit; changing what the
+# columns mean is not. Keying on the heading would make the check fail on
+# edits that cannot affect its subject, and a check that fires on ordinary
+# edits gets deleted.
+P4_TABLE_HEADER = ("Offset", "Register", "Description")
+
+# `elsif ma_ad(7 downto 0) = x"2C" then p4_sel_v := P4_MMUFSR;`
+P4_DECODE_RE = re.compile(
+    r'ma_ad\(7\s+downto\s+0\)\s*=\s*x"([0-9A-Fa-f]{2})"\s*then\s*'
+    r'p4_sel_v\s*:=\s*P4_([A-Za-z0-9_]+)\s*;')
+
+# A doc Offset cell that is exactly one register offset. Range rows
+# (`0x058`-`0xFFC`) and prose cells are deliberately not matched: they name no
+# single register.
+P4_DOC_OFFSET_RE = re.compile(r"^`0x([0-9A-Fa-f]{2,3})`$")
+P4_DOC_NAME_RE = re.compile(r"^([A-Z][A-Z0-9_]{1,15})$")
+
+
+def find_tables_by_header(body, headers):
+    """Every pipe table whose header cells start with `headers`, as
+    (header_line_index, rows).
+
+    Located by COLUMN HEADER rather than by section heading on purpose:
+    renumbering or rewording a heading is an ordinary edit and must not move a
+    check, while changing what the columns mean is exactly the event a check
+    should notice."""
+    lines = body.splitlines()
+    out = []
+    for i, line in enumerate(lines):
+        m = TABLE_ROW.match(line)
+        if not m:
+            continue
+        cells = [c.strip() for c in m.group(1).split("|")]
+        if len(cells) < len(headers):
+            continue
+        if tuple(cells[:len(headers)]) != tuple(headers):
+            continue
+        rows = []
+        seen_divider = False
+        for line2 in lines[i + 1:]:
+            m2 = TABLE_ROW.match(line2)
+            if not m2:
+                if seen_divider:
+                    break
+                continue
+            cells2 = [c.replace("\x00", "|").strip()
+                      for c in m2.group(1).replace(r"\|", "\x00").split("|")]
+            if all(set(c) <= DIVIDER_CELL for c in cells2):
+                seen_divider = True
+                continue
+            if seen_divider:
+                rows.append(cells2)
+        out.append((i, rows))
+    return out
+
+
+def find_table_by_header(body, headers):
+    """Rows of the first pipe table whose header cells start with `headers`."""
+    found = find_tables_by_header(body, headers)
+    return found[0][1] if found else None
+
+
+def check_p4_offsets(cfg, report, repos):
+    """Every P4 register the RTL decodes must appear in the map at the same
+    offset. Wave-1 task B0c.
+
+    **The implication is deliberately one-way.** RTL-decoded => documented at
+    that offset. The converse is NOT asserted, because the map legitimately
+    carries paper allocations the RTL has not implemented (CPUINFO, QACR0,
+    QACR1 today, each marked as such in its own row). Asserting doc => RTL
+    would fire every time somebody allocates an address before building it,
+    which is the normal order of work here, and the check would be switched off
+    inside a month. What it does assert is the direction where silence is
+    dangerous: a register that exists in hardware and is absent from, or
+    misplaced in, the map."""
+    doc_path = os.path.join(cfg.docs, P4_MAP_DOC)
+    if not os.path.exists(doc_path):
+        report.fail("p4-offsets-match-rtl", cfg.rel(doc_path),
+                    "the P4 map is missing; the RTL decode is unchecked")
+        return
+    try:
+        doc_body = read(doc_path)
+    except (OSError, UnicodeDecodeError) as exc:
+        report.fail("p4-offsets-match-rtl", cfg.rel(doc_path),
+                    "unreadable: %s" % exc)
+        return
+
+    rows = find_table_by_header(doc_body, P4_TABLE_HEADER)
+    if rows is None:
+        report.fail("p4-offsets-match-rtl", cfg.rel(doc_path),
+                    "no table with columns %s. Without it nothing is compared "
+                    "against the RTL, so this is a failure, not a skip."
+                    % " | ".join(P4_TABLE_HEADER))
+        return
+
+    doc = {}
+    at_offset = {}
+    for cells in rows:
+        mo = P4_DOC_OFFSET_RE.match(cells[0].strip())
+        mn = P4_DOC_NAME_RE.match(unbacktick(cells[1]))
+        if not mo or not mn:
+            continue           # a range row, or `reserved`
+        name, off = mn.group(1), int(mo.group(1), 16)
+        if name in doc and doc[name] != off:
+            report.fail("p4-offsets-match-rtl", cfg.rel(doc_path),
+                        "%s is listed at two different offsets (0x%03X and "
+                        "0x%03X)" % (name, doc[name], off))
+        doc[name] = off
+        if off in at_offset and at_offset[off] != name:
+            report.fail("p4-offsets-match-rtl", cfg.rel(doc_path),
+                        "offset 0x%03X is allocated twice, to %s and %s"
+                        % (off, at_offset[off], name))
+        at_offset[off] = name
+    if not doc:
+        report.fail("p4-offsets-match-rtl", cfg.rel(doc_path),
+                    "the register table parsed to zero name/offset pairs. "
+                    "Every comparison below would vacuously pass.")
+        return
+
+    branch = INTEGRATION_BRANCH[P4_RTL_REPO]
+    rtl_body = repos.file_at(P4_RTL_REPO, branch, P4_RTL_PATH,
+                             "p4-offsets-match-rtl")
+    if rtl_body is None:
+        return                 # skip/failure already reported
+
+    rtl = {}
+    for off_hex, name in P4_DECODE_RE.findall(rtl_body):
+        off = int(off_hex, 16)
+        if name in rtl and rtl[name] != off:
+            report.fail("p4-offsets-match-rtl", "%s:%s" % (P4_RTL_REPO, name),
+                        "decoded at two offsets, 0x%03X and 0x%03X"
+                        % (rtl[name], off))
+        rtl[name] = off
+    if not rtl:
+        report.fail("p4-offsets-match-rtl",
+                    "%s:%s@%s" % (P4_RTL_REPO, P4_RTL_PATH, branch),
+                    "the p4_sel_v decode matched zero registers. Either the "
+                    "decode moved or it was rewritten in another form; update "
+                    "P4_DECODE_RE. Passing here would mean checking nothing.")
+        return
+
+    for name in sorted(rtl):
+        if name not in doc:
+            report.fail("p4-offsets-match-rtl", name,
+                        "decoded by %s at offset 0x%03X but absent from %s. "
+                        "The map is the authority for P4 allocation; a live "
+                        "register missing from it is how the next allocation "
+                        "collides with it."
+                        % (P4_RTL_PATH, rtl[name], cfg.rel(doc_path)))
+        elif doc[name] != rtl[name]:
+            report.fail("p4-offsets-match-rtl", name,
+                        "%s says 0x%03X, %s@%s decodes it at 0x%03X"
+                        % (cfg.rel(doc_path), doc[name], P4_RTL_PATH, branch,
+                           rtl[name]))
+    report.note("p4-offsets-match-rtl: %d decoded registers checked against "
+                "%d documented" % (len(rtl), len(doc)))
+
+
+# ------------------------------------------ B0c / 0003: the encoding database
+
+ENCODING_DB_REPO = "jcore-cpu"
+ENCODING_DB_PATH = "docs/insns.json"
+
+
+def check_one_encoding_database(cfg, report, repos):
+    """0003: `jcore-cpu/docs/insns.json` is the only encoding database.
+
+    Two assertions, and the second is the load-bearing one. Failing only on "a
+    second copy exists here" would go green forever the moment the canonical
+    file were deleted or renamed -- having confirmed that a file which no longer
+    exists is not duplicated. So the canonical copy's presence on the
+    integration branch is asserted too."""
+    stray = os.path.join(cfg.docs, "insns.json")
+    if os.path.exists(stray):
+        report.fail("one-encoding-database", cfg.rel(stray),
+                    "a second encoding database. 0003 makes %s:%s canonical; "
+                    "this copy had drifted 6 instructions and 42 timing values "
+                    "behind it and failed both oracles. Cite the submodule path "
+                    "instead of re-adding a copy."
+                    % (ENCODING_DB_REPO, ENCODING_DB_PATH))
+
+    branch = INTEGRATION_BRANCH[ENCODING_DB_REPO]
+    present = repos.has_path(ENCODING_DB_REPO, branch, ENCODING_DB_PATH)
+    if present is None:
+        report.skip("one-encoding-database",
+                    "cannot ask %s for %s on origin/%s; the canonical database "
+                    "is unverified" % (ENCODING_DB_REPO, ENCODING_DB_PATH,
+                                       branch))
+    elif not present:
+        report.fail("one-encoding-database",
+                    "%s:%s" % (ENCODING_DB_REPO, ENCODING_DB_PATH),
+                    "the canonical encoding database is not on origin/%s. "
+                    "Everything that cites it is now citing nothing." % branch)
+    else:
+        report.note("one-encoding-database: canonical copy present at %s:%s@%s"
+                    % (ENCODING_DB_REPO, ENCODING_DB_PATH, branch))
+
+
+# ------------------------------------------- B0c: context-image field tables
+
+# A save-image layout table: `| Offset | Bytes | Content |`.
+IMAGE_TABLE_HEADER = ("Offset", "Bytes", "Content")
+IMAGE_OFFSET_RE = re.compile(r"^`?0x([0-9A-Fa-f]+)`?$")
+IMAGE_BYTES_RE = re.compile(r"^`?(\d+)`?$")
+# `end (136 bytes)` -- the terminator row's own statement of the total.
+IMAGE_TOTAL_RE = re.compile(r"\((\d+)\s*bytes?\)")
+# `### 7.4 Save / restore sequence (136-byte FPU image). [T2]`
+IMAGE_HEADING_RE = re.compile(r"^#{2,4} .*?\((\d+)-byte\b[^)]*\bimage\)")
+
+
+def check_context_image_sums(cfg, report):
+    """A save-image layout table must sum to the total it declares.
+
+    This is **doc-internal arithmetic, not doc-vs-code**, and is labelled that
+    way deliberately: there is no FPU or SIMD RTL in jcore-cpu and no size
+    constant in the kernel, so there is nothing to compare against. What there
+    is, is a table whose rows already determine the answer -- and which was
+    wrong anyway. `fpu/spec.md` §7.4 declared a 132-byte image above a field
+    list summing to 136, whose own terminator row gave the end as `0x88`. The
+    save sequence below it had already been bent to fit the wrong budget,
+    storing FPSCR on top of FPUL with `; oops, recompute` left in the listing.
+
+    Scans every markdown file, so a new image table is covered the day it is
+    written rather than when someone remembers to register it."""
+    tables = 0
+    for path in cfg.markdown_files():
+        try:
+            body = read(path)
+        except (OSError, UnicodeDecodeError):
+            continue           # `check_facts` reports unreadable files
+        lines = body.splitlines()
+        for idx, rows in find_tables_by_header(body, IMAGE_TABLE_HEADER):
+            tables += 1
+            where = "%s:%d" % (cfg.rel(path), idx + 1)
+            running = 0
+            total = None
+            for cells in rows:
+                mo = IMAGE_OFFSET_RE.match(cells[0].strip())
+                if not mo:
+                    continue   # a prose row; not an offset
+                off = int(mo.group(1), 16)
+                if off != running:
+                    report.fail("context-image-sums", where,
+                                "row `%s` (%s) starts at 0x%02X, but the "
+                                "fields above it occupy 0x%02X bytes"
+                                % (cells[0].strip(), cells[2][:30], off,
+                                   running))
+                    running = off      # resync, so one slip is one failure
+                mb = IMAGE_BYTES_RE.match(cells[1].strip())
+                if mb:
+                    running += int(mb.group(1))
+                else:
+                    # No size: this is the terminator row, and its own text
+                    # states the total. That is the cell that was wrong.
+                    mt = IMAGE_TOTAL_RE.search(cells[2])
+                    if mt:
+                        total = int(mt.group(1))
+                        if total != off:
+                            report.fail("context-image-sums", where,
+                                        "the table ends at offset 0x%02X = %d "
+                                        "bytes, but calls itself %d bytes"
+                                        % (off, off, total))
+            if total is None:
+                report.fail("context-image-sums", where,
+                            "no terminator row stating the total (a final row "
+                            "whose Content reads `end (N bytes)`). Without it "
+                            "the table's sum is compared against nothing.")
+                continue
+            # The headline above the table is a second copy of the total, and
+            # it is the copy that was wrong. Check it where it exists.
+            for back in range(idx - 1, max(idx - 25, -1), -1):
+                mh = IMAGE_HEADING_RE.match(lines[back])
+                if lines[back].startswith("#") and mh:
+                    if int(mh.group(1)) != total:
+                        report.fail("context-image-sums", where,
+                                    "heading on line %d says %s bytes; the "
+                                    "table says %d"
+                                    % (back + 1, mh.group(1), total))
+                    break
+                if lines[back].startswith("#"):
+                    break      # a heading that makes no size claim
+            report.note("context-image-sums: %s sums to %d bytes"
+                        % (where, total))
+    if not tables:
+        report.fail("context-image-sums", "docs/",
+                    "no `%s` table found anywhere. This check verified "
+                    "nothing; if the layout tables were reformatted, update "
+                    "IMAGE_TABLE_HEADER rather than leaving it silent."
+                    % " | ".join(IMAGE_TABLE_HEADER))
+
+
 class Waivers:
     """Waiver lookup that records which waivers were actually used, so an
     obsolete one can be failed on (--check-waivers) instead of accumulating."""
@@ -576,6 +1090,59 @@ class Repos:
             return False      # ran fine, no match
         return None           # any other exit is a git error, not an answer
 
+    def file_at(self, repo_name, branch, path, where):
+        """Contents of `path` on `origin/<branch>`, or None having reported.
+
+        Three outcomes, kept apart on purpose, because collapsing them is how
+        this file's other git callers have failed before:
+          - the repo or its origin ref is absent  -> SKIP (a --strict failure);
+            we could not look, and must not claim agreement.
+          - the ref is there and the path is not  -> FAIL; the binding points at
+            a file that no longer exists, which is a real defect, not an
+            environment problem.
+          - git itself could not run              -> SKIP, never "no match"."""
+        repo = os.path.join(self.cfg.root, repo_name)
+        if not os.path.exists(os.path.join(repo, ".git")):
+            self.report.skip("doc-matches-code",
+                             "%s is not checked out; cannot compare %s against "
+                             "it (%s)" % (repo_name, path, where))
+            return None
+        rc, _ = git(repo, "rev-parse", "--verify", "origin/%s" % branch)
+        if rc is None:
+            self.report.skip("doc-matches-code",
+                             "git could not be run for %s (%s)"
+                             % (repo_name, where))
+            return None
+        if rc != 0:
+            self.report.skip("doc-matches-code",
+                             "%s has no origin/%s (fetch it); cannot compare "
+                             "%s against it (%s)"
+                             % (repo_name, branch, path, where))
+            return None
+        # The ref exists, so from here a failure is about the tree, not the
+        # environment. `git show` cannot distinguish "no such path" from other
+        # errors by exit status alone, so ask ls-tree first.
+        rc, out = git(repo, "ls-tree", "--name-only", "origin/%s" % branch,
+                      "--", path)
+        if rc is None:
+            self.report.skip("doc-matches-code",
+                             "git could not be run for %s (%s)"
+                             % (repo_name, where))
+            return None
+        if rc != 0 or not out.strip():
+            self.report.fail("doc-matches-code", where,
+                             "%s does not exist on %s origin/%s. The binding "
+                             "points at a file that is not there."
+                             % (path, repo_name, branch))
+            return None
+        rc, body = git(repo, "show", "origin/%s:%s" % (branch, path))
+        if rc is None or rc != 0:
+            self.report.skip("doc-matches-code",
+                             "could not read %s from %s origin/%s (%s)"
+                             % (path, repo_name, branch, where))
+            return None
+        return body
+
     def branch_exists(self, repo_name, branch, where):
         """True / False / None, where None means 'could not find out'. The
         caller must treat None as a skip -- returning it silently is how this
@@ -752,6 +1319,8 @@ def main():
     ap.add_argument("--facts", action="store_true", help="run 0001 checks only")
     ap.add_argument("--supersede", action="store_true",
                     help="run 0002 checks only")
+    ap.add_argument("--code", action="store_true",
+                    help="run the B0c doc-vs-code checks only")
     ap.add_argument("--strict", action="store_true",
                     help="treat a SKIP as a failure (use this in CI)")
     ap.add_argument("--check-waivers", action="store_true",
@@ -766,8 +1335,10 @@ def main():
         print("FAIL  [root] %s: no docs/ directory here" % cfg.root)
         return 1
 
-    run_facts = args.facts or not args.supersede
-    run_super = args.supersede or not args.facts
+    scoped = args.facts or args.supersede or args.code
+    run_facts = args.facts or not scoped
+    run_super = args.supersede or not scoped
+    run_code = args.code or not scoped
 
     report = Report(verbose=args.verbose, strict=args.strict)
     facts, waiver_table = load_registry(cfg, report)
@@ -783,6 +1354,19 @@ def main():
             check_facts(cfg, report, facts, waivers)
     if run_super:
         check_supersede(cfg, report, waivers)
+    if run_code:
+        # B0c. Registry-independent in the same sense as the glossary check:
+        # `load_bindings` must run (and fail closed) even when the Registry
+        # table is broken, or a malformed registry would silently take
+        # doc-vs-code checking down with it while the failure it printed
+        # pointed somewhere else entirely.
+        repos = Repos(cfg, report)
+        bindings = load_bindings(cfg, report, facts)
+        if facts and bindings:
+            check_code_bindings(cfg, report, repos, facts, bindings)
+        check_p4_offsets(cfg, report, repos)
+        check_context_image_sums(cfg, report)
+        check_one_encoding_database(cfg, report, repos)
 
     if args.check_waivers:
         # Only judge waivers whose consuming check actually ran, or a scoped

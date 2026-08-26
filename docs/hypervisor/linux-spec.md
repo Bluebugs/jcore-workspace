@@ -161,9 +161,9 @@ struct kvm_vcpu_arch {
 
 The aperture and store-queue fields added here bring the per-vCPU footprint to 84 bytes
 (4 + 4 + 8 + 4 + 64, assuming 32-bit `unsigned long` on J32; J64 would make it 104 bytes) beyond
-the base register save area, alongside the existing lazy FPU (132-byte) and SIMD (272-byte)
-context images (§4.3 of [../fpu/spec.md](../fpu/spec.md), §2.6 of
-[../simd/spec.md](../simd/spec.md)). `hemub`/`hemum` mirror HEMUB/HEMUM 1:1 so VM entry can load
+the base register save area, alongside the existing lazy FPU image
+(136-byte, [../fpu/spec.md §7.4](../fpu/spec.md)) and the SIMD image
+(520-byte on J32, [../simd/spec.md §2.5](../simd/spec.md)). `hemub`/`hemum` mirror HEMUB/HEMUM 1:1 so VM entry can load
 them directly; `hsqcr` and `sq_buf[2][32]` mirror HSQCR and the two 32-byte store-queue buffers so
 a vCPU's in-flight burst state survives a VM exit that lands mid-queue (§7 of
 [../sq/spec.md](../sq/spec.md)).
