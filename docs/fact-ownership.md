@@ -80,8 +80,10 @@ Checking the docs against a stale pointer would report agreement with code
 nobody runs.
 
 Relations, enumerated (an unknown name is a failure, not a no-op): `eq` (both
-decimal), `eq-hex` (both hexadecimal, compared numerically), `kb-from-shift`
-(doc KB × 1024 = 2^code), `bytes-from-shift` (doc bytes = 2^code).
+decimal), `eq-hex` (both hexadecimal, compared numerically) and
+`bytes-from-shift` (doc bytes = 2^code). A `kb-from-shift` relation was
+defined here and used by no row; it was deleted rather than left as untested
+surface that no fixture could reach.
 
 | Fact ID | Doc pattern | Code | Code pattern | Relation |
 |---|---|---|---|---|
@@ -105,9 +107,14 @@ inferred from silence:
 - **`fpu.context.t2` and `simd.context.j32`/`j64` have no code binding**, because
   there is no code: there is no FPU or SIMD RTL in `jcore-cpu`, and Linux's
   `struct sh_fpu_hard_struct` is a field list with no size constant to capture.
-  They are covered instead by `context-image-sums`, which checks the owning
-  spec's own field table against its own declared total — doc-internal
-  arithmetic, not doc-vs-code, and labelled as such.
+  They are covered instead by `context-image-sums` — doc-internal arithmetic,
+  not doc-vs-code, and labelled as such. *(This bullet previously said the same
+  thing while `simd/spec.md` had no field table at all, so the SIMD half of the
+  claim was false and the check could not have noticed: it failed only when
+  **no** table existed anywhere in `docs/`, and the FPU table alone kept it
+  green. An uncovered fact asserted to be covered, under a heading promising the
+  gaps were visible. `## Image layouts` below now names the facts that must have
+  a table, and a registered fact whose owner has none is a failure.)*
 - **The P4 register offsets are not rows here.** They are a table-vs-table
   comparison (`p4-offsets-match-rtl`), which also catches a register the RTL
   decodes and the map does not list — something a per-fact binding cannot see.
@@ -130,6 +137,58 @@ inferred from silence:
   page-size constant: it is page-size-general, with `PageMask` in `PTEL[11:8]`
   selecting per entry. There is nothing in the hardware for `16 KB` to disagree
   with.
+
+## Value guards
+
+**The hole this closes.** `restatement-is-linked` matches the `Pattern` column,
+which spells the *current* value. A **stale** value therefore matches nothing
+and is invisible — the escape [0001](decisions/0001-one-authority-per-fact.md)
+identified and built `VALUE_SHAPES` for. But that shape scan runs on
+`glossary.md` alone, because its rule is "carry no value at all", which no other
+document can be held to. So the blindness 0001 closed for one file stayed open
+for every other file. Three lines got through the whole of B0a and B0c's first
+commit because of it: `hypervisor/hardware-spec.md` §4 previously read
+**272 bytes** for the SIMD image *and* listed `VFPUL` among its fields — two
+stale facts on one line, which *did* link the owner, so `restatement-is-linked`
+was satisfied; `simd/gpu/architecture.md` previously read the same 272 for the
+context-switch image; and `jcore-ulx3s-service-plan.md` previously read
+**132 bytes** for the FPU image. All three are corrected.
+
+Each row carries two regexes, **one capture group each, and no value**:
+
+- **Canonical** runs against the owner and *licenses* the values it finds there.
+  Normally one; two where a fact has a J32 and a J64 form. More than four is a
+  failure — a pattern that loose has stopped being a guard.
+- **Scan** runs against every document under `docs/` except `decisions/` (whose
+  records quote retired values deliberately). A capture the owner does not
+  license is a failure **whether or not the line links the owner** — a linked
+  wrong number is still a wrong number.
+
+The escape is a line whose subject is the retirement (`previously read`,
+`formerly read`, `used to read`, `previously said`, `promoted from`) — a third
+list, written separately from the glossary's and `stale-claim`'s, for the reason
+0001 and 0002 both give at length.
+
+| Fact ID | Canonical (in owner) | Scan (everywhere) |
+|---|---|---|
+| `fpu.context.t2` | `(\d+)[- ]byte FPU image` | `(\d+)[- ]byte FPU` |
+| `simd.context.j32` | `(\d+)[- ]byte SIMD image` | `(\d+)[- ]byte (?:SIMD\|context-switch)` |
+
+## Image layouts
+
+Facts whose owning spec must carry a `Offset | Bytes | Content` field table.
+`context-image-sums` checks each table's running offsets, its terminator total
+and its heading, and that the total is a value the owner states.
+
+**Why this table exists rather than a global scan.** The check used to fail only
+when *no* layout table existed anywhere in `docs/`, which the one table in
+`fpu/spec.md` satisfied forever. `simd/spec.md` had none, and the registry said
+otherwise. A per-fact requirement cannot be satisfied by somebody else's table.
+
+| Fact ID |
+|---|
+| `fpu.context.t2` |
+| `simd.context.j32` |
 
 ## Unresolved — facts with no owner yet
 
@@ -191,7 +250,6 @@ or delete the duplicated value. Both are one-line changes.
 | `mmu.asidtag.width` | [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md) | pre-existing bare restatement — B1 |
 | `mmu.mmufsr.addr` | [mmu/hardware-spec.md](mmu/hardware-spec.md) | §2.11 defines the register and quotes its address; correct content, missing link — B1 |
 | `mmu.mmufsr.addr` | [priv-arch/design-spec.md](priv-arch/design-spec.md) | pre-existing bare restatement — B1 |
-| `mmu.mmufsr.addr` | [priv-arch/j4-implementation-design.md](priv-arch/j4-implementation-design.md) | pre-existing bare restatement — B1 |
 | `mmu.page.base` | [j4-remediation-plan.md](j4-remediation-plan.md) | the plan quotes the review finding verbatim; clears when the plan is retired |
 | `mmu.page.base` | [mmu/linux-spec.md](mmu/linux-spec.md) | pre-existing bare restatement — B1 |
 | `mmu.tsb.entry` | [mmu/linux-spec.md](mmu/linux-spec.md) | pre-existing bare restatement — B1 |

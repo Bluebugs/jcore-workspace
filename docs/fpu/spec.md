@@ -1526,8 +1526,10 @@ the VAX (1977) FPACC trap.
 
 > **HISTORICAL 2026-08-25.** This section read **132 bytes** from its first
 > draft until Wave-1 task B0c. The number was never consistent with the table
-> below it: the field list has always summed to 136, and the table's own `end`
-> row has always given that end as `0x88`, which *is* 136. The save sequence
+> below it. The heading and the terminator row both read 132, while the field
+> sizes summed to 136 and the terminator's own offset was `0x88` — which *is*
+> 136. The table therefore contradicted its own arithmetic, which is the
+> discrepancy `context-image-sums` compares. The save sequence
 > underneath had already collided as a result — `FPSCR` was stored to
 > `@(132-4,r0)`, i.e. offset 128, on top of `FPUL`, with an in-line
 > `; offset 128, oops, recompute` left in the listing. 136 is also what Linux's
@@ -1796,16 +1798,19 @@ Inherited from j2-spec.md §9:
 ## 11. Revision history
 
 - **v1.1 (2026-08-25).** The Tier-2 FPU image is **136 bytes**, not 132.
-  Corrected in §7.4 (which carries the detail as a `HISTORICAL` note), §1.2,
+  Corrected in §7.4 (which carries the detail as a `HISTORICAL` note), §1.1,
   §7.2's `fpu_image[]`, §7.6, §9.3 and Appendix A, and in
   [../hypervisor/hardware-spec.md §4](../hypervisor/hardware-spec.md) and
-  [../hypervisor/linux-spec.md §5](../hypervisor/linux-spec.md). The §7.4 field
-  table always summed to 136 and always ended at `0x88`; only the headline said
-  132, and the save sequence had already been driven into storing `FPSCR` on top
-  of `FPUL` to fit the wrong budget. §1.2 additionally said "32 × FR", which no
-  section of this document supports — the front and back banks are 16 registers
-  each. Found by the Wave-1 **B0c** `context-image-sums` check, which now fails
-  if a save-image table stops summing to its declared total.
+  [../hypervisor/linux-spec.md §5](../hypervisor/linux-spec.md). What was
+  self-contradictory was the §7.4 table's **arithmetic**, not one stray
+  headline: the heading *and* the terminator row both read 132, while the field
+  sizes summed to 136 and the terminator's own offset was `0x88` — which is 136.
+  That is why the check catches it: it compares the stated total against the
+  offset the fields actually reach, and those two had never agreed. The save
+  sequence below had already been driven into storing `FPSCR` on top of `FPUL`
+  to fit the wrong budget. §1.1 additionally said "32 × FR", which no section of
+  this document supports — the front and back banks are 16 registers each.
+  Found by the Wave-1 **B0c** `context-image-sums` check.
 - **v1.0 (2026-05-25).** Tiered SH-4-complete consolidation.
   Supersedes the archived J2-only `docs/fpu/archive/j2-spec.md`
   (v0.4). Adds Tier 1 (FIPR, FTRV, FSCA, FSRRA, FPCHG, full SR.FD

@@ -166,7 +166,8 @@ high-leverage fix)
 > sections.
 
 - **One authority per fact.** The `glossary.md` claims to be authoritative but is
-  itself stale (VFPUL, 272-byte SIMD context, endianness). Either make it truly
+  itself stale — it previously read VFPUL, 272-byte SIMD context, and
+  little-endian throughout. Either make it truly
   authoritative by fixing it and *deriving* the specs' repeated constants from
   it, or demote it to a glossary and name the owning spec per fact. Pick one.
 - **Supersede convention.** Every spec section that has been overtaken (e.g.
