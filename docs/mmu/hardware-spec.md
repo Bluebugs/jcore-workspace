@@ -645,7 +645,7 @@ The new encodings in §3.1–§3.2 extend a family that **J2 does not currently 
 > | `LDTLB.RN Rm` | `0x?FB` | General Illegal |
 >
 > They are removed from `decode/gen-go/spec/sh4/mmu.toml`, from
-> `docs/insns.json`, and from binutils `sh-opc.h` (with the now-unused
+> `jcore-cpu/docs/insns.json`, and from binutils `sh-opc.h` (with the now-unused
 > `A_TSBPTR` operand type). Family `0000 nnnn xxxx 1011` is **0 used /
 > 8 free** — every slot virgin, and it is the natural first reserve for
 > future J4-only `0000 nnnn`-shaped instructions.
@@ -1067,6 +1067,29 @@ TSB tag word (8 bytes, two 32-bit halves):
 ```
 
 The kernel writes both halves at TSB-fill time. The miss handler compares both halves against PTEH (VPN) and ASIDR (ASID_TAG) — two compares, each done in ONE instruction by the fused `CMP/EQ PTEH,Rn` / `CMP/EQ ASIDR,Rn` (§3.1), which read the CSR onto ybus and set T without a `STC` or a scratch register.
+
+**`tag_hi` is written at the architecture's finest granularity — 4 KB — for
+every page size.** `JCORE_TSB_TAG_SHIFT` = **12**, and it is not `PAGE_SHIFT`.
+The hardware walker compares `tag_hi` against the *raw* faulting VA with an
+exact 32-bit equality and applies no page-size field to it (`PageMask` lives in
+`data`, `PTEL[11:8]`, and is applied only at install), so the tag must be
+canonical. The same rule already governs the PTEH capture in §5.1 — hardware
+latches `PTEH[31:12] = VA[31:12]` precisely because the page size is not known
+at miss time — and the TSB *index* is 4 KB-granular for the same reason
+(`tsb_ptr()` hashes `VA[31:12]`, §2.8). Tag granularity, index granularity and
+PTEH capture are one fact with one value.
+
+> **Why this is stated as a constant rather than left implicit.** A tag written
+> as `addr & PAGE_MASK` under `PAGE_SHIFT = 14` can never match a first touch
+> outside a page's base 4 KB sub-page; the fault then repeats forever, and there
+> is no retry counter. That is the 16 KB TLB-walker livelock, and its cause was
+> exactly this constant being taken from `PAGE_SHIFT` instead of from the
+> architecture. Nothing about **16 KB** was wrong — the page-size fact was
+> correct in the docs, in Kconfig and in the RTL throughout. The registry
+> therefore carries `mmu.tsb.tag.shift` as its own row, bound to the kernel's
+> `JCORE_TSB_TAG_SHIFT`, so that a build in which the constant is absent or
+> disagrees fails rather than livelocks.
+> **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: write the canonical 4 KB TSB tag, never addr & PAGE_MASK".**
 
 Only the three **miss** causes arrive here; protection faults take `VBR+0x100` (§5), so the handler does not test the cause.
 

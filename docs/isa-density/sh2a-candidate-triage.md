@@ -15,7 +15,7 @@ all but one are **not** being adopted. It exists so the decision is not
 re-litigated from scratch later.
 
 **Candidate set.** The 109 instructions present in SH-2A but absent from the J32
-baseline (`docs/insns.json`, filter `SH2A == true && J32 == false`), minus the
+baseline (`jcore-cpu/docs/insns.json`, filter `SH2A == true && J32 == false`), minus the
 FPU group (which belongs to [`../fpu/spec.md`](../fpu/spec.md), not the density
 work).
 
@@ -30,7 +30,7 @@ sibling repo:
 - **Corpus:** CSiBE (`gcc-sh-monitor/csibe`, 167 of the C files compiled clean to
   assembly at `-O2`), 218,173 instruction lines — the same corpus the density
   spec uses.
-- **Encoding checks:** collision-tested against `docs/insns.json` for SH-2,
+- **Encoding checks:** collision-tested against `jcore-cpu/docs/insns.json` for SH-2,
   SH-2A, SH-4/4A, and the J32 decoder, the same sweep used for `lea`.
 
 **Headline finding (decisive for everything below).** *GCC 14.2 emits **none** of
@@ -296,7 +296,7 @@ separate functional-unit/state feature (`divs`/`divu`, register banks).
 
 Design record. Numbers measured 2026-05-30 against CSiBE with the
 `--with-cpu=m2a` GCC 14.2 in `gcc-sh-monitor`. Encodings verified collision-free
-against `docs/insns.json`. The single recommendation (delay-slot-free branches,
+against `jcore-cpu/docs/insns.json`. The single recommendation (delay-slot-free branches,
 §2) has been **promoted** to a full instruction definition — [`spec.md`](spec.md)
 §3.5, [`hardware-impl.md`](hardware-impl.md) §4A,
 [`software-impl.md`](software-impl.md) §3.6 (2026-05-30). This document remains

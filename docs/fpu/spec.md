@@ -55,7 +55,7 @@ Rev. 5.0, ADE-602-156D, 2001) and SH-4A FPU (REJ09B0003-0150Z, 2004).
    - 7.1 EXC_FPU_DISABLED cause and HEDR interaction
    - 7.2 Per-vCPU FPU-ownership flag
    - 7.3 Lazy FPU context-switch ABI
-   - 7.4 Save / restore sequence (132-byte FPU image)
+   - 7.4 Save / restore sequence (136-byte FPU image)
    - 7.5 Trap-handler register-window convention (HSPC / HSSR)
    - 7.6 Migration and live-migration corner cases
 8. IEEE-754 conformance target (per tier)
@@ -156,7 +156,7 @@ hypervisor-capable product point J32-FM. Adds:
   restores the current vCPU's FPU image using standard Tier 0 / Tier
   1 FMOV.S sequences, then resumes the guest at the trapping
   instruction.
-- **132-byte FPU image** (32 × FR + 16 × XF + FPUL + FPSCR) saved /
+- **136-byte FPU image** (16 × FR + 16 × XF + FPUL + FPSCR) saved /
   restored on context switch.
 
 Tier 2 is **required** for J32-FM and J64. It is **optional** for
@@ -1346,7 +1346,7 @@ adder; the architecture does not penalise this choice.
 > heading it, belongs to Wave-2 **B1**.
 >
 > The rest of §7 — `EXC_FPU_DISABLED`, the per-vCPU ownership flag, the lazy ABI,
-> the 132-byte image — is unaffected and current, with the exception noted at
+> the 136-byte image — is unaffected and current, with the exception noted at
 > [§7.1](#71-exc_fpu_disabled-cause-and-hedr-interaction).
 
 The Tier 2 lazy-FPU-context-switch mechanism documented in this section
@@ -1430,7 +1430,7 @@ struct vcpu {
     ...
     bool fpu_owned;          // does *this* vCPU currently own the
                              // physical FPU's architectural state?
-    uint8_t fpu_image[132];  // saved FPU image when !fpu_owned
+    uint8_t fpu_image[136];  // saved FPU image when !fpu_owned
                              // and FPU state was previously dirty
     bool fpu_image_valid;    // false on first dispatch ever; true
                              // once any FPU state has been observed
@@ -1522,9 +1522,21 @@ UltraSPARC II's HV-FPU bookkeeping (UltraSPARC II Programmer
 Reference Manual, 1997). The trap-on-first-use mechanism dates to
 the VAX (1977) FPACC trap.
 
-### 7.4 Save / restore sequence (132-byte FPU image). [T2]
+### 7.4 Save / restore sequence (136-byte FPU image). [T2]
 
-The Tier 2 FPU image is **132 bytes**:
+> **HISTORICAL 2026-08-25.** This section read **132 bytes** from its first
+> draft until Wave-1 task B0c. The number was never consistent with the table
+> below it: the field list has always summed to 136, and the table's own `end`
+> row has always given that end as `0x88`, which *is* 136. The save sequence
+> underneath had already collided as a result — `FPSCR` was stored to
+> `@(132-4,r0)`, i.e. offset 128, on top of `FPUL`, with an in-line
+> `; offset 128, oops, recompute` left in the listing. 136 is also what Linux's
+> `struct sh_fpu_hard_struct` lays out (`arch/sh/include/asm/processor_32.h`:
+> `fp_regs[16]`, `xfp_regs[16]`, `fpscr`, `fpul` — the trailing `status` word is
+> software-only and not part of the architectural image). The corrected value is
+> **136**; see `fpu.context.t2` in [../fact-ownership.md](../fact-ownership.md).
+
+The Tier 2 FPU image is **136 bytes**:
 
 | Offset | Bytes | Content                |
 | ------ | ----- | ---------------------- |
@@ -1532,7 +1544,7 @@ The Tier 2 FPU image is **132 bytes**:
 | 0x40   | 64    | XF0..XF15 (16 × 4 B)   |
 | 0x80   | 4     | FPUL                   |
 | 0x84   | 4     | FPSCR                  |
-| 0x88   | —     | end (132 bytes)        |
+| 0x88   | —     | end (136 bytes)        |
 
 **Save sequence (hypervisor view).** With SR.HPRIV=1 and SR.FD=0,
 execute:
@@ -1554,8 +1566,8 @@ fmov.s  fr15, @(124,r0)
 ; Switch bank back
 frchg
 ; Save FPUL and FPSCR
-sts     fpul,  @(128,r0)
-sts     fpscr, @(132-4,r0)   ; offset 128, oops, recompute
+sts     fpul,  @(128,r0)     ; 0x80
+sts     fpscr, @(132,r0)     ; 0x84 -- image ends at 0x88 = 136 bytes
 ```
 
 (The asm above is illustrative; an implementation will use a tight
@@ -1604,14 +1616,14 @@ this is achievable.
 
 - **Live VM migration across hosts.** The hypervisor on the source
   host invokes its own save sequence on the FPU-owning pCPU (the
-  source-pCPU IPI of §7.3 step 8), then ships the 132-byte image
+  source-pCPU IPI of §7.3 step 8), then ships the 136-byte image
   across the wire. The destination hypervisor stores it in the
   destination vCPU's `fpu_image[]` with `fpu_image_valid = true`.
   On first FPU instruction in the destination vCPU, the destination
   hypervisor restores from this image as if it were a normal lazy
   restore.
 - **vCPU snapshot / checkpoint.** Identical to live migration but
-  to disk; the 132-byte image is part of the vCPU's checkpoint
+  to disk; the 136-byte image is part of the vCPU's checkpoint
   blob.
 - **Hypervisor self-use of the FPU.** The hypervisor should not use
   the FPU. If a hypervisor handler must (e.g. for a soft-decoded
@@ -1719,9 +1731,9 @@ Inherited from j2-spec.md §9:
 13. **HEDR delegation**: set HEDR's `EXC_FPU_DISABLED` bit for a
     vCPU, verify the SR.FD trap is delivered to the guest's
     supervisor handler at VBR + offset, not to the hypervisor.
-14. **132-byte image round-trip**: save FPU state, perturb registers,
-    restore, verify all 132 bytes round-trip bit-exact.
-15. **Live-migration replay**: ship a 132-byte image to a separate
+14. **136-byte image round-trip**: save FPU state, perturb registers,
+    restore, verify all 136 bytes round-trip bit-exact.
+15. **Live-migration replay**: ship a 136-byte image to a separate
     instance of the hypervisor, restore, run a known FPU sequence,
     compare with the source instance's continuation. Must be
     bit-identical.
@@ -1783,12 +1795,23 @@ Inherited from j2-spec.md §9:
 
 ## 11. Revision history
 
+- **v1.1 (2026-08-25).** The Tier-2 FPU image is **136 bytes**, not 132.
+  Corrected in §7.4 (which carries the detail as a `HISTORICAL` note), §1.2,
+  §7.2's `fpu_image[]`, §7.6, §9.3 and Appendix A, and in
+  [../hypervisor/hardware-spec.md §4](../hypervisor/hardware-spec.md) and
+  [../hypervisor/linux-spec.md §5](../hypervisor/linux-spec.md). The §7.4 field
+  table always summed to 136 and always ended at `0x88`; only the headline said
+  132, and the save sequence had already been driven into storing `FPSCR` on top
+  of `FPUL` to fit the wrong budget. §1.2 additionally said "32 × FR", which no
+  section of this document supports — the front and back banks are 16 registers
+  each. Found by the Wave-1 **B0c** `context-image-sums` check, which now fails
+  if a save-image table stops summing to its declared total.
 - **v1.0 (2026-05-25).** Tiered SH-4-complete consolidation.
   Supersedes the archived J2-only `docs/fpu/archive/j2-spec.md`
   (v0.4). Adds Tier 1 (FIPR, FTRV, FSCA, FSRRA, FPCHG, full SR.FD
   semantics, full FPSCR layout, endianness migration to LE) and
   Tier 2 (EXC_FPU_DISABLED HEDR cause, per-vCPU FPU-ownership
-  flag, lazy FPU context-switch ABI, 132-byte FPU image). Updates
+  flag, lazy FPU context-switch ABI, 136-byte FPU image). Updates
   cross-references in
   [../hypervisor/hardware-spec.md](../hypervisor/hardware-spec.md),
   [../simd/spec.md](../simd/spec.md), and
@@ -1844,7 +1867,7 @@ SH-4 hardware manual (pre-2006, patents expired) and IEEE-754
 | HEDR delegation bitmap             | T2   | sun4v UltraSPARC Architecture 2005 (hyperprivileged trap            |
 |                                    |      | delegation); see also                                               |
 |                                    |      | [../hypervisor/hardware-spec.md](../hypervisor/hardware-spec.md)    |
-| 132-byte FPU image                 | T2   | direct consequence of SH-4 FPU state size (16+16 FR/XF + FPUL +     |
+| 136-byte FPU image                 | T2   | direct consequence of SH-4 FPU state size (16+16 FR/XF + FPUL +     |
 |                                    |      | FPSCR); SH-4 hw manual §6.1 (2001)                                  |
 
 **No mechanism in this specification requires post-2006 prior art.**

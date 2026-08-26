@@ -41,13 +41,14 @@ are the substitute for a check that cannot be written cleanly — see
 | `simd.context.j32` | SIMD per-task context image, J32: **520 bytes** | [simd/spec.md §2.5](simd/spec.md) | `\b520[- ]byte` |
 | `simd.context.j64` | SIMD per-task context image, J64: **1036 bytes** | [simd/spec.md §2.5](simd/spec.md) | `\b1036[- ]byte` |
 | `simd.sr.vd` | `SR.VD` is **SR bit 13** | [simd/spec.md §2.6](simd/spec.md) | `SR bit 13` |
-| `fpu.context.t2` | Tier-2 FPU context image: **132 bytes** | [fpu/spec.md §7.4](fpu/spec.md) | `\b132[- ]byte` |
+| `fpu.context.t2` | Tier-2 FPU context image: **136 bytes** | [fpu/spec.md §7.4](fpu/spec.md) | `\b136[- ]byte` |
 | `fpu.sr.fd` | `SR.FD` is **SR bit 15** | [fpu/spec.md §6.3](fpu/spec.md) | `SR bit 15` |
 | `mmu.asid.width` | ASID proper: **12 bits** (4096 ASIDs) | [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md) | `12-bit ASID\b` |
 | `mmu.asidtag.width` | `ASID_TAG`: **16 bits** (12-bit ASID; top nibble reserved, always zero) | [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md) | `16-bit .?ASID_TAG` |
 | `mmu.page.base` | Base page size: **16 KB** | [mmu/design-spec.md §3.3](mmu/design-spec.md) | `16 KB base page` |
 | `mmu.tsb.entry` | TSB entry: **16 bytes** | [mmu/hardware-spec.md §2.8](mmu/hardware-spec.md) | `16-byte entr` |
 | `mmu.tsb.set` | TSB set: **32 bytes, 2-way** (way 0 at `+0`, way 1 at `+16`) | [mmu/hardware-spec.md §2.8](mmu/hardware-spec.md) | `32-byte (set\b\|cache line)` |
+| `mmu.tsb.tag.shift` | TSB tag granularity: **4 KB**, `JCORE_TSB_TAG_SHIFT` = 12 — never `PAGE_SHIFT` | [mmu/hardware-spec.md §7](mmu/hardware-spec.md) | `JCORE_TSB_TAG_SHIFT` |
 | `mmu.vector.miss` | TLB **miss** vector: `VBR + 0x400` | [mmu/hardware-spec.md §5](mmu/hardware-spec.md) | `VBR ?\+ ?0x400` |
 | `mmu.vector.prot` | TLB **protection** vector: `VBR + 0x100` — *not* `0x400` | [mmu/hardware-spec.md §5](mmu/hardware-spec.md) | `VBR ?\+ ?0x100` |
 | `mmu.mmufsr.addr` | `MMUFSR` at P4 offset `0x02C` (`0xFF00002C`) | [soc/p4-mmio-map.md §3.2](soc/p4-mmio-map.md) | `0xFF00002C\|0x0?2C.{0,12}MMUFSR\|MMUFSR.{0,12}0x0?2C` |
@@ -57,6 +58,78 @@ are the substitute for a check that cannot be written cleanly — see
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
+
+## Code bindings
+
+The Registry above says which *document* owns a constant. This table says where
+the same constant lives in the **code**, and `doc-matches-code` fails when the
+two disagree. Wave-1 task **B0c**; the argument is in
+[decisions/0003](decisions/0003-canonical-encoding-database.md) §"Doc-vs-code".
+
+**A binding row states no value.** It names two regular expressions — one read
+against the owning document, one against a file in a submodule — each with
+**exactly one capture group**, and a relation the two captures must satisfy. A
+row that restated the number would be a third copy of it, and
+[0001](decisions/0001-one-authority-per-fact.md) is a record about what happens
+to copies. This row can go stale only by ceasing to match, which is a failure.
+
+`Code` is `<repo>:<path>`, read from **`origin/<integration-branch>`**, never
+from the checked-out submodule pointer — [0002 §2](decisions/0002-supersede-convention.md)
+is explicit that the pointer is not evidence, and it currently lags by months.
+Checking the docs against a stale pointer would report agreement with code
+nobody runs.
+
+Relations, enumerated (an unknown name is a failure, not a no-op): `eq` (both
+decimal), `eq-hex` (both hexadecimal, compared numerically), `kb-from-shift`
+(doc KB × 1024 = 2^code), `bytes-from-shift` (doc bytes = 2^code).
+
+| Fact ID | Doc pattern | Code | Code pattern | Relation |
+|---|---|---|---|---|
+| `mmu.page.base` | `(\d+) KB base page` | `linux:arch/sh/configs/jcore_defconfig` | `CONFIG_PAGE_SIZE_(\d+)KB=y` | `eq` |
+| `mmu.tsb.entry` | `(\d+)-byte entr` | `jcore-cpu:core/cpu.vhd` | `entry_bytes\s*=>\s*(\d+)` | `eq` |
+| `mmu.tsb.entry` | `(\d+)-byte entr` | `linux:arch/sh/include/cpu-jcore/cpu/mmu_context.h` | `#define JCORE_TSB_ENTRY_BYTES\s+(\d+)` | `eq` |
+| `mmu.tsb.set` | `(\d+)-byte set` | `jcore-cpu:core/datapath_pkg.vhd` | `shift_left\(v_idx, (\d+)\)` | `bytes-from-shift` |
+| `mmu.tsb.tag.shift` | `` `JCORE_TSB_TAG_SHIFT` = \*\*(\d+)\*\* `` | `linux:arch/sh/include/cpu-jcore/cpu/mmu_context.h` | `#define JCORE_TSB_TAG_SHIFT\s+(\d+)` | `eq` |
+
+Notes on what is deliberately **not** here, so the gaps are visible rather than
+inferred from silence:
+
+- **`mmu.tsb.entry` is bound twice on purpose.** The 16 is restated
+  independently by the RTL generic map and by the kernel header, and either can
+  move without the other. One binding would leave whichever side it did not name
+  free to drift.
+- **`mmu.tsb.set` binds to the shift, not to a literal 32.** The RTL has no
+  `32`; it has `shift_left(v_idx, 5)`, which is the arithmetic that actually
+  places a set. Binding to the real expression is why widening the TSB to 4 ways
+  cannot pass with the doc still saying 32 bytes.
+- **`fpu.context.t2` and `simd.context.j32`/`j64` have no code binding**, because
+  there is no code: there is no FPU or SIMD RTL in `jcore-cpu`, and Linux's
+  `struct sh_fpu_hard_struct` is a field list with no size constant to capture.
+  They are covered instead by `context-image-sums`, which checks the owning
+  spec's own field table against its own declared total — doc-internal
+  arithmetic, not doc-vs-code, and labelled as such.
+- **The P4 register offsets are not rows here.** They are a table-vs-table
+  comparison (`p4-offsets-match-rtl`), which also catches a register the RTL
+  decodes and the map does not list — something a per-fact binding cannot see.
+- **P4 addresses restated in RTL *comments* are not checked, and that is a
+  measured decision, not an oversight.** B0c built such a sweep and threw it
+  away. Three attribution rules were tried against `jcore-cpu`'s `core/` and
+  `docs/`, with one known real defect present (`core/components_pkg.vhd` calling
+  MMUFSR `0xFF000028`, which is INTEVT's address and precisely the one MMUFSR
+  was moved off): *nearest name wins* gave 4 false positives to 1 true;
+  *the address's true owner must be named within ±3 lines* gave 7 to 1; *compare
+  only where the window holds exactly one address and one name* gave 0 to 0 —
+  it skipped the real defect, because an unrelated `EXPEVT 0x0C0` three lines
+  below made the window ambiguous. Prose pairs names with addresses by
+  apposition and across line wraps, and no regex reads that. A check with a 4:1
+  false-positive rate fires on correct comments and gets deleted; a check with
+  no true positives is worse than none. The comment defect was fixed by hand
+  and the sweep was not shipped. The structured half — the map table versus the
+  decode — is checked, and that is where the authority actually lives.
+- **`mmu.page.base` binds to Kconfig, not to the RTL,** because the RTL has no
+  page-size constant: it is page-size-general, with `PageMask` in `PTEL[11:8]`
+  selecting per entry. There is nothing in the hardware for `16 KB` to disagree
+  with.
 
 ## Unresolved — facts with no owner yet
 
@@ -68,7 +141,7 @@ new file.
 |---|---|---|
 | **Endianness of the J-Core product line** | Contradictory. [glossary.md §3](glossary.md) tabulates every product point as little-endian; the shipping J2 toolchain target is `sh2eb-linux-muslfdpic` (big-endian) and [fgmt/mt2x2-plan.md §9 Q3](fgmt/mt2x2-plan.md) records the conflict as an explicit open decision. [fpu/spec.md §2.3](fpu/spec.md) already hedges ("Tier 0 may ship big-endian"). | Wave-2 **B1** (listed there as a *mechanical* item; it is not — it needs a product decision before any doc edit is correct) |
 | **P4 register offsets vs real SH-4** (QACR0/QACR1/CCR/CPUINFO) | Partly settled. `TRA`/`EXPEVT`/`INTEVT` and `MMUFSR` are resolved in [soc/p4-mmio-map.md §7](soc/p4-mmio-map.md); the SH-4-compat policy for the rest is not. | Wave-2 **B1**, gated on **B2** (SH-4-as-guest model) |
-| **Instruction encodings** | Not a registry fact by design. The canonical source is `docs/insns.json`, checked by `insns2asm --emit check`; prose specs cite it and must not restate bit patterns. | Wave-2 **B4** |
+| **Instruction encodings** | Not a registry fact by design, and **no longer unresolved as to which file**: [decisions/0003](decisions/0003-canonical-encoding-database.md) makes `jcore-cpu/docs/insns.json` canonical and deletes this repo's copy. Checked by `insns2asm --emit check` and `cpugen insns -check`; prose specs cite it and must not restate bit patterns. | Wave-2 **B4** (the sweep itself) |
 
 ## Waivers
 
@@ -107,7 +180,6 @@ or delete the duplicated value. Both are one-line changes.
 | `bus.bmid.width` | [hypervisor/design-spec.md](hypervisor/design-spec.md) | pre-existing bare restatement — B1 |
 | `bus.bmid.width` | [iommu/design-spec.md](iommu/design-spec.md) | pre-existing bare restatement — B1 |
 | `bus.bmid.width` | [iommu/hardware-spec.md](iommu/hardware-spec.md) | pre-existing bare restatement — B1 |
-| `fpu.context.t2` | [hypervisor/linux-spec.md](hypervisor/linux-spec.md) | pre-existing bare restatement — B1 |
 | `hyp.expevt.hcall` | [hypervisor/linux-spec.md](hypervisor/linux-spec.md) | pre-existing bare restatement — B1 |
 | `hyp.expevt.hypreg` | [hypervisor/linux-spec.md](hypervisor/linux-spec.md) | pre-existing bare restatement — B1 |
 | `mmu.asid.width` | [hypervisor/design-spec.md](hypervisor/design-spec.md) | pre-existing bare restatement — B1 |

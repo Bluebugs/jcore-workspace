@@ -1,0 +1,140 @@
+name: docs-gate
+
+# The documentation system's enforcement, which until this workflow existed was
+# not run by anything: this superproject had no CI at all, so
+# `scripts/check-doc-facts.py` -- the whole of decisions 0001, 0002 and 0003 --
+# was a script nobody ran.
+#
+# Two gates, and they are not redundant:
+#
+#   1. scripts/check-doc-facts.py --strict --check-waivers
+#        The checks themselves, against this tree.
+#   2. scripts/test-check-doc-facts.py
+#        The checks' own fixture suite. It builds throwaway trees and asserts
+#        each check fires on an injected defect. Gate 1 alone cannot tell "the
+#        tree is clean" from "the check silently stopped working" -- that
+#        distinction has already been got wrong once here, when the checker
+#        shipped with six fail-open paths and a green run did not reveal them
+#        because the suite was run against the tree it guards.
+#
+# `--strict` IS NOT OPTIONAL. See the block on submodules below.
+#
+# Security note: no `github.event.*` value is interpolated anywhere in this
+# file. The only expression used inside a shell step is `github.token`, passed
+# through `env:` and referenced as a shell variable, never spliced into the
+# script text.
+
+on:
+  push:
+    branches:
+      - main
+      - 'wave*/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: docs-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  docs-gate:
+    name: doc facts, supersede markers, doc-vs-code
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout jcore-workspace
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 0 is load-bearing even for the superproject: it is
+          # what stops actions/checkout from doing shallow submodule fetches
+          # below. Submodules are NOT initialised here -- see the next step.
+          fetch-depth: 0
+          submodules: false
+
+      # ---------------------------------------------------------------------
+      # WHY NOT `submodules: recursive`, and why that is not a loophole.
+      #
+      # The checks read exactly two submodules: `jcore-cpu` (34 RESOLVED
+      # markers, 15 artifact citations, three code bindings, the P4 decode and
+      # the canonical encoding database) and `linux` (22 RESOLVED markers, two
+      # code bindings). `recursive` would additionally clone `gcc` and
+      # `llvm-project`, which are multi-gigabyte and which no check touches. A
+      # gate that spends twenty minutes cloning compilers it does not read is a
+      # gate that gets disabled, and this task's whole subject is checks that
+      # survive contact with the people who have to run them.
+      #
+      # The safety property `recursive` was asked for -- "the run must not pass
+      # having checked nothing" -- is NOT provided by `recursive`. It is
+      # provided by `--strict`, which turns every unverifiable check into a
+      # failure. If this step under-provisions (wrong repo, wrong branch, a new
+      # marker naming `jcore-soc`), gate 1 fails; it cannot pass. That is
+      # asserted by fixtures, not assumed: `test-check-doc-facts.py` has a pair
+      # of cases proving an absent submodule exits 0 WITHOUT `--strict` and
+      # non-zero WITH it.
+      #
+      # --filter=blob:none, not --depth: `resolved-is-merged` runs
+      # `git log --format=%s origin/<branch>` and needs the FULL commit history
+      # to find a cited subject line. A shallow clone would make correct
+      # RESOLVED markers fail -- a check that fails on correct documentation
+      # trains people to ignore it. A blobless partial clone keeps every commit
+      # and fetches file contents only when `git grep`/`git show` asks, which
+      # the artifact citations and the code bindings do for a handful of paths.
+      # ---------------------------------------------------------------------
+      - name: Check out the two submodules the checks actually read
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # .gitmodules uses SSH URLs; CI has no key. Rewrite to HTTPS + token.
+          # The token is read from the environment, never interpolated into the
+          # script text.
+          git config --global \
+            "url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf" \
+            "git@github.com:"
+          git submodule update --init --filter=blob:none -- jcore-cpu linux
+
+      # The submodule POINTER is not what the checks read. 0002 section 2 is
+      # explicit that a pointer is not evidence of merge -- it lags the
+      # integration branches by design, and did so by months when this was
+      # written. Every check resolves against origin/<integration-branch>, so
+      # that ref has to exist and be current. Fetching it is a separate step
+      # from checking the submodule out, because `submodule update` gives you
+      # the pinned commit and says nothing about the branch.
+      - name: Fetch the integration branches the markers resolve against
+        run: |
+          set -euo pipefail
+          git -C jcore-cpu fetch --filter=blob:none origin master
+          git -C linux     fetch --filter=blob:none origin jcore
+          # Fail here, with a readable message, rather than letting ~56 markers
+          # turn into skips that --strict then reports one at a time.
+          git -C jcore-cpu rev-parse --verify origin/master >/dev/null || {
+            echo "::error::jcore-cpu origin/master is missing; every RESOLVED marker naming it would be unverifiable"
+            exit 1
+          }
+          git -C linux rev-parse --verify origin/jcore >/dev/null || {
+            echo "::error::linux origin/jcore is missing; every RESOLVED marker naming it would be unverifiable"
+            exit 1
+          }
+
+      # Gate 2 runs FIRST. If the checker itself is broken, that is the more
+      # useful failure to see, and a green gate 1 underneath a broken checker is
+      # precisely the reassuring-but-empty result this repository keeps
+      # producing.
+      - name: Gate 2 -- the checks' own fixture suite
+        run: python3 scripts/test-check-doc-facts.py
+
+      - name: Gate 1 -- check-doc-facts --strict --check-waivers
+        run: |
+          set -euo pipefail
+          # -v lists every comparison that was actually made: which code
+          # bindings resolved, how many P4 registers were compared, which image
+          # tables summed. "OK." on its own cannot be told apart from "OK,
+          # having compared nothing", and the log should not require the reader
+          # to make that inference.
+          python3 scripts/check-doc-facts.py --strict --check-waivers -v

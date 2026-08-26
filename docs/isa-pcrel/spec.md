@@ -246,7 +246,7 @@ The goal was originally to mirror `movi20`'s 20-bit field (±1 MB). **A disp20
 PC-relative form has no globally collision-free encoding — proven, not
 assumed.** A 20-bit displacement needs four free immediate bits in word0, i.e. a
 fully-free 16-value "nibble-plane" `hhhh nnnn iiii ssss`. A sweep of
-`docs/insns.json` over **every** SuperH variant shows:
+`jcore-cpu/docs/insns.json` over **every** SuperH variant shows:
 
 - The **only two** fully-free nibble-planes in the entire 16-bit map are
   `0000nnnniiii0000` and `…0001` — **already occupied by SH-2A's own
@@ -322,7 +322,7 @@ name `LEA_PCREL` distinguishes them in the decoder/sim.)
 
 ## 6. Compatibility — collision-free proof
 
-Methodology: parse every instruction's `code` in `docs/insns.json` into a
+Methodology: parse every instruction's `code` in `jcore-cpu/docs/insns.json` into a
 `(mask, value)` over the first word (and, for two-word ops in this group, the
 word1 minor), treat operand letters as don't-care, and test the candidate for
 *any* common bit pattern against **every** variant present
@@ -359,7 +359,7 @@ SH binary, and SH-2/-2A/-4 code never emits it.
    points. Any other delta means a collision was missed (isa-density
    hardware-impl §8.1).
 2. **Encoding-sweep regression.** Add `0011nnnnDDDD0001 1011…` to the
-   `docs/insns.json` collision sweep as a committed test, so future additions
+   `jcore-cpu/docs/insns.json` collision sweep as a committed test, so future additions
    can't silently re-use the minor.
 3. **Operation unit tests.** For representative `(Rn, disp16, word0_addr)`:
    assert `Rn == (word0_addr + 4) + sign_ext16(disp)×2`; cover max forward
@@ -397,7 +397,7 @@ SH binary, and SH-2/-2A/-4 code never emits it.
 
 Draft, 2026-05-31. Architecture defined; encoding (`0011nnnnDDDD0001` / minor
 `1011`) verified collision-free against all SuperH variants in
-`docs/insns.json`. Hardware and software implementations sketched in the
+`jcore-cpu/docs/insns.json`. Hardware and software implementations sketched in the
 companion documents as deltas over the `isa-density` `movi20`/`lea` work, which
 must land first (shared second-word fetch). Density impact is **not** yet
 measured — it depends on GCC actually emitting the form (latent, like every

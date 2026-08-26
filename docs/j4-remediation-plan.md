@@ -175,10 +175,33 @@ high-leverage fix)
   `SUPERSEDED BY …` header. A "RESOLVED" marker must link the *merged* commit;
   items whose fix is on an unmerged branch are marked `PENDING-MERGE`, not
   RESOLVED.
+> **B0c — DONE (2026-08-25).** Both bullets below are landed on
+> `wave1/foundations`, plus the CI that was missing entirely: this superproject
+> now has `.github/workflows/docs-gate.yml`, which runs
+> `check-doc-facts.py --strict --check-waivers` and its fixture suite. The
+> encoding-database ambiguity below — there were **two** tracked
+> `docs/insns.json`, 460 and 466 entries — is decided in
+> [decisions/0003](decisions/0003-canonical-encoding-database.md):
+> `jcore-cpu/docs/insns.json` is canonical and this repo's copy is deleted.
+> **Wave-2 B4 sweeps the `jcore-cpu` copy.**
+>
+> Two corrections to the text below, recorded rather than silently applied.
+> **(1) "FPU 132 vs 136" understates it**: 132 was wrong, 136 is right, and the
+> §7.4 field table had always summed to 136 — the doc contradicted itself in a
+> single row. It is corrected, not merely checked. **(2) A check on page size /
+> `PAGE_SHIFT` would *not* have caught the livelock.** 16 KB was correct in the
+> docs, in Kconfig and in the RTL throughout; the constant that disagreed was
+> the TSB **tag** granularity, which had no registry row and no kernel constant
+> at all. That row now exists (`mmu.tsb.tag.shift`) and is bound to
+> `JCORE_TSB_TAG_SHIFT` ([mmu/hardware-spec.md §7](mmu/hardware-spec.md)).
+> See B0c's report for which check catches which of the
+> three named defects.
+
 - **Doc-vs-code CI checks.** Add checks that fail when a normative constant
   disagrees with the code: page size / `PAGE_SHIFT`, TSB entry size and offsets,
   each P4 register offset (`p4-mmio-map.md` vs `datapath.vhm` decode), context
-  image sizes (FPU "132" vs 136 bytes; SIMD 520). This class of check would have
+  image sizes (FPU "132" vs 136 bytes — [fpu/spec.md §7.4](fpu/spec.md) owns it;
+  SIMD 520). This class of check would have
   caught the livelock, the CPUINFO address, and the FPU image size.
 - **One machine-readable source of truth for instruction encodings.** Encodings
   must **not** be hand-written into prose specs (that is how the review found
