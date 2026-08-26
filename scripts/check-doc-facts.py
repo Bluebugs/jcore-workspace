@@ -32,6 +32,12 @@ import sys
 # Max length of a registry Constant cell. See `registry-value-is-short`.
 VALUE_CELL_MAX = 100
 
+# How many distinct values a `## Value guards` canonical pattern may find in
+# its owner. Two is the normal case (a J32 and a J64 form). More than a few
+# means the pattern is matching unrelated sizes and has stopped being a
+# guard, which must be a failure rather than a quietly permissive check.
+VALUE_GUARD_MAX_LICENSED = 4
+
 # Per 0002 section 2. A change is "merged" only when it is on this branch.
 # Kept in sync with the table in 0002; that table is the human-readable copy
 # and this dict is authoritative for the check.
@@ -309,8 +315,6 @@ RELATIONS = {
     # Both sides are hexadecimal (`0x02C` in the map, x"2C" in VHDL). Compared
     # numerically, so 0x02C == 0x2c == 2C and formatting churn is not a defect.
     "eq-hex": (16, 16, lambda d, c: d == c),
-    # The doc states a size in KB, the code states a shift: 16 KB <-> 14.
-    "kb-from-shift": (10, 10, lambda d, c: d * 1024 == 1 << c),
     # The doc states a size in bytes, the code states a shift.
     "bytes-from-shift": (10, 10, lambda d, c: d == 1 << c),
 }
@@ -609,7 +613,8 @@ def check_p4_offsets(cfg, report, repos):
 
     branch = INTEGRATION_BRANCH[P4_RTL_REPO]
     rtl_body = repos.file_at(P4_RTL_REPO, branch, P4_RTL_PATH,
-                             "p4-offsets-match-rtl")
+                             "p4-offsets-match-rtl",
+                             check="p4-offsets-match-rtl")
     if rtl_body is None:
         return                 # skip/failure already reported
 
@@ -646,6 +651,169 @@ def check_p4_offsets(cfg, report, repos):
                 "%d documented" % (len(rtl), len(doc)))
 
 
+# --------------------------------------------------- B0c: stale-value guards
+
+
+class ValueGuard:
+    """One row of `## Value guards`: how to read a fact's value out of its
+    owner, and how to find restatements of it anywhere in `docs/`.
+
+    THE HOLE THIS CLOSES. `restatement-is-linked` matches the registry's
+    `Pattern`, which spells the CURRENT value (`\\b520[- ]byte`). A **stale**
+    value therefore matches nothing and is invisible -- which is the exact
+    escape 0001 identified and invented `VALUE_SHAPES` for. But that shape scan
+    runs on `glossary.md` alone, because its rule is "carry no value at all",
+    and no other document can be held to that. So the blindness 0001 closed for
+    one file stayed open for every other file in the tree, and it hid a
+    `**272-byte SIMD image** ... + VFPUL` in `hypervisor/hardware-spec.md` and a
+    `132-byte FPU save/restore image` in `jcore-ulx3s-service-plan.md` through
+    the whole of B0a and the first B0c commit.
+
+    Two patterns rather than one, and both carry exactly one capture group:
+
+      - `canonical` runs against the OWNER and must yield exactly one value.
+        That value is the answer; nothing here restates it, so this row cannot
+        drift from the fact the way a hardcoded expectation would.
+      - `scan` runs against every document. Any capture that differs from the
+        canonical value is a failure -- **whether or not the line links the
+        owner**, because a linked wrong number is still a wrong number, and
+        `hypervisor/hardware-spec.md:688` was linked.
+
+    The two are separate because the owner states a value in the phrasing its
+    own prose wants, while restatements elsewhere use other phrasings, and one
+    regex forced to do both ends up loose enough to match unrelated sizes."""
+
+    def __init__(self, fid, canonical, scan):
+        self.id = fid
+        self.canonical = canonical
+        self.scan = scan
+
+
+def load_value_guards(cfg, report, facts):
+    """Parse `## Value guards`. Fails CLOSED, like every other table here."""
+    known = {f.id: f for f in (facts or [])}
+    try:
+        body = read(cfg.registry)
+    except (OSError, UnicodeDecodeError):
+        return None
+    rows = parse_table(body, "## Value guards")
+    if rows is None:
+        report.fail("value-guards", cfg.rel(cfg.registry),
+                    "no '## Value guards' heading followed by a table. Stale "
+                    "restatements would be invisible again; this is a failure, "
+                    "not a skip.")
+        return None
+    if not rows:
+        report.fail("value-guards", cfg.rel(cfg.registry),
+                    "'## Value guards' table has no rows. Every stale-value "
+                    "comparison would silently pass.")
+        return None
+    out = []
+    for cells in rows:
+        if len(cells) < 3:
+            report.fail("value-guards", cfg.rel(cfg.registry),
+                        "malformed row (%d cells, need 3): %s"
+                        % (len(cells), " | ".join(cells)[:80]))
+            continue
+        fid = unbacktick(cells[0])
+        if facts is not None and fid not in known:
+            report.fail("value-guards", fid,
+                        "guard names a fact that is not in the Registry table")
+            continue
+        pats = []
+        bad = False
+        for label, cell in (("Canonical", cells[1]), ("Scan", cells[2])):
+            pat = unbacktick(cell)
+            try:
+                rx = re.compile(pat)
+            except re.error as exc:
+                report.fail("value-guards", fid,
+                            "%s pattern %r does not compile: %s"
+                            % (label, pat, exc))
+                bad = True
+                break
+            if rx.groups != 1:
+                report.fail("value-guards", fid,
+                            "%s pattern %r has %d capture groups; exactly 1 is "
+                            "required" % (label, pat, rx.groups))
+                bad = True
+                break
+            pats.append(rx)
+        if not bad:
+            out.append(ValueGuard(fid, pats[0], pats[1]))
+    return out
+
+
+def check_no_stale_value(cfg, report, facts, guards):
+    """No document may state a value for a registered fact other than the one
+    its owner states. Wave-1 task B0c."""
+    if not guards:
+        return
+    owners = {f.id: f for f in facts}
+    corpus = {}
+    for p in cfg.markdown_files():
+        # The decision records quote retired values on purpose -- 0001's whole
+        # Context section is a table of them -- and `check_facts` already
+        # excludes this directory for the same reason.
+        if p.startswith(cfg.decisions + os.sep):
+            continue
+        try:
+            corpus[p] = read(p)
+        except (OSError, UnicodeDecodeError):
+            continue           # `check_facts` reports unreadable files
+    for g in guards:
+        fact = owners[g.id]
+        body = corpus.get(fact.owner)
+        if body is None:
+            report.fail("no-stale-value", g.id,
+                        "owning document %s is missing or unreadable; the "
+                        "canonical value cannot be established"
+                        % cfg.rel(fact.owner))
+            continue
+        # The owner LICENSES a small set of values, rather than exactly one.
+        # A fact legitimately has a J32 and a J64 form (520 and 1036), and
+        # demanding one value would either fail on the owner or force the scan
+        # pattern so tight it stopped seeing restatements. The set is capped and
+        # printed, so what has been licensed is visible rather than implied.
+        licensed = sorted(set(x.strip()
+                              for x in g.canonical.findall(body)))
+        if not licensed:
+            report.fail("no-stale-value", g.id,
+                        "canonical pattern %s matches nothing in the owner %s; "
+                        "there is no value to compare restatements against"
+                        % (g.canonical.pattern, cfg.rel(fact.owner)))
+            continue
+        if len(licensed) > VALUE_GUARD_MAX_LICENSED:
+            report.fail("no-stale-value", g.id,
+                        "canonical pattern %s licenses %d different values in "
+                        "%s (%s). A pattern that loose is not a guard: it would "
+                        "accept almost any restatement."
+                        % (g.canonical.pattern, len(licensed),
+                           cfg.rel(fact.owner), ", ".join(licensed)))
+            continue
+        hits = 0
+        for path, text in sorted(corpus.items()):
+            for n, line in enumerate(text.splitlines(), 1):
+                for m in g.scan.finditer(line):
+                    if m.group(1) in licensed:
+                        continue
+                    if STALE_VALUE_EXEMPT.search(line):
+                        report.note("stale value %r for %s excused as a "
+                                    "quotation at %s:%d"
+                                    % (m.group(1), g.id, cfg.rel(path), n))
+                        continue
+                    hits += 1
+                    report.fail("no-stale-value", "%s:%d" % (cfg.rel(path), n),
+                                "states %r for %s; the owner %s states only %s. "
+                                "A stale value matches no registry pattern, so "
+                                "nothing else in this checker can see it."
+                                % (m.group(1), g.id, cfg.rel(fact.owner),
+                                   "/".join(licensed)))
+        if not hits:
+            report.note("no-stale-value: %s licenses %s, no divergent "
+                        "restatement" % (g.id, "/".join(licensed)))
+
+
 # ------------------------------------------ B0c / 0003: the encoding database
 
 ENCODING_DB_REPO = "jcore-cpu"
@@ -660,8 +828,14 @@ def check_one_encoding_database(cfg, report, repos):
     file were deleted or renamed -- having confirmed that a file which no longer
     exists is not duplicated. So the canonical copy's presence on the
     integration branch is asserted too."""
-    stray = os.path.join(cfg.docs, "insns.json")
-    if os.path.exists(stray):
+    # Walk, rather than stat one path: a copy re-added at docs/isa/insns.json
+    # is the same defect and used to pass.
+    strays = []
+    for dirpath, dirnames, filenames in os.walk(cfg.docs):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        if "insns.json" in filenames:
+            strays.append(os.path.join(dirpath, "insns.json"))
+    for stray in sorted(strays):
         report.fail("one-encoding-database", cfg.rel(stray),
                     "a second encoding database. 0003 makes %s:%s canonical; "
                     "this copy had drifted 6 instructions and 42 timing values "
@@ -698,7 +872,43 @@ IMAGE_TOTAL_RE = re.compile(r"\((\d+)\s*bytes?\)")
 IMAGE_HEADING_RE = re.compile(r"^#{2,4} .*?\((\d+)-byte\b[^)]*\bimage\)")
 
 
-def check_context_image_sums(cfg, report):
+def load_image_layouts(cfg, report, facts):
+    """Parse `## Image layouts`: the facts whose owner MUST carry a field table.
+
+    Without this the check was driven by a global table count, and so was
+    satisfied forever by the one table that already existed. `simd/spec.md` had
+    no field table at all while `fact-ownership.md` asserted the SIMD sizes were
+    "covered instead by `context-image-sums`" -- an uncovered fact, asserted to
+    be covered, under a heading promising the gaps were visible."""
+    known = {f.id for f in (facts or [])}
+    try:
+        body = read(cfg.registry)
+    except (OSError, UnicodeDecodeError):
+        return None
+    rows = parse_table(body, "## Image layouts")
+    if rows is None:
+        report.fail("context-image-sums", cfg.rel(cfg.registry),
+                    "no '## Image layouts' heading followed by a table; no "
+                    "image fact is required to have one, so the check would "
+                    "verify only whatever tables happen to exist.")
+        return None
+    if not rows:
+        report.fail("context-image-sums", cfg.rel(cfg.registry),
+                    "'## Image layouts' table has no rows.")
+        return None
+    out = []
+    for cells in rows:
+        fid = unbacktick(cells[0])
+        if facts is not None and fid not in known:
+            report.fail("context-image-sums", fid,
+                        "image layout names a fact that is not in the Registry")
+            continue
+        out.append(fid)
+    return out
+
+
+def check_context_image_sums(cfg, report, facts=None, guards=None,
+                             layouts=None):
     """A save-image layout table must sum to the total it declares.
 
     This is **doc-internal arithmetic, not doc-vs-code**, and is labelled that
@@ -713,6 +923,7 @@ def check_context_image_sums(cfg, report):
     Scans every markdown file, so a new image table is covered the day it is
     written rather than when someone remembers to register it."""
     tables = 0
+    totals = {}          # owner path -> [total per table found]
     for path in cfg.markdown_files():
         try:
             body = read(path)
@@ -769,14 +980,61 @@ def check_context_image_sums(cfg, report):
                     break
                 if lines[back].startswith("#"):
                     break      # a heading that makes no size claim
+            totals.setdefault(path, []).append(total)
             report.note("context-image-sums: %s sums to %d bytes"
                         % (where, total))
-    if not tables:
-        report.fail("context-image-sums", "docs/",
-                    "no `%s` table found anywhere. This check verified "
-                    "nothing; if the layout tables were reformatted, update "
-                    "IMAGE_TABLE_HEADER rather than leaving it silent."
-                    % " | ".join(IMAGE_TABLE_HEADER))
+    # The part that makes this non-vacuous per FACT rather than per tree. A
+    # global "at least one table exists" test is satisfied forever by the first
+    # table anyone writes, which is exactly how the SIMD image came to be listed
+    # as covered while having no table at all.
+    if layouts is None:
+        return
+    owners = {f.id: f for f in (facts or [])}
+    canon = {}
+    for g in (guards or []):
+        fact = owners.get(g.id)
+        if fact is None:
+            continue
+        try:
+            body = read(fact.owner)
+        except (OSError, UnicodeDecodeError):
+            continue
+        found = sorted(set(x.strip() for x in g.canonical.findall(body)))
+        if found:
+            canon[g.id] = found
+    for fid in layouts:
+        fact = owners.get(fid)
+        if fact is None:
+            continue
+        got = totals.get(fact.owner, [])
+        if not got:
+            report.fail("context-image-sums", fid,
+                        "%s is registered as having a save-image layout, but "
+                        "carries no `%s` table. Its size is then stated only in "
+                        "prose, where nothing checks that the fields add up."
+                        % (cfg.rel(fact.owner), " | ".join(IMAGE_TABLE_HEADER)))
+            continue
+        if len(got) > 1:
+            report.fail("context-image-sums", fid,
+                        "%s carries %d layout tables; which one is %s is "
+                        "ambiguous" % (cfg.rel(fact.owner), len(got), fid))
+            continue
+        want = canon.get(fid)
+        if want is None:
+            report.fail("context-image-sums", fid,
+                        "no usable `## Value guards` row, so the table total "
+                        "in %s is compared against nothing. Every image layout "
+                        "needs one." % cfg.rel(fact.owner))
+            continue
+        if str(got[0]) not in want:
+            report.fail("context-image-sums", fid,
+                        "%s's layout table sums to %d bytes, but the document "
+                        "states %s for this image"
+                        % (cfg.rel(fact.owner), got[0], "/".join(want)))
+        else:
+            report.note("context-image-sums: %s layout table sums to %d, "
+                        "matching the owner's stated %s"
+                        % (fid, got[0], "/".join(want)))
 
 
 class Waivers:
@@ -856,6 +1114,18 @@ STALE_CLAIM_PHRASES = [
 GLOSSARY_QUOTE_EXEMPT = re.compile("|".join(GLOSSARY_QUOTE_PHRASES),
                                    re.IGNORECASE)
 STALE_CLAIM_EXEMPT = re.compile("|".join(STALE_CLAIM_PHRASES), re.IGNORECASE)
+
+# The THIRD separately-written copy of the same short list, for `no-stale-value`.
+# 0001 and 0002 both record why these must not be one shared literal: widening
+# the shared regex to `retired|no longer` for the glossary silently exempted 119
+# lines across 22 files from the merge-status check, and building both from one
+# constant under two names left the coupling exactly where it was. If you are
+# adding a phrase, add it here and decide about the other two on purpose.
+STALE_VALUE_PHRASES = [
+    "promoted from", "previously read", "previously said",
+    "formerly read", "used to read",
+]
+STALE_VALUE_EXEMPT = re.compile("|".join(STALE_VALUE_PHRASES), re.IGNORECASE)
 
 # Declared, visible exemption for a region of the glossary. Unlike a waiver it
 # lives at the point of use, so a reader sees it -- but it is NOT self-
@@ -1090,7 +1360,8 @@ class Repos:
             return False      # ran fine, no match
         return None           # any other exit is a git error, not an answer
 
-    def file_at(self, repo_name, branch, path, where):
+    def file_at(self, repo_name, branch, path, where,
+                check="doc-matches-code"):
         """Contents of `path` on `origin/<branch>`, or None having reported.
 
         Three outcomes, kept apart on purpose, because collapsing them is how
@@ -1103,18 +1374,18 @@ class Repos:
           - git itself could not run              -> SKIP, never "no match"."""
         repo = os.path.join(self.cfg.root, repo_name)
         if not os.path.exists(os.path.join(repo, ".git")):
-            self.report.skip("doc-matches-code",
+            self.report.skip(check,
                              "%s is not checked out; cannot compare %s against "
                              "it (%s)" % (repo_name, path, where))
             return None
         rc, _ = git(repo, "rev-parse", "--verify", "origin/%s" % branch)
         if rc is None:
-            self.report.skip("doc-matches-code",
+            self.report.skip(check,
                              "git could not be run for %s (%s)"
                              % (repo_name, where))
             return None
         if rc != 0:
-            self.report.skip("doc-matches-code",
+            self.report.skip(check,
                              "%s has no origin/%s (fetch it); cannot compare "
                              "%s against it (%s)"
                              % (repo_name, branch, path, where))
@@ -1125,19 +1396,19 @@ class Repos:
         rc, out = git(repo, "ls-tree", "--name-only", "origin/%s" % branch,
                       "--", path)
         if rc is None:
-            self.report.skip("doc-matches-code",
+            self.report.skip(check,
                              "git could not be run for %s (%s)"
                              % (repo_name, where))
             return None
         if rc != 0 or not out.strip():
-            self.report.fail("doc-matches-code", where,
+            self.report.fail(check, where,
                              "%s does not exist on %s origin/%s. The binding "
                              "points at a file that is not there."
                              % (path, repo_name, branch))
             return None
         rc, body = git(repo, "show", "origin/%s:%s" % (branch, path))
         if rc is None or rc != 0:
-            self.report.skip("doc-matches-code",
+            self.report.skip(check,
                              "could not read %s from %s origin/%s (%s)"
                              % (path, repo_name, branch, where))
             return None
@@ -1362,10 +1633,14 @@ def main():
         # pointed somewhere else entirely.
         repos = Repos(cfg, report)
         bindings = load_bindings(cfg, report, facts)
+        guards = load_value_guards(cfg, report, facts)
+        layouts = load_image_layouts(cfg, report, facts)
         if facts and bindings:
             check_code_bindings(cfg, report, repos, facts, bindings)
+        if facts and guards:
+            check_no_stale_value(cfg, report, facts, guards)
         check_p4_offsets(cfg, report, repos)
-        check_context_image_sums(cfg, report)
+        check_context_image_sums(cfg, report, facts, guards, layouts)
         check_one_encoding_database(cfg, report, repos)
 
     if args.check_waivers:

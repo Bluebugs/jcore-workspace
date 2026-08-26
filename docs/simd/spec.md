@@ -276,7 +276,22 @@ Cost per context switch when neither outgoing nor incoming task touches SIMD: **
   - `HEDR[24] = 1`: trap delegated to guest's S-mode handler. Guest OS implements its own lazy-SIMD policy for its user threads (mirror of the bare-metal pattern above).
 - vCPU migration to a different pCPU: hypervisor cross-calls the source pCPU to save the 520-byte (J32; 1036-byte J64) SIMD image, ships it to the destination pCPU, sets `SR.VD = 1` in the destination `HSSR`; first SIMD touch on the destination re-installs the image.
 
-The SIMD image layout (J32): `V0..V15` (512 bytes) + `P0` (4 bytes, all 32 bits used) + `VCSR` (4 bytes) = 520 bytes; on J64 the V file is 1024 bytes and P0 is 8 bytes → 1036 bytes. Saved via `VST.Q` × 16 + `STS P0` + `STS VCSR`; restored symmetrically. The 16 vector stores can be issued back-to-back (no inter-dependencies); a typical save/restore round-trip is ~55–70 cycles on a 2-wide OoO with the L1-D in M state (up from the 128-bit-era estimate, since each VST.Q now moves VLEN/8 bytes).
+#### Save / restore layout (520-byte SIMD image, J32). [T0]
+
+| Offset | Bytes | Content                  |
+| ------ | ----- | ------------------------ |
+| 0x000  | 512   | V0..V15 (16 × 32 B)      |
+| 0x200  | 4     | P0 (all 32 bits used)    |
+| 0x204  | 4     | VCSR                     |
+| 0x208  | —     | end (520 bytes)          |
+
+On J64 the V file is 1024 bytes and P0 is 8 bytes, giving a
+**1036-byte SIMD image**: V0..V15 at `0x000` (1024), P0 at `0x400` (8), VCSR at `0x408` (4), end
+at `0x40C`. There is deliberately **no VFPUL slot** in either image — VFPUL was
+retired on 2026-07-17 (§2.3, Appendix B) and FP reductions write `FR0`/`DR0`
+directly; an image carrying it is describing a register that does not exist.
+
+The same layout in prose (J32): `V0..V15` (512 bytes) + `P0` (4 bytes, all 32 bits used) + `VCSR` (4 bytes) = 520 bytes; on J64 the V file is 1024 bytes and P0 is 8 bytes → 1036 bytes. Saved via `VST.Q` × 16 + `STS P0` + `STS VCSR`; restored symmetrically. The 16 vector stores can be issued back-to-back (no inter-dependencies); a typical save/restore round-trip is ~55–70 cycles on a 2-wide OoO with the L1-D in M state (up from the 128-bit-era estimate, since each VST.Q now moves VLEN/8 bytes).
 
 **Pre-2006 prior art.**
 

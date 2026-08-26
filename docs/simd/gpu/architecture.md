@@ -163,8 +163,9 @@ FP32; FP16 is for shading/BVH/ML (§8.6 there).
 > to the predicate GPR width and **supersedes** the "128-bit mandatory / Tier 3 =
 > 256-bit reserved, J64-only" discipline in [../spec.md §1.2](../spec.md).
 > Propagating 256-bit (J32) / 512-bit (J64) back into spec.md touches the V-file
-> size (2048→4096 / 8192 bits), P0 width (16→32 / 64), the 272-byte context-switch
-> image, and the lane/reduction tables. Tracked as a separate ISA edit.
+> size (2048→4096 / 8192 bits), P0 width (16→32 / 64),
+> the 520-byte context-switch image ([../spec.md §2.5](../spec.md); this line
+> previously read 272), and the lane/reduction tables. Tracked as a separate ISA edit.
 
 ---
 

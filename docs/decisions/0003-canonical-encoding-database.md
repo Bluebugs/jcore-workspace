@@ -17,11 +17,16 @@ independently, and the plan does not say which one it means:
 
 | copy | entries | schema | `insns2asm --emit check` | `cpugen insns -check` |
 |---|---|---|---|---|
-| this superproject, `docs/insns.json` | 460 | 46 fields | **fails** | **fails** |
-| `jcore-cpu`, `docs/insns.json` (`origin/master`) | 466 | 60 fields | ok, 318 round-trip | ok |
+| this superproject, `docs/insns.json` | 460 | 37 fields | **fails** | **fails** |
+| `jcore-cpu`, `docs/insns.json` (`origin/master`) | 466 | 51 fields | ok, 318 round-trip | ok |
 
 Every figure above was produced by running the tools, not recalled. The two
-`check` results are the decisive ones and they are quoted verbatim below.
+`check` results are the decisive ones and they are quoted verbatim below. The
+field counts are the union of per-row keys (`len(set().union(*[set(e) for e in
+instructions]))`); an earlier revision of this record gave them as 46 and 60,
+which were not produced by anything. The delta of 14 and the superset relation
+were right, and are re-derived below; the absolutes were not, in a sentence
+claiming they were measured.
 
 ### What actually differs — enumerated, because six entries is small enough to
 

@@ -70,6 +70,18 @@ REGISTRY = """# Fact ownership registry
 |---|---|---|---|---|
 | `simd.context` | `image is (\\d+) bytes` | `jcore-cpu:core/sizes.vhd` | `image_bytes\\s*=>\\s*(\\d+)` | `eq` |
 
+## Value guards
+
+| Fact ID | Canonical (in owner) | Scan (everywhere) |
+|---|---|---|
+| `simd.context` | `(\\d+)-byte SIMD image` | `(\\d+)-byte SIMD` |
+
+## Image layouts
+
+| Fact ID |
+|---|
+| `simd.context` |
+
 ## Unresolved
 
 | Fact | State | Owned by (task) |
@@ -160,9 +172,7 @@ def fake_repo(root, name, branch, files, with_origin=False):
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     g("init", "-q")
     for rel, text in files.items():
-        path = os.path.join(repo, rel)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        open(path, "w").write(text)
+        write_in(root, os.path.join(repo, rel), text)
     g("add", "-A")
     g("commit", "-qm", "fixture", "--allow-empty")
     g("update-ref", "refs/remotes/origin/%s" % branch, "HEAD")
@@ -175,25 +185,51 @@ def fake_repo(root, name, branch, files, with_origin=False):
     return repo
 
 
+def sandboxed(tmp, path):
+    """`path`, having proved it really lands inside `tmp`.
+
+    The first version of this guard was a single existence check inside
+    `fake_repo`, and the commit that added it claimed the harness could not
+    write outside its temp directory "by construction". It could, two ways: a
+    symlinked `docs/` made every write in `build()` land wherever the symlink
+    pointed, and an `extra` key of `../../<dir>/pwned.md` walked straight out.
+    Both are closed here instead, at the one place every write goes through,
+    because a guard on one function is a guard on one function.
+
+    `realpath` is what does the work -- it resolves symlinks anywhere in the
+    path, so neither a symlinked component nor a `..` component can escape."""
+    real_tmp = os.path.realpath(tmp)
+    real = os.path.realpath(path)
+    if real != real_tmp and not real.startswith(real_tmp + os.sep):
+        raise AssertionError(
+            "fixture write escapes the sandbox: %s resolves to %s, which is "
+            "outside %s. A test harness must not be able to touch the tree it "
+            "is testing." % (path, real, real_tmp))
+    return path
+
+
+def write_in(tmp, path, text):
+    os.makedirs(os.path.dirname(sandboxed(tmp, path)), exist_ok=True)
+    with open(sandboxed(tmp, path), "w") as fh:
+        fh.write(text)
+
+
 def build(tmp, registry=REGISTRY, glossary=GLOSSARY, simd=SIMD, extra=None,
           p4_map=P4_MAP, cpu_files=None, no_cpu_repo=False, cpu_origin=False):
     docs = os.path.join(tmp, "docs")
-    os.makedirs(os.path.join(docs, "decisions"), exist_ok=True)
-    open(os.path.join(docs, "fact-ownership.md"), "w").write(registry)
-    open(os.path.join(docs, "glossary.md"), "w").write(glossary)
-    open(os.path.join(docs, "simd.md"), "w").write(simd)
+    os.makedirs(sandboxed(tmp, os.path.join(docs, "decisions")), exist_ok=True)
+    write_in(tmp, os.path.join(docs, "fact-ownership.md"), registry)
+    write_in(tmp, os.path.join(docs, "glossary.md"), glossary)
+    write_in(tmp, os.path.join(docs, "simd.md"), simd)
     if p4_map is not None:
-        os.makedirs(os.path.join(docs, "soc"), exist_ok=True)
-        open(os.path.join(docs, "soc", "p4-mmio-map.md"), "w").write(p4_map)
+        write_in(tmp, os.path.join(docs, "soc", "p4-mmio-map.md"), p4_map)
     if not no_cpu_repo:
         files = {"core/datapath.vhm": P4_RTL, "core/sizes.vhd": SIZES_VHD,
                  "docs/insns.json": '{"instructions": []}\n'}
         files.update(cpu_files or {})
         fake_repo(tmp, "jcore-cpu", "master", files, with_origin=cpu_origin)
     for name, text in (extra or {}).items():
-        path = os.path.join(docs, name)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        open(path, "w").write(text)
+        write_in(tmp, os.path.join(docs, name), text)
     return tmp
 
 
@@ -957,6 +993,171 @@ def _(tmp):
     shutil.rmtree(os.path.join(tmp, "jcore-cpu"))
     fake_repo(tmp, "jcore-cpu", "master",
               {"core/datapath.vhm": P4_RTL, "core/sizes.vhd": SIZES_VHD})
+
+
+# ------------------------------------------------------- B0c: no-stale-value
+#
+# The class these close: a value that has been RETIRED matches no registry
+# pattern, because the pattern spells the current value. Every case below uses a
+# value that is stale rather than merely absent, which is the only kind the old
+# machinery could not see.
+
+
+@case("a STALE value in an ordinary document fails (272 for 520)", True,
+      expect_check="no-stale-value")
+def _(tmp):
+    build(tmp, extra={"hyp.md": "# H\n\nsave/restore of the 272-byte SIMD image.\n"})
+
+
+@case("a stale value is NOT excused by linking the owner", True,
+      expect_check="no-stale-value")
+def _(tmp):
+    # The reproduction from the real tree: hypervisor/hardware-spec.md linked
+    # simd/spec.md on the same line, which satisfied restatement-is-linked, and
+    # the number was still wrong. A linked wrong number is a wrong number.
+    build(tmp, extra={"hyp.md": "# H\n\nthe 272-byte SIMD image "
+                                "([simd.md](simd.md)).\n"})
+
+
+@case("a stale value on a retirement line IS excused", False)
+def _(tmp):
+    build(tmp, extra={"hyp.md": "# H\n\nThis previously read 272-byte SIMD "
+                                "image; it is 520.\n"})
+
+
+@case("a value the owner also licenses (J64 form) does not fail", False)
+def _(tmp):
+    build(tmp, simd=SIMD + "\nOn J64 this is a 1036-byte SIMD image.\n",
+          extra={"hyp.md": "# H\n\nships the 1036-byte SIMD image.\n"})
+
+
+@case("a missing '## Value guards' section fails closed", True,
+      expect_check="value-guards")
+def _(tmp):
+    build(tmp, registry=REGISTRY.replace("## Value guards", "## Notes"))
+
+
+@case("an empty Value guards table fails", True, expect_check="value-guards")
+def _(tmp):
+    build(tmp, registry=re.sub(r"\| `simd\.context` \| `\(\\d\+\)-byte SIMD image.*\n",
+                               "", REGISTRY))
+
+
+@case("a value guard naming an unknown fact fails", True,
+      expect_check="value-guards")
+def _(tmp):
+    build(tmp, registry=REGISTRY.replace(
+        "| `simd.context` | `(\\d+)-byte SIMD image`",
+        "| `simd.absent` | `(\\d+)-byte SIMD image`"))
+
+
+@case("a value-guard pattern with the wrong group count fails", True,
+      expect_check="value-guards")
+def _(tmp):
+    build(tmp, registry=REGISTRY.replace("`(\\d+)-byte SIMD image`",
+                                         "`\\d+-byte SIMD image`"))
+
+
+@case("a canonical pattern matching nothing in the owner fails", True,
+      expect_check="no-stale-value")
+def _(tmp):
+    # Fails CLOSED: with no canonical value there is nothing to compare
+    # restatements against, so silence would license every restatement.
+    build(tmp, registry=REGISTRY.replace("`(\\d+)-byte SIMD image`",
+                                         "`(\\d+)-byte NOTHING image`"))
+
+
+@case("a canonical pattern licensing too many values fails as too loose", True,
+      expect_check="no-stale-value")
+def _(tmp):
+    # A guard that accepts everything is worse than no guard: it reports OK.
+    build(tmp, registry=REGISTRY.replace("`(\\d+)-byte SIMD image`",
+                                         "`(\\d+)`"))
+
+
+# ------------------------------------------ B0c: image layouts, per FACT
+
+
+@case("a registered image fact whose owner has NO table fails", True,
+      expect_check="context-image-sums")
+def _(tmp):
+    # The exact hole: simd/spec.md had no field table while the registry said
+    # the SIMD sizes were covered by this check. Under the old global rule the
+    # FPU table alone kept it green.
+    build(tmp, simd="# SIMD\n\nThe per-task context image is 520 bytes.\n"
+                    "\n### 2.5 (520-byte SIMD image) stated in prose only.\n")
+
+
+@case("a missing '## Image layouts' section fails closed", True,
+      expect_check="context-image-sums")
+def _(tmp):
+    build(tmp, registry=REGISTRY.replace("## Image layouts", "## Notes"))
+
+
+@case("an owner carrying two layout tables is ambiguous and fails", True,
+      expect_check="context-image-sums")
+def _(tmp):
+    build(tmp, simd=SIMD + "\n| Offset | Bytes | Content |\n| --- | --- | --- |\n"
+                           "| 0x00 | 4 | X |\n| 0x04 | — | end (4 bytes) |\n")
+
+
+@case("a layout table summing to a value the owner never states fails", True,
+      expect_check="context-image-sums")
+def _(tmp):
+    # Internally consistent and still wrong. The offsets run, the terminator
+    # agrees with the offset it sits at, and the heading makes no size claim --
+    # so every self-consistency arm passes. Only the per-fact comparison against
+    # what the OWNER states (520) can catch it, which is what this case isolates.
+    build(tmp, simd="# SIMD\n\nThe per-task context image is 520 bytes.\n"
+                    "The 520-byte SIMD image is the architectural size.\n"
+                    "\n### 2.5 Save / restore sequence\n\n"
+                    "| Offset | Bytes | Content |\n| --- | --- | --- |\n"
+                    "| 0x00 | 4 | A |\n| 0x04 | 4 | B |\n"
+                    "| 0x08 | — | end (8 bytes) |\n")
+
+
+# ------------------------------------------------ B0c: encoding db, nested
+
+
+@case("an encoding database nested deeper in docs/ also fails", True,
+      expect_check="one-encoding-database")
+def _(tmp):
+    # Used to pass: the check stat()ed exactly docs/insns.json.
+    build(tmp, extra={"isa/insns.json": '{"instructions": []}\n'})
+
+
+# ------------------------------------------- the harness's own sandbox
+#
+# These assert the harness cannot write outside its temp directory. They are
+# here rather than in a comment because the previous commit claimed this
+# property "by construction" while two routes out were open.
+
+
+@case("harness refuses to write through a symlinked docs/", False)
+def _(tmp):
+    inner = os.path.join(tmp, "inner")
+    os.makedirs(inner)
+    outside = os.path.join(tmp, "outside")
+    os.makedirs(outside)
+    os.symlink(outside, os.path.join(inner, "docs"))
+    try:
+        build(inner)
+    except AssertionError:
+        build(tmp)          # the guard fired; leave a clean tree behind
+        return
+    raise AssertionError("symlinked docs/ was not refused")
+
+
+@case("harness refuses an extra key that walks out with ..", False)
+def _(tmp):
+    inner = os.path.join(tmp, "inner")
+    os.makedirs(inner)
+    try:
+        build(inner, extra={"../../escapee.md": "x"})
+    except AssertionError:
+        build(tmp)
+        return
+    raise AssertionError("../.. escape was not refused")
 
 
 def main():
