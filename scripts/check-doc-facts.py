@@ -30,6 +30,58 @@ import subprocess
 import sys
 
 # Max length of a registry Constant cell. See `registry-value-is-short`.
+# Every check name this script can print, what fails it, and the record that
+# defines it. `--list-checks` prints this; `test-check-doc-facts.py` asserts it
+# is exactly the set of names the source actually passes to report.fail/skip,
+# so a check cannot be added, renamed or deleted without this table moving too.
+#
+# It exists because eighteen name literals were reconciled by nothing, and seven
+# of them appeared in no document at all. A check named in a failure message
+# that no document explains is not findable by the person it just fired on.
+CHECKS = {
+    # 0001 -- one authority per fact
+    "registry": ("the registry is missing, unparseable, or has no rows", "0001"),
+    "registry-value-is-short": ("a Constant cell over 100 characters", "0001"),
+    "owner-has-fact": ("the owning document no longer states its own constant",
+                       "0001"),
+    "restatement-is-linked": ("a non-owner restates a constant with no link to "
+                              "the owner on that line", "0001"),
+    "glossary-is-value-free": ("glossary.md carries a value-shaped token", "0001"),
+    "readable": ("a document under docs/ cannot be decoded", "0001"),
+    "check-waivers": ("a waiver row that never fired (--check-waivers)", "0001"),
+    # 0002 -- supersede / merge status
+    "marker-grammar": ("a marker keyword no valid marker accounts for", "0002"),
+    "resolved-is-merged": ("a RESOLVED marker whose commit or artifact is not "
+                           "on the integration branch", "0002"),
+    "pending-is-not-merged": ("a PENDING-MERGE marker that IS merged, or whose "
+                              "branch is gone", "0002"),
+    "stale-claim": ("prose asserting 'not merged' outside the marker grammar",
+                    "0002"),
+    # 0003 / B0c -- doc vs code
+    "code-bindings": ("a malformed or orphaned `## Code bindings` row", "B0c"),
+    "doc-matches-code": ("a doc constant disagreeing with the code it is bound "
+                         "to", "B0c"),
+    "value-guards": ("a malformed or orphaned `## Value guards` row", "B0c"),
+    "no-stale-value": ("a document stating a value its owner does not state",
+                       "B0c"),
+    "p4-offsets-match-rtl": ("a P4 register the RTL decodes that the map omits "
+                             "or misplaces", "B0c"),
+    "context-image-sums": ("a save-image table that does not sum to its stated "
+                           "total, or a registered image fact with no table",
+                           "B0c"),
+    "one-encoding-database": ("a second encoding database, or the canonical one "
+                              "missing", "0003"),
+}
+
+DECISION_DOC = {
+    "0001": "docs/decisions/0001-one-authority-per-fact.md",
+    "0002": "docs/decisions/0002-supersede-convention.md",
+    "0003": "docs/decisions/0003-canonical-encoding-database.md",
+    # The doc-vs-code checks are not decided by a record; they are defined by
+    # the registry's own tables, which say what each drives and why.
+    "B0c": "docs/fact-ownership.md",
+}
+
 VALUE_CELL_MAX = 100
 
 # How many distinct values a `## Value guards` canonical pattern may find in
@@ -106,8 +158,17 @@ class Report:
         self.verbose = verbose
         self.strict = strict
 
+    # GitHub Actions surfaces `::error::` lines on the PR itself. Without them
+    # a contributor sees a red X and has to open the log to learn anything --
+    # and the sibling scripts in jcore-cpu already annotate, so the two halves
+    # of this gate behaved differently for no reason. Local runs are unchanged:
+    # the annotation only appears when GITHUB_ACTIONS is set.
+    ANNOTATE = bool(os.environ.get("GITHUB_ACTIONS"))
+
     def fail(self, check, where, message):
         self.failures += 1
+        if self.ANNOTATE:
+            print("::error title=%s::%s: %s" % (check, where, message))
         print("FAIL  [%s] %s: %s" % (check, where, message))
 
     def warn(self, check, where, message):
@@ -320,45 +381,70 @@ RELATIONS = {
 }
 
 
-def load_bindings(cfg, report, facts):
-    """Parse `## Code bindings`. Fails CLOSED, exactly like the registry: a
-    missing heading or an empty table means B0c verifies nothing, and a check
-    that verifies nothing must never be reported as a passing one."""
-    known = {f.id: f for f in (facts or [])}
+def load_fact_table(cfg, report, check, heading, min_cells, facts, consequence):
+    """Rows of a registry table keyed by fact ID, failing CLOSED, or None.
+
+    ONE implementation of a skeleton that was hand-copied three times. Every
+    copy repeated the same four guards -- missing heading, no rows, short row,
+    unknown fact ID -- and each copy's fixture coverage was written by hand.
+    Mutation testing found the predictable result: the guards in the NEWEST copy
+    (`load_image_layouts`) were the ones no fixture reached, so mutants that
+    deleted them survived a 99-case suite. Copies of a safety property have
+    exactly the failure mode copies of a fact do, which is the argument
+    [0001](docs/decisions/0001-one-authority-per-fact.md) is about; the fix is
+    the same one, applied to code.
+
+    Yields (fact_id, cells). `consequence` completes the sentence "...would
+    then <consequence>", so each caller's failure message still says what is
+    lost, which is the part that must not be generic."""
+    known = {f.id for f in (facts or [])}
     try:
         body = read(cfg.registry)
     except (OSError, UnicodeDecodeError):
         return None            # load_registry has already failed on this
-    rows = parse_table(body, "## Code bindings")
+    rows = parse_table(body, heading)
     if rows is None:
-        report.fail("code-bindings", cfg.rel(cfg.registry),
-                    "no '## Code bindings' heading followed by a table. "
-                    "doc-vs-code checking would verify nothing; this is a "
-                    "failure, not a skip.")
+        report.fail(check, cfg.rel(cfg.registry),
+                    "no '%s' heading followed by a table; %s. This is a "
+                    "failure, not a skip." % (heading, consequence))
         return None
     if not rows:
-        report.fail("code-bindings", cfg.rel(cfg.registry),
-                    "'## Code bindings' table has no rows. Every doc-vs-code "
-                    "comparison would silently pass.")
+        report.fail(check, cfg.rel(cfg.registry),
+                    "'%s' table has no rows; %s." % (heading, consequence))
         return None
-
     out = []
     for cells in rows:
-        if len(cells) < 5:
-            report.fail("code-bindings", cfg.rel(cfg.registry),
-                        "malformed binding row (%d cells, need 5): %s"
-                        % (len(cells), " | ".join(cells)[:80]))
+        if len(cells) < min_cells:
+            report.fail(check, cfg.rel(cfg.registry),
+                        "malformed row (%d cells, need %d): %s"
+                        % (len(cells), min_cells, " | ".join(cells)[:80]))
             continue
         fid = unbacktick(cells[0])
-        # An orphaned binding is the failure mode that would quietly switch a
-        # check off: rename a fact in the Registry and the binding stops
-        # applying to anything. Name it as an error.
-        if facts is not None and fid not in known:
-            report.fail("code-bindings", fid,
-                        "binding names a fact that is not in the Registry "
-                        "table. A renamed or deleted fact must not silently "
-                        "disable its code check.")
+        if not fid:
+            report.fail(check, cfg.rel(cfg.registry), "row with an empty ID")
             continue
+        # An orphaned row is the failure mode that would quietly switch a check
+        # off: rename a fact in the Registry and the row stops applying to
+        # anything. Name it as an error.
+        if facts is not None and fid not in known:
+            report.fail(check, fid,
+                        "names a fact that is not in the Registry table. A "
+                        "renamed or deleted fact must not silently disable its "
+                        "check.")
+            continue
+        out.append((fid, cells))
+    return out
+
+
+def load_bindings(cfg, report, facts):
+    """Parse `## Code bindings`."""
+    rows = load_fact_table(
+        cfg, report, "code-bindings", "## Code bindings", 5, facts,
+        "no document would be compared against the code")
+    if rows is None:
+        return None
+    out = []
+    for fid, cells in rows:
         code_ref = unbacktick(cells[2])
         if ":" not in code_ref:
             report.fail("code-bindings", fid,
@@ -690,36 +776,14 @@ class ValueGuard:
 
 
 def load_value_guards(cfg, report, facts):
-    """Parse `## Value guards`. Fails CLOSED, like every other table here."""
-    known = {f.id: f for f in (facts or [])}
-    try:
-        body = read(cfg.registry)
-    except (OSError, UnicodeDecodeError):
-        return None
-    rows = parse_table(body, "## Value guards")
+    """Parse `## Value guards`."""
+    rows = load_fact_table(
+        cfg, report, "value-guards", "## Value guards", 3, facts,
+        "a retired value would be invisible again, as it was before B0c")
     if rows is None:
-        report.fail("value-guards", cfg.rel(cfg.registry),
-                    "no '## Value guards' heading followed by a table. Stale "
-                    "restatements would be invisible again; this is a failure, "
-                    "not a skip.")
-        return None
-    if not rows:
-        report.fail("value-guards", cfg.rel(cfg.registry),
-                    "'## Value guards' table has no rows. Every stale-value "
-                    "comparison would silently pass.")
         return None
     out = []
-    for cells in rows:
-        if len(cells) < 3:
-            report.fail("value-guards", cfg.rel(cfg.registry),
-                        "malformed row (%d cells, need 3): %s"
-                        % (len(cells), " | ".join(cells)[:80]))
-            continue
-        fid = unbacktick(cells[0])
-        if facts is not None and fid not in known:
-            report.fail("value-guards", fid,
-                        "guard names a fact that is not in the Registry table")
-            continue
+    for fid, cells in rows:
         pats = []
         bad = False
         for label, cell in (("Canonical", cells[1]), ("Scan", cells[2])):
@@ -744,7 +808,35 @@ def load_value_guards(cfg, report, facts):
     return out
 
 
-def check_no_stale_value(cfg, report, facts, guards):
+def _spans(text):
+    """(line_number, line_start_offset) index for mapping match offsets."""
+    out, pos = [], 0
+    for n, line in enumerate(text.split("\n"), 1):
+        out.append((n, pos, pos + len(line)))
+        pos += len(line) + 1
+    return out
+
+
+def _match_lines(index, start, end):
+    """The 1-based line numbers a match spans."""
+    return [n for n, lo, hi in index if lo <= end and hi >= start]
+
+
+def _excused(lines, index, m):
+    """True when any line the match spans is a retraction line.
+
+    Scanning runs over the FULL text rather than line by line, so a value and
+    its subject noun still pair up across a wrap -- `272-byte context-switch\n
+    image` was invisible to the line-based version. That means a match can span
+    two lines, and the exemption has to consider both.
+
+    Takes the already-split lines: re-splitting per match made this quadratic in
+    file size, which nothing notices at 0.3s and would be a trap later."""
+    return any(STALE_VALUE_EXEMPT.search(lines[n - 1])
+               for n in _match_lines(index, m.start(), m.end()))
+
+
+def check_no_stale_value(cfg, report, facts, guards, waivers):
     """No document may state a value for a registered fact other than the one
     its owner states. Wave-1 task B0c."""
     if not guards:
@@ -775,8 +867,22 @@ def check_no_stale_value(cfg, report, facts, guards):
         # demanding one value would either fail on the owner or force the scan
         # pattern so tight it stopped seeing restatements. The set is capped and
         # printed, so what has been licensed is visible rather than implied.
-        licensed = sorted(set(x.strip()
-                              for x in g.canonical.findall(body)))
+        #
+        # **Retraction lines in the owner license nothing.** This is the whole
+        # hole in the first version: the exemption was applied only in the scan
+        # loop, so a retired value written into the owner in the sanctioned
+        # phrasing -- "this previously read 272-byte SIMD image" -- licensed 272
+        # for the entire tree, and the very restatement this check exists to
+        # catch then passed. The convention for recording history opened the
+        # hole rather than confining it. A line that is retiring a value is by
+        # definition not stating it as current, so it must not be a source of
+        # licence either.
+        owner_lines = body.split("\n")
+        owner_index = _spans(body)
+        licensed = sorted(set(
+            m.group(1).strip()
+            for m in g.canonical.finditer(body)
+            if not _excused(owner_lines, owner_index, m)))
         if not licensed:
             report.fail("no-stale-value", g.id,
                         "canonical pattern %s matches nothing in the owner %s; "
@@ -793,22 +899,34 @@ def check_no_stale_value(cfg, report, facts, guards):
             continue
         hits = 0
         for path, text in sorted(corpus.items()):
-            for n, line in enumerate(text.splitlines(), 1):
-                for m in g.scan.finditer(line):
-                    if m.group(1) in licensed:
-                        continue
-                    if STALE_VALUE_EXEMPT.search(line):
-                        report.note("stale value %r for %s excused as a "
-                                    "quotation at %s:%d"
-                                    % (m.group(1), g.id, cfg.rel(path), n))
-                        continue
-                    hits += 1
-                    report.fail("no-stale-value", "%s:%d" % (cfg.rel(path), n),
-                                "states %r for %s; the owner %s states only %s. "
-                                "A stale value matches no registry pattern, so "
-                                "nothing else in this checker can see it."
-                                % (m.group(1), g.id, cfg.rel(fact.owner),
-                                   "/".join(licensed)))
+            lines = text.split("\n")
+            index = _spans(text)
+            for m in g.scan.finditer(text):
+                n = _match_lines(index, m.start(), m.end())[0]
+                if m.group(1) in licensed:
+                    continue
+                if _excused(lines, index, m):
+                    report.note("stale value %r for %s excused as a "
+                                "quotation at %s:%d"
+                                % (m.group(1), g.id, cfg.rel(path), n))
+                    continue
+                # An escape that is NOT a retraction claim. The only way to
+                # say "this number is a different quantity" used to be to
+                # assert the value had been retired, which is a lie when it
+                # has not. This is the existing waiver machinery, keyed by
+                # check name x file exactly as `stale-claim` is, so
+                # --check-waivers fails on a row that stops firing.
+                if waivers.allows("no-stale-value", path):
+                    report.note("waived: stale value %r for %s at %s:%d"
+                                % (m.group(1), g.id, cfg.rel(path), n))
+                    continue
+                hits += 1
+                report.fail("no-stale-value", "%s:%d" % (cfg.rel(path), n),
+                            "states %r for %s; the owner %s states only %s. "
+                            "A stale value matches no registry pattern, so "
+                            "nothing else in this checker can see it."
+                            % (m.group(1), g.id, cfg.rel(fact.owner),
+                               "/".join(licensed)))
         if not hits:
             report.note("no-stale-value: %s licenses %s, no divergent "
                         "restatement" % (g.id, "/".join(licensed)))
@@ -880,35 +998,16 @@ def load_image_layouts(cfg, report, facts):
     no field table at all while `fact-ownership.md` asserted the SIMD sizes were
     "covered instead by `context-image-sums`" -- an uncovered fact, asserted to
     be covered, under a heading promising the gaps were visible."""
-    known = {f.id for f in (facts or [])}
-    try:
-        body = read(cfg.registry)
-    except (OSError, UnicodeDecodeError):
-        return None
-    rows = parse_table(body, "## Image layouts")
+    rows = load_fact_table(
+        cfg, report, "context-image-sums", "## Image layouts", 1, facts,
+        "no image fact would be required to have a layout table, so only "
+        "whatever tables happen to exist would be verified")
     if rows is None:
-        report.fail("context-image-sums", cfg.rel(cfg.registry),
-                    "no '## Image layouts' heading followed by a table; no "
-                    "image fact is required to have one, so the check would "
-                    "verify only whatever tables happen to exist.")
         return None
-    if not rows:
-        report.fail("context-image-sums", cfg.rel(cfg.registry),
-                    "'## Image layouts' table has no rows.")
-        return None
-    out = []
-    for cells in rows:
-        fid = unbacktick(cells[0])
-        if facts is not None and fid not in known:
-            report.fail("context-image-sums", fid,
-                        "image layout names a fact that is not in the Registry")
-            continue
-        out.append(fid)
-    return out
+    return [fid for fid, _ in rows]
 
 
-def check_context_image_sums(cfg, report, facts=None, guards=None,
-                             layouts=None):
+def check_context_image_sums(cfg, report, facts, guards, layouts):
     """A save-image layout table must sum to the total it declares.
 
     This is **doc-internal arithmetic, not doc-vs-code**, and is labelled that
@@ -987,6 +1086,13 @@ def check_context_image_sums(cfg, report, facts=None, guards=None,
     # global "at least one table exists" test is satisfied forever by the first
     # table anyone writes, which is exactly how the SIMD image came to be listed
     # as covered while having no table at all.
+    # `layouts is None` now means exactly one thing -- `load_image_layouts`
+    # already failed and reported -- so returning here suppresses a duplicate
+    # message rather than suppressing the check. It used to mean that OR "the
+    # caller omitted the argument", because the parameters were optional, and
+    # an arm that switches itself off when a caller passes nothing is the
+    # fail-open shape this file exists to remove. The parameters are required
+    # now, so a caller with nothing to pass gets a TypeError at the call site.
     if layouts is None:
         return
     owners = {f.id: f for f in (facts or [])}
@@ -1294,8 +1400,18 @@ def git(repo, *args):
     is an answer and a failure to run is not."""
     try:
         out = subprocess.run(["git", "-C", repo] + list(args),
-                             capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError):
+                             capture_output=True, text=True, timeout=60,
+                             # errors="replace" is load-bearing, not tidiness.
+                             # Commit subjects are bytes, not text: the Linux
+                             # history contains subjects that are not valid
+                             # UTF-8, and the default strict decode raises
+                             # UnicodeDecodeError *inside subprocess*, which is
+                             # neither an answer nor a skip -- it is a
+                             # traceback, and a traceback is not a verdict.
+                             # This was invisible while the clone was shallow
+                             # and appeared the moment it was not.
+                             errors="replace")
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
         return None, None
     return out.returncode, out.stdout
 
@@ -1308,6 +1424,7 @@ class Repos:
         self.report = report
         self._subjects = {}
         self._branches = {}
+        self._shallow = {}
 
     def subjects(self, repo_name, branch, where):
         key = (repo_name, branch)
@@ -1339,6 +1456,30 @@ class Repos:
                     result = set(l.strip() for l in log.splitlines()
                                  if l.strip())
         self._subjects[key] = result
+        return result
+
+    def is_shallow(self, repo_name):
+        """True / False / None, where None means 'could not find out'.
+
+        A shallow clone answers `git log` with a TRUNCATED history and exit 0,
+        so the answer looks complete and is not. But it is only *incomplete in
+        one direction*: every commit the walk emits is genuinely reachable from
+        the branch, because grafting removes commits and never invents them. So
+        a subject that IS found is a true positive whatever the depth, and only
+        a subject that is ABSENT is ambiguous -- it may be beyond the graft
+        boundary, or it may not exist. Callers resolve that three ways; see
+        `check_resolved_subject`.
+
+        The earlier version skipped every marker naming a shallow repo, which
+        was fail-closed but stricter than the question requires: it made
+        `--strict` unusable until someone unshallowed a 6 GB repository, for
+        markers whose answer was already known."""
+        if repo_name in self._shallow:
+            return self._shallow[repo_name]
+        repo = os.path.join(self.cfg.root, repo_name)
+        rc, out = git(repo, "rev-parse", "--is-shallow-repository")
+        result = None if (rc is None or rc != 0) else (out.strip() == "true")
+        self._shallow[repo_name] = result
         return result
 
     def has_path(self, repo_name, branch, path):
@@ -1445,11 +1586,27 @@ def check_resolved_subject(cfg, report, repos, where, m):
                     % (repo_name, branch, repo_name, expected))
         return
     subjects = repos.subjects(repo_name, branch, where)
-    if subjects is not None and subject not in subjects:
-        report.fail("resolved-is-merged", where,
-                    'RESOLVED cites "%s" but it is not on %s origin/%s. Either '
-                    "it is not merged (use PENDING-MERGE) or the subject was "
-                    "reworded." % (subject, repo_name, branch))
+    if subjects is None:
+        return                 # already reported as a skip
+    if subject in subjects:
+        return                 # reachable from the branch: merged, at any depth
+    # Absent. On a COMPLETE history that is an answer; on a truncated one it is
+    # not -- the commit may sit beyond the graft boundary. Only this branch is
+    # genuinely unknowable, so only this branch skips.
+    shallow = repos.is_shallow(repo_name)
+    if shallow is not False:
+        report.skip("resolved-is-merged",
+                    '%s: "%s" is not in the history available for %s, and that '
+                    "history is %s. Cannot distinguish 'beyond the graft "
+                    "boundary' from 'does not exist' -- run `git -C %s fetch "
+                    "--unshallow --filter=tree:0`."
+                    % (where, subject, repo_name,
+                       "shallow" if shallow else "of unknown depth", repo_name))
+        return
+    report.fail("resolved-is-merged", where,
+                'RESOLVED cites "%s" but it is not on %s origin/%s. Either '
+                "it is not merged (use PENDING-MERGE) or the subject was "
+                "reworded." % (subject, repo_name, branch))
 
 
 def check_resolved_artifact(cfg, report, repos, where, m):
@@ -1502,12 +1659,25 @@ def check_pending(cfg, report, repos, where, m):
                     "PENDING-MERGE says 'Not on %s'; %s's integration branch "
                     "is %s." % (stated_integration, repo_name, integration))
     subjects = repos.subjects(repo_name, integration, where)
-    if subjects is not None and subject in subjects:
-        report.fail("pending-is-not-merged", where,
-                    'PENDING-MERGE cites "%s", which IS on %s origin/%s. '
-                    "Promote it to RESOLVED."
-                    % (subject, repo_name, integration))
-        return
+    if subjects is not None:
+        if subject in subjects:
+            # A true positive at any depth, so this verdict needs no caveat.
+            report.fail("pending-is-not-merged", where,
+                        'PENDING-MERGE cites "%s", which IS on %s origin/%s. '
+                        "Promote it to RESOLVED."
+                        % (subject, repo_name, integration))
+            return
+        # Mirror image of the RESOLVED case: "absent" is what this marker
+        # asserts, and on a truncated history absent is exactly what we cannot
+        # confirm. The branch-existence check below is independent of depth, so
+        # it still runs.
+        shallow = repos.is_shallow(repo_name)
+        if shallow is not False:
+            report.skip("pending-is-not-merged",
+                        '%s: cannot confirm "%s" is absent from %s -- its '
+                        "history is %s, so absence may only mean truncation."
+                        % (where, subject, repo_name,
+                           "shallow" if shallow else "of unknown depth"))
     if repos.branch_exists(repo_name, branch, where) is False:
         report.fail("pending-is-not-merged", where,
                     "branch %s no longer exists on %s origin, so this marker "
@@ -1598,7 +1768,18 @@ def main():
                     help="fail on a waiver that never fired")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="list waived hits")
+    ap.add_argument("--list-checks", action="store_true",
+                    help="print every check, what fails it, and where it is "
+                         "defined, then exit")
     args = ap.parse_args()
+
+    if args.list_checks:
+        width = max(len(n) for n in CHECKS)
+        for name in sorted(CHECKS):
+            why, rec = CHECKS[name]
+            print("%-*s  %s\n%*s  -> %s" % (width, name, why, width, "",
+                                            DECISION_DOC[rec]))
+        return 0
 
     default_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     cfg = Config(args.root or default_root)
@@ -1638,7 +1819,7 @@ def main():
         if facts and bindings:
             check_code_bindings(cfg, report, repos, facts, bindings)
         if facts and guards:
-            check_no_stale_value(cfg, report, facts, guards)
+            check_no_stale_value(cfg, report, facts, guards, waivers)
         check_p4_offsets(cfg, report, repos)
         check_context_image_sums(cfg, report, facts, guards, layouts)
         check_one_encoding_database(cfg, report, repos)
@@ -1646,7 +1827,8 @@ def main():
     if args.check_waivers:
         # Only judge waivers whose consuming check actually ran, or a scoped
         # run reports every waiver for the other half as dead.
-        consumers = {"legacy-marker": run_super, "stale-claim": run_super}
+        consumers = {"legacy-marker": run_super, "stale-claim": run_super,
+                     "no-stale-value": run_code}
         for wid, path in waivers.unfired():
             if wid.startswith("glossary-fence"):
                 ran = run_facts

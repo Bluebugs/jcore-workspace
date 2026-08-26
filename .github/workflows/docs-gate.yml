@@ -78,13 +78,24 @@ jobs:
       # of cases proving an absent submodule exits 0 WITHOUT `--strict` and
       # non-zero WITH it.
       #
-      # --filter=blob:none, not --depth: `resolved-is-merged` runs
+      # --filter=tree:0, and NOT --depth. Two separate points:
+      #
+      # NOT --depth, because `resolved-is-merged` runs
       # `git log --format=%s origin/<branch>` and needs the FULL commit history
-      # to find a cited subject line. A shallow clone would make correct
-      # RESOLVED markers fail -- a check that fails on correct documentation
-      # trains people to ignore it. A blobless partial clone keeps every commit
-      # and fetches file contents only when `git grep`/`git show` asks, which
-      # the artifact citations and the code bindings do for a handful of paths.
+      # to find a cited subject line. A shallow clone returns a truncated
+      # history and NO error, so the answer looks complete -- correct RESOLVED
+      # markers then fail and PENDING-MERGE markers pass, which is the fail-open
+      # direction. The checker now detects this itself
+      # (`git rev-parse --is-shallow-repository`) and skips, which --strict turns
+      # into a failure, so a shallow checkout can no longer be mistaken for a
+      # verified one either here or on a developer's machine.
+      #
+      # tree:0 rather than blob:none, because this gate needs commit SUBJECTS
+      # plus a handful of `git show`/`git grep` reads. blob:none still downloads
+      # every tree of every commit, which on a Linux fork is the bulk of the
+      # transfer; tree:0 fetches trees on demand too, and the demand here is a
+      # few dozen paths. Both keep full commit history, which is the part that
+      # is not optional.
       # ---------------------------------------------------------------------
       - name: Check out the two submodules the checks actually read
         env:
@@ -97,7 +108,7 @@ jobs:
           git config --global \
             "url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf" \
             "git@github.com:"
-          git submodule update --init --filter=blob:none -- jcore-cpu linux
+          git submodule update --init --filter=tree:0 -- jcore-cpu linux
 
       # The submodule POINTER is not what the checks read. 0002 section 2 is
       # explicit that a pointer is not evidence of merge -- it lags the
@@ -109,8 +120,8 @@ jobs:
       - name: Fetch the integration branches the markers resolve against
         run: |
           set -euo pipefail
-          git -C jcore-cpu fetch --filter=blob:none origin master
-          git -C linux     fetch --filter=blob:none origin jcore
+          git -C jcore-cpu fetch --filter=tree:0 origin master
+          git -C linux     fetch --filter=tree:0 origin jcore
           # Fail here, with a readable message, rather than letting ~56 markers
           # turn into skips that --strict then reports one at a time.
           git -C jcore-cpu rev-parse --verify origin/master >/dev/null || {
@@ -121,6 +132,19 @@ jobs:
             echo "::error::linux origin/jcore is missing; every RESOLVED marker naming it would be unverifiable"
             exit 1
           }
+          # Belt and braces. The checker resolves markers three ways (see 0002:
+          # a subject it can SEE passes at any depth; only an ABSENT subject on
+          # a truncated history skips, which --strict fails). That is the right
+          # rule for a developer's clone. CI is different: it asked for full
+          # history two lines up, so a shallow clone here means the fetch did
+          # not do what it says, and saying so directly beats letting it surface
+          # later as a handful of skips.
+          for sub in jcore-cpu linux; do
+            if [ "$(git -C "$sub" rev-parse --is-shallow-repository)" = "true" ]; then
+              echo "::error::$sub is a shallow clone; git log returns a truncated history that looks complete"
+              exit 1
+            fi
+          done
 
       # Gate 2 runs FIRST. If the checker itself is broken, that is the more
       # useful failure to see, and a green gate 1 underneath a broken checker is

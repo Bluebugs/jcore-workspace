@@ -18,6 +18,7 @@ failure rather than a silent pass.
 """
 
 import collections
+import importlib.util
 import os
 import re
 import shutil
@@ -56,6 +57,10 @@ def backport_root(src, dst):
     open(dst, "w").write(text)
     return dst
 
+# The fixture's value-guard pattern, named so the mutation cases below
+# mutate THIS rather than a copy of it that drifts when the pattern changes.
+VG_CANON = r"(\d+)[-\s]byte\s+SIMD\s+(?:[\w/-]+\s+)*image"
+
 REGISTRY = """# Fact ownership registry
 
 ## Registry
@@ -74,7 +79,7 @@ REGISTRY = """# Fact ownership registry
 
 | Fact ID | Canonical (in owner) | Scan (everywhere) |
 |---|---|---|
-| `simd.context` | `(\\d+)-byte SIMD image` | `(\\d+)-byte SIMD` |
+| `simd.context` | `{VG}` | `{VG}` |
 
 ## Image layouts
 
@@ -92,7 +97,7 @@ REGISTRY = """# Fact ownership registry
 
 | Fact ID | File | Why |
 |---|---|---|
-"""
+""".replace("{VG}", VG_CANON)
 
 GLOSSARY = """# Glossary
 
@@ -102,6 +107,7 @@ GLOSSARY = """# Glossary
 SIMD = """# SIMD
 
 The per-task context image is 520 bytes.
+The 520-byte SIMD image is the architectural size.
 
 ### 2.5 Save / restore sequence (520-byte SIMD image).
 
@@ -134,7 +140,8 @@ SIZES_VHD = """entity sizes is generic (image_bytes => 520); end entity;
 """
 
 
-def fake_repo(root, name, branch, files, with_origin=False):
+def fake_repo(root, name, branch, files, with_origin=False, shallow=False,
+              bad_utf8=False):
     """A throwaway git repo standing in for a submodule.
 
     The checks read code from `origin/<branch>`, so the fixture must publish
@@ -164,6 +171,12 @@ def fake_repo(root, name, branch, files, with_origin=False):
             "fixture repositories and nothing else -- if this path is a "
             "symlink to a real repository, the harness is about to rewrite "
             "that repository's refs." % repo)
+    # BEFORE makedirs and BEFORE `git init`. The previous ordering ran both and
+    # only then reached a guarded write -- and with an empty `files` dict it
+    # never reached one at all, so `git init` + `update-ref` on a path outside
+    # the sandbox went entirely unguarded. That is the exact mechanism of the
+    # original incident, still open after the fix that was supposed to close it.
+    sandboxed(root, repo)
     os.makedirs(repo)
     env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
                GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
@@ -176,6 +189,45 @@ def fake_repo(root, name, branch, files, with_origin=False):
     g("add", "-A")
     g("commit", "-qm", "fixture", "--allow-empty")
     g("update-ref", "refs/remotes/origin/%s" % branch, "HEAD")
+    if bad_utf8:
+        # A commit subject that is genuinely not valid UTF-8. Commit subjects
+        # are bytes, and the Linux history really does contain some -- which
+        # made the checker raise UnicodeDecodeError *inside subprocess* the
+        # moment the clone stopped being shallow. A traceback is not a verdict.
+        #
+        # Neither `git commit -F` nor `commit-tree` will do: both warn
+        # "commit message did not conform to UTF-8" and transcode from latin-1,
+        # so the byte arrives valid and the fixture tests nothing. Writing the
+        # object with `hash-object` stores it verbatim, which is the only way
+        # to reproduce what is already sitting in the Linux history.
+        head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"],
+                              capture_output=True, text=True, env=env)
+        tree = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD^{tree}"],
+                              capture_output=True, text=True, env=env)
+        body = (b"tree " + tree.stdout.strip().encode()
+                + b"\nparent " + head.stdout.strip().encode()
+                + b"\nauthor t <t@t> 0 +0000\ncommitter t <t@t> 0 +0000\n"
+                + b"\nsubject with a raw \xb4 byte\n")
+        made = subprocess.run(
+            ["git", "-C", repo, "hash-object", "-t", "commit", "-w", "--stdin"],
+            input=body, capture_output=True, env=env)
+        sha = made.stdout.decode().strip()
+        g("update-ref", "HEAD", sha)
+        g("update-ref", "refs/remotes/origin/%s" % branch, sha)
+    if shallow:
+        # A genuine shallow clone: git treats a repo as shallow exactly when
+        # $GIT_DIR/shallow exists and names graft points. Two commits, with the
+        # root grafted away, gives a `git log` that returns a truncated history
+        # and no error -- the condition both submodules in this workspace were
+        # in, and the one `subjects()` used to mistake for complete.
+        g("commit", "-qm", "second", "--allow-empty")
+        g("update-ref", "refs/remotes/origin/%s" % branch, "HEAD")
+        head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"],
+                              capture_output=True, text=True, env=env)
+        gitdir = subprocess.run(["git", "-C", repo, "rev-parse", "--git-dir"],
+                                capture_output=True, text=True, env=env)
+        gd = os.path.join(repo, gitdir.stdout.strip())
+        write_in(root, os.path.join(gd, "shallow"), head.stdout)
     if with_origin:
         bare = os.path.join(root, "%s-origin.git" % name)
         subprocess.run(["git", "init", "-q", "--bare", bare], check=True,
@@ -197,7 +249,16 @@ def sandboxed(tmp, path):
     because a guard on one function is a guard on one function.
 
     `realpath` is what does the work -- it resolves symlinks anywhere in the
-    path, so neither a symlinked component nor a `..` component can escape."""
+    path, so neither a symlinked component nor a `..` component can escape.
+
+    **What this does and does not promise.** It guards every write that goes
+    through `write_in` / `build` / `fake_repo`, which is every write the helpers
+    make. It cannot guard a case that calls `open()` itself -- two did, and they
+    now call this explicitly. Claiming more than that is what went wrong last
+    time, so the backstop is `assert_tree_untouched()` in the runner, which
+    fingerprints the real docs/ and both submodules' refs before and after the
+    suite and fails if anything moved. Prevention where it is structural, a
+    tripwire where it is not."""
     real_tmp = os.path.realpath(tmp)
     real = os.path.realpath(path)
     if real != real_tmp and not real.startswith(real_tmp + os.sep):
@@ -215,7 +276,8 @@ def write_in(tmp, path, text):
 
 
 def build(tmp, registry=REGISTRY, glossary=GLOSSARY, simd=SIMD, extra=None,
-          p4_map=P4_MAP, cpu_files=None, no_cpu_repo=False, cpu_origin=False):
+          p4_map=P4_MAP, cpu_files=None, no_cpu_repo=False, cpu_origin=False,
+          cpu_shallow=False, cpu_bad_utf8=False):
     docs = os.path.join(tmp, "docs")
     os.makedirs(sandboxed(tmp, os.path.join(docs, "decisions")), exist_ok=True)
     write_in(tmp, os.path.join(docs, "fact-ownership.md"), registry)
@@ -227,7 +289,8 @@ def build(tmp, registry=REGISTRY, glossary=GLOSSARY, simd=SIMD, extra=None,
         files = {"core/datapath.vhm": P4_RTL, "core/sizes.vhd": SIZES_VHD,
                  "docs/insns.json": '{"instructions": []}\n'}
         files.update(cpu_files or {})
-        fake_repo(tmp, "jcore-cpu", "master", files, with_origin=cpu_origin)
+        fake_repo(tmp, "jcore-cpu", "master", files, with_origin=cpu_origin,
+                  shallow=cpu_shallow, bad_utf8=cpu_bad_utf8)
     for name, text in (extra or {}).items():
         write_in(tmp, os.path.join(docs, name), text)
     return tmp
@@ -655,7 +718,7 @@ def _(tmp):
       expect_check="readable")
 def _(tmp):
     build(tmp)
-    with open(os.path.join(tmp, "docs", "latin1.md"), "wb") as fh:
+    with open(sandboxed(tmp, os.path.join(tmp, "docs", "latin1.md")), "wb") as fh:
         fh.write(b"# Latin\n\nCaf\xe9 -- not valid UTF-8.\n")
 
 
@@ -663,7 +726,7 @@ def _(tmp):
       expect_check="glossary-is-value-free")
 def _(tmp):
     build(tmp)
-    with open(os.path.join(tmp, "docs", "glossary.md"), "wb") as fh:
+    with open(sandboxed(tmp, os.path.join(tmp, "docs", "glossary.md")), "wb") as fh:
         fh.write(b"# G\n\nCaf\xe9\n")
 
 
@@ -742,6 +805,18 @@ def _(tmp):
 def _(tmp):
     build(tmp, registry=re.sub(r"\| `simd\.context` \| `image is.*\n", "",
                                REGISTRY))
+
+
+@case("a short row is rejected, not skipped", True, expect_check="code-bindings")
+def _(tmp):
+    # The one guard in the shared loader that no fixture reached: mutation
+    # testing found `if len(cells) < min_cells: continue` survived the whole
+    # suite. A row with too few cells is a row somebody is mid-edit on, and
+    # dropping it silently removes a check with no message.
+    build(tmp, registry=REGISTRY.replace(
+        "| `simd.context` | `image is (\\d+) bytes` | "
+        "`jcore-cpu:core/sizes.vhd` | `image_bytes\\s*=>\\s*(\\d+)` | `eq` |",
+        "| `simd.context` | `image is (\\d+) bytes` | `eq` |"))
 
 
 @case("a binding naming a fact absent from the Registry fails", True,
@@ -1039,7 +1114,7 @@ def _(tmp):
 
 @case("an empty Value guards table fails", True, expect_check="value-guards")
 def _(tmp):
-    build(tmp, registry=re.sub(r"\| `simd\.context` \| `\(\\d\+\)-byte SIMD image.*\n",
+    build(tmp, registry=re.sub(r"\| `simd\.context` \| `\(.*image` \|.*\n",
                                "", REGISTRY))
 
 
@@ -1047,15 +1122,15 @@ def _(tmp):
       expect_check="value-guards")
 def _(tmp):
     build(tmp, registry=REGISTRY.replace(
-        "| `simd.context` | `(\\d+)-byte SIMD image`",
-        "| `simd.absent` | `(\\d+)-byte SIMD image`"))
+        "| `simd.context` | `" + VG_CANON,
+        "| `simd.absent` | `" + VG_CANON))
 
 
 @case("a value-guard pattern with the wrong group count fails", True,
       expect_check="value-guards")
 def _(tmp):
-    build(tmp, registry=REGISTRY.replace("`(\\d+)-byte SIMD image`",
-                                         "`\\d+-byte SIMD image`"))
+    build(tmp, registry=REGISTRY.replace(VG_CANON,
+                                         VG_CANON.replace(r"(\d+)", r"\d+"), 1))
 
 
 @case("a canonical pattern matching nothing in the owner fails", True,
@@ -1063,16 +1138,22 @@ def _(tmp):
 def _(tmp):
     # Fails CLOSED: with no canonical value there is nothing to compare
     # restatements against, so silence would license every restatement.
-    build(tmp, registry=REGISTRY.replace("`(\\d+)-byte SIMD image`",
-                                         "`(\\d+)-byte NOTHING image`"))
+    #
+    # BOTH patterns are replaced, not just the canonical one. With only the
+    # canonical mutated the scan still matched and failed on its own, so the
+    # case went red either way and a mutant deleting this guard survived the
+    # whole suite. With neither matching, the guard is the only thing that can
+    # speak -- and if it is gone, a fact whose pattern has rotted passes in
+    # silence, which is the fail-open shape this file exists to remove.
+    build(tmp, registry=REGISTRY.replace(VG_CANON,
+                                         r"(\d+)-byte NOTHING image"))
 
 
 @case("a canonical pattern licensing too many values fails as too loose", True,
       expect_check="no-stale-value")
 def _(tmp):
     # A guard that accepts everything is worse than no guard: it reports OK.
-    build(tmp, registry=REGISTRY.replace("`(\\d+)-byte SIMD image`",
-                                         "`(\\d+)`"))
+    build(tmp, registry=REGISTRY.replace(VG_CANON, r"(\d+)", 1))
 
 
 # ------------------------------------------ B0c: image layouts, per FACT
@@ -1097,7 +1178,13 @@ def _(tmp):
 @case("an owner carrying two layout tables is ambiguous and fails", True,
       expect_check="context-image-sums")
 def _(tmp):
-    build(tmp, simd=SIMD + "\n| Offset | Bytes | Content |\n| --- | --- | --- |\n"
+    # The second table gets its own heading, and that heading makes no size
+    # claim. Without it the table inherited the first one's "(520-byte SIMD
+    # image)" heading, the heading arm fired, and a mutant deleting the
+    # ambiguity guard survived -- the case was red for a reason it was not
+    # written to test.
+    build(tmp, simd=SIMD + "\n### 3 Another layout\n\n"
+                           "| Offset | Bytes | Content |\n| --- | --- | --- |\n"
                            "| 0x00 | 4 | X |\n| 0x04 | — | end (4 bytes) |\n")
 
 
@@ -1160,6 +1247,224 @@ def _(tmp):
     raise AssertionError("../.. escape was not refused")
 
 
+# ------------------------------- review round 2: the two fail-open holes
+
+
+@case("a stale value in the OWNER does not license it elsewhere", True,
+      expect_check="no-stale-value")
+def _(tmp):
+    # M1. The retraction convention was the thing that opened the hole: the
+    # exemption was applied only when scanning, so a retired value written into
+    # the owner in the sanctioned phrasing licensed itself for the whole tree,
+    # and the restatement this check exists to catch then passed with exit 0.
+    build(tmp,
+          simd=SIMD + "\nThis previously read 272-byte SIMD image; now 520.\n",
+          extra={"hyp.md": "# H\n\nsaves the 272-byte SIMD image on switch.\n"})
+
+
+@case("the owner's retraction line is still allowed to exist", False)
+def _(tmp):
+    # The other half of M1: closing the hole must not make recording history
+    # impossible. The owner may say what it used to say; that just licenses
+    # nothing.
+    build(tmp,
+          simd=SIMD + "\nThis previously read 272-byte SIMD image; now 520.\n")
+
+
+@case("a SHALLOW submodule skips rather than answering from a truncation",
+      True, expect_check="resolved-is-merged", flags=("--strict",))
+def _(tmp):
+    # M2. `git log origin/<branch>` on a shallow clone returns a truncated
+    # history and no error, so the answer looks complete. Both submodules in
+    # this workspace were shallow, which made every local verdict differ from
+    # CI's in the fail-open direction with nothing saying why.
+    build(tmp, cpu_shallow=True, extra={"spec.md":
+        '# S\n\n> **RESOLVED 2026-08-25 — jcore-cpu@master: "fixture".**\n'})
+
+
+@case("a shallow clone still PASSES a subject it can see", False,
+      flags=("--strict",))
+def _(tmp):
+    # The other half of M2, and the reason the check is three-way rather than
+    # two-way. `git log` on a shallow clone emits only commits genuinely
+    # reachable from the branch -- grafting removes commits, it never invents
+    # them -- so a subject that IS found is a true positive at any depth.
+    # Skipping it would make --strict unusable on a shallow clone for markers
+    # whose answer is already known, which is stricter than the question needs
+    # and is how a gate gets worked around.
+    build(tmp, cpu_shallow=True, extra={"spec.md":
+        '# S\n\n> **RESOLVED 2026-08-25 — jcore-cpu@master: "second".**\n'})
+
+
+@case("undeterminable depth is treated as shallow, not as complete", False,
+      mutate=(("        result = None if (rc is None or rc != 0) else "
+               '(out.strip() == "true")',
+               "        result = None"),))
+def _(tmp):
+    # The third state of `is_shallow`: not True/False but "could not find out".
+    # It is nearly unreachable in practice -- if `git log` answered, `rev-parse`
+    # will too -- so it has no natural fixture, and a mutant narrowing the guard
+    # from `is not False` to `is True` survived the whole suite. Unknown depth
+    # must be treated as shallow: a missing subject might be truncation, and
+    # failing a correct RESOLVED marker on a guess is how a check gets ignored.
+    #
+    # Asserted WITHOUT --strict, where the two outcomes differ in exit status:
+    # a skip exits 0, a failure does not.
+    build(tmp, extra={"spec.md":
+        '# S\n\n> **RESOLVED 2026-08-25 — jcore-cpu@master: "no such commit".**\n'})
+
+
+@case("a non-UTF-8 commit subject does not crash the checker", False)
+def _(tmp):
+    # Found by unshallowing linux: `git log --format=%s` over 1.46M commits
+    # includes subjects that are not valid UTF-8, and the strict decode raised
+    # UnicodeDecodeError inside subprocess. The clone being shallow had hidden
+    # it. A crash is neither an answer nor a skip.
+    build(tmp, cpu_bad_utf8=True, extra={"spec.md":
+        '# S\n\n> **RESOLVED 2026-08-25 — jcore-cpu@master: "fixture".**\n'})
+
+
+@case("a byte quantity that is not the image does not fire", False)
+def _(tmp):
+    # S4. The scan pattern must be anchored on the subject noun. Unanchored, it
+    # reported that "a 4-byte SIMD store" states 4 for simd.context -- which is
+    # not what the sentence says, and a check that fires on correct prose is
+    # switched off within a month.
+    build(tmp, extra={"hyp.md": "# H\n\nIssues a 4-byte SIMD store into a "
+                                "64-byte SIMD staging buffer.\n"})
+
+
+@case("a no-stale-value waiver silences a site without claiming a retraction",
+      False, flags=("--check-waivers",))
+def _(tmp):
+    # The escape that is not a lie. Keyed check x file, like `stale-claim`, so
+    # --check-waivers fails on a row that stops firing.
+    build(tmp, registry=REGISTRY.replace(
+              "| Fact ID | File | Why |\n|---|---|---|\n",
+              "| Fact ID | File | Why |\n|---|---|---|\n"
+              "| `no-stale-value` | [hyp.md](hyp.md) | different quantity |\n"),
+          extra={"hyp.md": "# H\n\nthe 272-byte SIMD image.\n"})
+
+
+@case("fake_repo refuses an empty-files repo outside the sandbox", False)
+def _(tmp):
+    # S8. With no files, `fake_repo` never reached a guarded write, so
+    # `git init` + `update-ref` ran on an unguarded path -- the exact mechanism
+    # of the original incident, still open after the fix meant to close it.
+    inner = os.path.join(tmp, "inner")
+    os.makedirs(inner)
+    outside = os.path.join(tmp, "outside")
+    os.makedirs(outside)
+    try:
+        fake_repo(inner, "../outside/esc", "master", {})
+    except AssertionError:
+        build(tmp)
+        return
+    raise AssertionError("empty-files fake_repo escaped the sandbox")
+
+
+# ------------------------------------------- the check registry reconciles
+#
+# Not a fixture case: this reads the checker's own source. Eighteen check-name
+# literals were reconciled by nothing, so a check could be added, renamed or
+# deleted with no document and no listing moving. `CHECKS` is now the one place
+# that names them, and this asserts it really is the same set the code emits --
+# otherwise `--list-checks` becomes a second, stale copy, which is the defect
+# 0001 is about, one level up.
+
+
+def load_checker_module():
+    """Import check-doc-facts.py as a module. Its top level is constants and
+    definitions behind an `if __name__ == "__main__"` guard, so importing runs
+    no checks."""
+    spec = importlib.util.spec_from_file_location("cdf", CHECKER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def check_registry_is_complete():
+    src = open(CHECKER).read()
+    used = set(re.findall(r'report\.(?:fail|skip)\(\s*"([a-z0-9-]+)"', src))
+    mod = load_checker_module()
+    listed, records = mod.CHECKS, mod.DECISION_DOC
+    problems = []
+    for name in sorted(used - set(listed)):
+        problems.append("check %r is emitted by the code but missing from "
+                        "CHECKS (it would not appear in --list-checks)" % name)
+    for name in sorted(set(listed) - used):
+        problems.append("check %r is in CHECKS but emitted nowhere -- either "
+                        "it was renamed, or it is a check that cannot fire"
+                        % name)
+    for name, (why, rec) in sorted(listed.items()):
+        if rec not in records:
+            problems.append("check %r cites unknown record %r" % (name, rec))
+        if not why.strip():
+            problems.append("check %r has no description" % name)
+    for rec, path in sorted(records.items()):
+        if not os.path.exists(os.path.join(os.path.dirname(HERE), path)):
+            problems.append("record %s points at %s, which does not exist"
+                            % (rec, path))
+    # Every check must be findable by the person it fires on. Seven of eighteen
+    # names appeared in no document at all, which makes a failure message a
+    # dead end -- you are told a rule was broken and given no way to read it.
+    docs = os.path.join(os.path.dirname(HERE), "docs")
+    corpus = []
+    for dirpath, dirnames, filenames in os.walk(docs):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for fn in filenames:
+            if fn.endswith(".md"):
+                try:
+                    with open(os.path.join(dirpath, fn), encoding="utf-8") as fh:
+                        corpus.append(fh.read())
+                except (OSError, UnicodeDecodeError):
+                    pass
+    joined = "\n".join(corpus)
+    for name in sorted(listed):
+        if name not in joined:
+            problems.append("check %r is named in no document under docs/; a "
+                            "failure message that cites it is a dead end"
+                            % name)
+    return problems
+
+
+def tree_fingerprint():
+    """A cheap fingerprint of everything this suite must never touch.
+
+    Prevention is structural where it can be (`sandboxed`), but a case can
+    always call `open()` itself, and the incident that started all of this was
+    invisible precisely because the suite reported 82 passed while rewriting a
+    submodule's refs. This is the backstop that would have caught it: it costs
+    a few stats and a handful of `git for-each-ref`s, and it turns "we hope
+    nothing escaped" into "the suite would have said so"."""
+    root = os.path.dirname(HERE)
+    parts = []
+    docs = os.path.join(root, "docs")
+    for dirpath, dirnames, filenames in os.walk(docs):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        for fn in sorted(filenames):
+            fp = os.path.join(dirpath, fn)
+            try:
+                st = os.stat(fp)
+                parts.append("%s %d %d" % (os.path.relpath(fp, root),
+                                           st.st_size, int(st.st_mtime)))
+            except OSError:
+                parts.append("%s MISSING" % os.path.relpath(fp, root))
+    for sub in ("jcore-cpu", "linux"):
+        repo = os.path.join(root, sub)
+        if not os.path.exists(os.path.join(repo, ".git")):
+            continue
+        out = subprocess.run(
+            ["git", "-C", repo, "for-each-ref",
+             "--format=%(refname) %(objectname)"],
+            capture_output=True, text=True)
+        head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"],
+                              capture_output=True, text=True)
+        parts.append("%s HEAD %s" % (sub, head.stdout.strip()))
+        parts.append("%s REFS %s" % (sub, out.stdout))
+    return "\n".join(parts)
+
+
 def main():
     argv = sys.argv[1:]
     verbose = "-v" in argv
@@ -1171,6 +1476,8 @@ def main():
         checker = backport_root(old, os.path.join(shim_dir, "checker.py"))
         print("running against %s (via --root back-port)\n" % old)
 
+    # Fingerprinted before any case runs; compared after the last one.
+    tree_before = tree_fingerprint()
     passed = failed = skipped = 0
     caught_by = collections.Counter()
     try:
@@ -1239,6 +1546,25 @@ def main():
     finally:
         if shim_dir:
             shutil.rmtree(shim_dir, ignore_errors=True)
+    if tree_before is not None and tree_fingerprint() != tree_before:
+        failed += 1
+        print("FAIL sandbox tripwire: the suite modified the real tree "
+              "(docs/ contents or a submodule ref changed while it ran)")
+        caught_by["sandbox tripwire"] += 1
+    elif tree_before is not None:
+        passed += 1
+        print("pass sandbox tripwire: real docs/ and both submodules untouched")
+
+    reg = check_registry_is_complete()
+    for problem in reg:
+        failed += 1
+        print("FAIL check-registry reconciliation: %s" % problem)
+        caught_by["check registry"] += 1
+    if not reg:
+        passed += 1
+        print("pass check registry reconciles with the code (%d checks)"
+              % len(load_checker_module().CHECKS))
+
     print("\n%d passed, %d failed%s"
           % (passed, failed,
              ", %d not applicable" % skipped if skipped else ""))

@@ -12,6 +12,23 @@ section. In one line: **restating a value is allowed only with a link to the
 owner on the same line; a bare copy is a defect.**
 
 Enforced by `scripts/check-doc-facts.py`, run from the workspace root.
+`scripts/check-doc-facts.py --list-checks` prints every check this file drives,
+what fails it, and which record defines it.
+
+**The five tables and what each one drives:**
+
+| Table | Drives | Failing check |
+|---|---|---|
+| `## Registry` | which document owns each constant | `owner-has-fact`, `restatement-is-linked` |
+| `## Code bindings` | doc value vs the same value in code | `doc-matches-code`, and `code-bindings` for a malformed or orphaned row |
+| `## Value guards` | no document may state a retired value | `no-stale-value`, and `value-guards` for a malformed or orphaned row |
+| `## Image layouts` | which facts must have a field table | `context-image-sums` |
+| `## Waivers` | enumerated, shrinking exemptions | `check-waivers` |
+
+**One cross-table dependency, stated because it is otherwise invisible:** an
+`## Image layouts` row needs a `## Value guards` row for the same fact — the
+guard is where the expected total comes from, since nothing restates it. A
+layout row without a guard fails rather than passing.
 
 > **Scope, stated so this file is not mistaken for something it is not.** This
 > registry records which *document* owns a fact. It does not certify that the
@@ -64,7 +81,11 @@ This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 tas
 The Registry above says which *document* owns a constant. This table says where
 the same constant lives in the **code**, and `doc-matches-code` fails when the
 two disagree. Wave-1 task **B0c**; the argument is in
-[decisions/0003](decisions/0003-canonical-encoding-database.md) §"Doc-vs-code".
+[decisions/0001 §Enforcement](decisions/0001-one-authority-per-fact.md), which
+says B0a decides *which single document* is checked against the code and B0c
+does the checking. (This previously cited a §"Doc-vs-code" of
+[decisions/0003](decisions/0003-canonical-encoding-database.md); 0003 has no
+such section — it decides the encoding database, not this table.)
 
 **A binding row states no value.** It names two regular expressions — one read
 against the owning document, one against a file in a submodule — each with
@@ -164,15 +185,39 @@ Each row carries two regexes, **one capture group each, and no value**:
   license is a failure **whether or not the line links the owner** — a linked
   wrong number is still a wrong number.
 
-The escape is a line whose subject is the retirement (`previously read`,
-`formerly read`, `used to read`, `previously said`, `promoted from`) — a third
-list, written separately from the glossary's and `stale-claim`'s, for the reason
-0001 and 0002 both give at length.
+**The scan pattern must be anchored on the subject noun.** `(\d+)[-\s]byte\s+FPU`
+looks right and is not: it fires on "a 4-byte FPU register transfer" and "a
+64-byte FPU scratch region", reporting that they "state 4 for `fpu.context.t2`",
+which is not what they say. A check that fires on correct prose is switched off
+within a month, so the patterns require the word **`image`** — the thing the
+fact is actually about. Both patterns match across a line wrap (`\s+`, and the
+scan runs over the whole file rather than line by line), because
+`272-byte context-switch\nimage` is the same defect reflowed.
+
+Two escapes, and they are different things:
+
+- **A retraction line** — `previously read`, `formerly read`, `used to read`,
+  `previously said`, `promoted from` — for text whose subject *is* the
+  retirement. This is a third phrase list, written separately from the
+  glossary's and `stale-claim`'s, for the reason 0001 and 0002 both give at
+  length. **A retraction line in the owner licenses nothing**: the first version
+  applied this exemption only when scanning, so writing a sanctioned retraction
+  into `simd/spec.md` — one that previously read "272-byte SIMD image" — made
+  272 a licensed value for the whole tree, and the restatement this check exists
+  to catch then passed with exit 0. The convention for recording history opened
+  the hole instead of confining it, which is why the licensing side now applies
+  the same exemption.
+- **A `no-stale-value` waiver row** below, keyed check × file exactly as
+  `stale-claim` is, for a site where the number is a *different quantity* and
+  no retraction has occurred. Claiming a retirement that did not happen, purely
+  to silence a check, is the failure mode 0002 was written about; there has to
+  be a way to say "different quantity" without lying. `--check-waivers` fails on
+  a row that stops firing, so the list cannot outlive its sites.
 
 | Fact ID | Canonical (in owner) | Scan (everywhere) |
 |---|---|---|
-| `fpu.context.t2` | `(\d+)[- ]byte FPU image` | `(\d+)[- ]byte FPU` |
-| `simd.context.j32` | `(\d+)[- ]byte SIMD image` | `(\d+)[- ]byte (?:SIMD\|context-switch)` |
+| `fpu.context.t2` | `(\d+)[-\s]byte\s+FPU\s+(?:[\w/-]+\s+)*image` | `(\d+)[-\s]byte\s+FPU\s+(?:[\w/-]+\s+)*image` |
+| `simd.context.j32` | `(\d+)[-\s]byte\s+SIMD\s+(?:[\w/-]+\s+)*image` | `(\d+)[-\s]byte\s+(?:SIMD\|context-switch)\s+(?:[\w/-]+\s+)*image` |
 
 ## Image layouts
 
