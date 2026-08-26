@@ -323,6 +323,18 @@ instead of restating bits.
 
 ### C0. Write a current threat model and supersede the stale review *(do first)*
 
+> **C0 — DONE (2026-08-25).** The threat model is
+> [security/threat-model.md](security/threat-model.md). It supersedes
+> `mmu/security-review.md` §0–§1 and `mmu/design-spec.md` §6.0, re-derives the
+> verdicts B0a flagged (AnC reverses to *applies*; the `ASID_TAG`-truncation
+> conclusion survives on a collision demonstration; S-I3 closes on two merged
+> legs), and ratifies §E.11's bar as **L1–L7** — renumbered off `A1`–`A6` because
+> those IDs collided with the Track-A hotfix numbers, and with **L7** added for
+> the walker's data source, which §C2 identified but E.11 never lifted into the
+> bar. §E.10's overhead figures are ratified as a *position* and classified
+> individually as sourced / literature / estimate in
+> [§9 of the threat model](security/threat-model.md).
+
 `mmu/security-review.md` reasons from "the walker is software" — false since the
 hardware walker landed. Replace it with a threat model that states, up front:
 the actual adversary (a **guest kernel** on a shared core in a public

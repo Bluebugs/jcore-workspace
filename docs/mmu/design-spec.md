@@ -306,6 +306,29 @@ Linux's standard 4-level or 5-level page table walking handles this naturally.
 
 ### 6.0 Threat model
 
+> **SUPERSEDED BY [security/threat-model.md](../security/threat-model.md) — 2026-08-25.**
+> This section's adversary is "an unprivileged tenant (`SR.MD=0`)" and its TCB is
+> "the privileged kernel". On the multi-tenant product the adversary is a **guest
+> kernel**, one whole privilege level higher, and the guest kernel is *not* in the
+> TCB. Read the threat model instead; the *guaranteed properties* below remain
+> accurate as statements about the MMU and are reproduced there as P3.
+>
+> Two of this section's non-guarantee claims are **false as written** and are the
+> reason it is superseded rather than amended:
+>
+> - *"The in-order, non-speculative pipeline removes the entire transient-execution
+>   attack class … by construction"* — a verdict about the J4 RTL, inherited by a
+>   spec whose product point speculates
+>   ([glossary.md §3](../glossary.md): J32-FM is out-of-order). It is also too
+>   strong even for the in-order core, which arms a TSB walk off a fetch that may
+>   be squashed ([security/threat-model.md §7.2](../security/threat-model.md)).
+> - *"the software TLB walk removes the hardware-page-table-walker cache-timing
+>   class (AnC)"* — **the walk is hardware**:
+>   **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer"**,
+>   and its TSB reads are cacheable by deliberate decision. The AnC verdict is
+>   re-derived to *applies* in
+>   [security/threat-model.md §7.1](../security/threat-model.md).
+
 - **Trust boundary / TCB:** the privileged kernel (running with `SR.MD=1`) is the trusted computing base. It owns the page tables, the TSB, ASID allocation, and the TLB-miss handler.
 - **Adversary:** an unprivileged tenant (`SR.MD=0`) executing arbitrary user code in its own address space, able to issue any user-mode instruction and to fault deliberately.
 - **Guaranteed properties:** (1) no user access to memory not mapped into its own live ASID with the required permission; (2) U/W/X enforced per the rules in §6.1; (3) confidentiality of all privileged MMU/exception state (no user-readable register exposes another context's VPN/PPN/ASID/fault address); (4) a software-revoked mapping (TLB-flushed or `STALE`-marked) cannot be used.

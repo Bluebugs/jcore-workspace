@@ -1,0 +1,915 @@
+# J-Core multi-tenant threat model, and the minimum security bar for launch
+
+**Status:** Accepted 2026-08-25. Wave-1 task **C0**, from
+[j4-remediation-plan.md §C0](../j4-remediation-plan.md). This document
+supersedes [mmu/security-review.md §0–§1](../mmu/security-review.md) and
+[mmu/design-spec.md §6.0](../mmu/design-spec.md), which are the two places the
+project's threat model was previously written down.
+
+**C0 gates all of Wave 3.** Every Track-C remediation item is argued against
+this document, and §8's bar is the pass mark.
+
+**What this document owns and does not own.** It owns the *adversary*, the
+*TCB*, the *sharing model*, the *applicability verdicts*, and the *launch bar*.
+It owns **no normative constant** — per
+[decisions/0001](../decisions/0001-one-authority-per-fact.md) every value quoted
+here links its owner on the same line, and
+[fact-ownership.md](../fact-ownership.md) gains no rows from this task.
+
+---
+
+## 0. The three corrections this document exists to make
+
+Stated first, because each is a case of a conclusion that outlived its
+reasoning, and that is the failure mode this whole remediation wave is about.
+
+1. **The walker is not software.** The previous review's §0 opened with the
+   claim that translation is "a software handler + TLB". A TLB miss has been a
+   hardware FSM stall since
+   **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer".**
+   Software reaches the miss vector only when the hardware walk fails
+   ([mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md)).
+
+2. **The adversary is not a user process.** [mmu/design-spec.md §6.0](../mmu/design-spec.md)
+   names the adversary as "an unprivileged tenant (`SR.MD=0`)" and the TCB as
+   "the privileged kernel". On the product that is the wrong boundary by one
+   whole privilege level: the tenant *is* a kernel.
+
+3. **"Does not apply" was inherited across cores.** The transient-execution
+   family was rated `NO` "whole family" because *the J4 RTL* is in-order. The
+   product is not that core. The same inheritance is still live in
+   `jcore-cpu/docs/architecture/tlb.md §7` — see §11.
+
+---
+
+## 1. The adversary
+
+**The adversary is a guest kernel**, running at `SR.MD = 1` / `SR.HPRIV = 0`,
+on a core it shares — over time, and across its own thread contexts — with
+other tenants of a public multi-tenant service
+([jcore-ulx3s-service-plan.md](../jcore-ulx3s-service-plan.md): tenants are
+GitHub-authenticated strangers, admitted without vetting).
+
+This is a strictly stronger adversary than "an unprivileged tenant", and the
+difference is not rhetorical. Capabilities a guest kernel has that a user
+process does not:
+
+| Capability | Where it comes from | Why it matters |
+|---|---|---|
+| Writes `ASIDR` natively, **untrapped** | [hypervisor/design-spec.md §5](../hypervisor/design-spec.md): "`PTEH`, `PTEL` and `ASIDR` are write-only staging state … letting a guest load them natively leaks nothing" | The guest chooses the context tag every TLB compare and every TSB index-hash uses. That is fine architecturally (it only reaches its own TSB) and *not* fine microarchitecturally — it is direct control of a structure index |
+| Chooses its own virtual addresses and page sizes, and can fault at will | It runs its own MMU (Configuration A, [hypervisor/hardware-spec.md §4.4.5](../hypervisor/hardware-spec.md)) | Every eviction-set construction primitive in the literature assumes far less |
+| Executes privileged SH-4 instructions that reach the memory system directly | `ocbi`/`ocbp`/`ocbwb`/`pref`/`movca.l` are **user-mode** instructions on this design ([cache/l2-spec.md §17.5](../cache/l2-spec.md)) | A guest kernel needs no privilege escalation to reach them; neither does its own user-space |
+| Runs continuously for a whole scheduling quantum on a core it owns | [hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md) budgets a ~10 ms quantum | Attacks that need 10⁶ noise-free samples get them |
+| Uses all thread contexts of its core simultaneously | [hypervisor/hardware-spec.md §4.7](../hypervisor/hardware-spec.md): a core hosts one guest with up to *N* vCPUs | An attacker with two contexts on one core can run a *concurrent* probe against its own victim thread — and, if the tenancy rule is ever violated, against someone else's |
+| Reads hardware counters | walk counters, PMU | [hypervisor/design-spec.md §6](../hypervisor/design-spec.md) already records that the walker counters "simply state the answer, at one load, with no timing apparatus and no noise" |
+
+**The adversary is assumed to know everything.** J-Core is open source: the TSB
+index hash, the predictor index functions, the pLRU tree, the victim-LFSR
+construction and the RTL are all public. No mechanism in this document is
+credited with security it derives from obscurity —
+[mmu/hardware-spec.md §2.8a](../mmu/hardware-spec.md) already states this rule
+for the ASID fold and it is generalised here.
+
+**What the adversary is not.** No physical access (no probing, glitching, power
+or EM analysis, no cold boot). No control of the hypervisor, the bitstream, the
+boot ROM, or the fabric. No ability to co-schedule itself against a chosen
+victim beyond what the service's placement policy allows — but it *may* assume
+it eventually shares a board, an L2, and a core-over-time with any other tenant.
+
+**Second-tier adversaries, in scope but subordinate.** (a) A guest *user*
+process attacking its own guest kernel — the classic AnC/ASLR setting, and the
+one §7.1 turns on. (b) A tenant-controlled DMA-capable device, if the service
+ever offers device passthrough (§8, item **L2**). (c) A GPU shader, once the
+GPU exists — currently unprotected, and a launch blocker in its own right
+([j4-remediation-plan.md §C2](../j4-remediation-plan.md)).
+
+---
+
+## 2. The TCB
+
+**In the TCB**, in order of how much of the system falls if it fails:
+
+1. **The hypervisor** (hyperprivileged, `SR.HPRIV = 1`) — Phase 3,
+   [hypervisor/hardware-spec.md](../hypervisor/hardware-spec.md). It owns ASID
+   range allocation, `TSBBR`, `PDID`, `L2WAYMASK`, the emulation aperture, vCPU
+   placement, and the gang-switch sequence. **It does not exist yet**: the spec
+   says so in as many words ("The hypervisor itself remains unimplemented — this
+   whole document is Phase 3",
+   [hypervisor/design-spec.md §3.8a](../hypervisor/design-spec.md)). Every
+   structural isolation argument in this project currently terminates in
+   software nobody has written.
+2. **The CPU RTL** — the TLB compare and permission check
+   ([mmu/hardware-spec.md §4.3](../mmu/hardware-spec.md); `jcore-cpu/core/tlb.vhd`
+   calls itself "the multi-tenant isolation boundary"), the hardware TSB walker,
+   the privilege gates, and — on a speculative part — every rule in
+   [ooo/j32ooo-spec.md §9.4](../ooo/j32ooo-spec.md).
+3. **The bus fabric and its BMID assignment**
+   ([bus/fabric-spec.md §4](../bus/fabric-spec.md)), because the IOMMU's entire
+   model rests on BMID being unforgeable by the initiator.
+4. **The IOMMU** ([iommu/hardware-spec.md](../iommu/hardware-spec.md)) for any
+   configuration with a DMA-capable device a tenant can influence.
+5. **The boot ROM and bitstream**, trivially.
+6. **The management plane** (board control, image build, tenant admission) — out
+   of scope for the microarchitecture but named so nobody reads its absence as
+   a claim that it is safe.
+
+**Explicitly not in the TCB** — this list is the point of the document:
+
+- **The guest kernel.** It is the adversary.
+- **The guest's TSB.** It is memory the guest can read, and — until item **L7**
+  of §8 lands — memory the guest can *write*, which is a guest→host escape under
+  a hardware walker (§7.5).
+- **The guest's page tables**, `PTEH`, `PTEL`, `ASIDR`, and every value it puts
+  in them.
+- **Any scheduler decision made by guest software.**
+- **`MMUCR`, `TSBBR`, `TSBCFG` values a guest asks for.** They are trapped
+  ([hypervisor/design-spec.md §5](../hypervisor/design-spec.md)); the hypervisor
+  must bounds-check rather than program them.
+
+---
+
+## 3. The sharing model
+
+Four levels, with a different mechanism at each. Getting these confused is how
+"core = tenant" gets read as "tenant isolation is solved".
+
+| Level | Shared by | What is shared | What separates tenants |
+|---|---|---|---|
+| **Thread context** (FGMT, 2-way on the product) | contexts of one core | everything not architectural state: L1-I, L1-D, TLB, TSB, predictor arrays, prefetch tables, issue bandwidth ([ooo/j32ooo-spec.md §13.3](../ooo/j32ooo-spec.md)) | **Nothing.** Contexts of a core are **one security domain** ([glossary.md §4](../glossary.md)) |
+| **Core** | tenants over time | the same structures, plus their residue across a switch | The **gang switch** ([hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)) — a software sequence, with no hardware backstop |
+| **Chip** | all cores | one set of L2 tag and data arrays, its pLRU, its MSHR pool, the fabric, the memory controller ([cache/l2-spec.md §2](../cache/l2-spec.md)) | **L2 way-partitioning on allocation only** ([cache/l2-spec.md §16.1](../cache/l2-spec.md)). Nothing else |
+| **Board** | all tenants | DRAM device, power, thermals | Nothing in this document |
+
+Three consequences that must be carried into every Wave-3 decision:
+
+- **FGMT buys vCPUs per tenant, not tenants per core.** An *N*-context core runs
+  one tenant with up to *N* vCPUs ([glossary.md §4](../glossary.md)). Any design
+  that quietly assumes *N* tenants per core has broken the model, not optimised
+  it.
+- **The unit of tenancy is enforced by a scheduler, not by hardware.**
+  [ooo/j32ooo-spec.md §18](../ooo/j32ooo-spec.md) calls this "the weakest link in
+  the security model" in its own voice. A scheduler bug produces a perfectly
+  functional machine with no isolation and no fault.
+- **The chip level is *outside* the reach of the core-granular rule.** Two
+  tenants on two cores share the L2 at the same instant, always. Way-partitioning
+  is the only thing between them, and §7.6 scopes what it actually closes.
+
+---
+
+## 4. Which cores this covers, and the non-inheritance rule
+
+**The product is J32-FM**, defined only as "J32-OOO + full memory subsystem
+(L2 v2)" ([glossary.md §3](../glossary.md)). Note two things about that:
+
+- **"FM" is "full memory subsystem", not FGMT.** The
+  [j4-remediation-plan.md](../j4-remediation-plan.md) brief for this task reads
+  as if it might be the latter; it is not. J32-FM is FGMT 2-way, exactly like
+  J32-OOO ([glossary.md §4](../glossary.md)).
+- **J32-FM has no owning specification.** Its entire definition is one glossary
+  table cell, and the glossary is no longer authoritative for anything but names
+  ([decisions/0001](../decisions/0001-one-authority-per-fact.md)). This threat
+  model therefore treats **J32-FM's core as J32-OOO's**, and its memory system
+  as [cache/l2-spec.md](../cache/l2-spec.md) T1/T2. *That substitution is an
+  assumption, and it is recorded in §11 as a defect for Wave-2 **B3** to close —
+  a product point with no spec cannot be security-reviewed, only guessed at.*
+
+### 4.1 The non-inheritance rule (normative for this document and for Wave 3)
+
+> **A verdict reached for one core is not evidence for another.** Every
+> applicability judgement in §6 is stated per core class. A "does not apply"
+> that rests on the absence of a microarchitectural feature is void on any part
+> that has the feature, and must be re-derived rather than carried across.
+
+This is written as a rule because the tree contains at least four live instances
+of the failure, three of which this task found rather than inherited:
+
+| Where | Claim | Why it is wrong |
+|---|---|---|
+| [mmu/security-review.md §1](../mmu/security-review.md) | Transient family: "**NO** (whole family)" | Superseded by this document. Rated against the in-order J4 RTL; the product speculates |
+| [mmu/design-spec.md §6.0](../mmu/design-spec.md) | "The in-order, non-speculative pipeline removes the entire transient-execution attack class … by construction" | Same error, in a **live, unsuperseded** section of the MMU design spec. Superseded by this document |
+| `jcore-cpu/docs/architecture/tlb.md §7` | "J4 is … strictly **non-speculative** … This neutralises the entire transient-execution attack class" and "The **software** TLB walk likewise removes the hardware-page-table-walker cache-timing class (AnC)" | Both halves are now false *for the core that document describes* — the walker is hardware, and §7.2 shows the fetch path speculates. Cross-repo; recorded in §11 |
+| [ooo/j32lt-spec.md §16.1](../ooo/j32lt-spec.md) | — | The **counter-example**, cited here as the standard to copy: "In-order issue is not a defence … this core predicts branches and issues non-blocking loads past them, which is a complete Spectre-v1 gadget" |
+
+### 4.2 Core classes
+
+| Class | Parts | Speculation |
+|---|---|---|
+| **In-order, predictor-free** | J1, J2, the shipping J4 RTL (`PRIV_ARCH`), J32 baseline | No branch predictor, no OoO, no data speculation, no prefetcher. **But not "non-speculative"** — see §7.2, the fetch path speculates and the TSB walker is armed off it |
+| **Speculative** | **J32-FM (the product)**, J32-OOO, J32-LT, J64 | Tournament or gshare predictor, BTB, RAS, stride prefetcher, speculative loads; J32-OOO adds full OoO with rename and a store-set memory-dependence predictor |
+
+Every Spectre-class family **applies** to the speculative class. The mitigations
+are specified — [ooo/j32ooo-spec.md §8.2a/§8.2b/§9.4/§20](../ooo/j32ooo-spec.md)
+— and **none of them is implemented**, because neither speculative core exists.
+The security posture of the product is therefore entirely a specification
+posture today. That is a reason to get §8's bar right now, while it is still
+free to change.
+
+---
+
+## 5. What we promise
+
+Security properties, ordered so that a failure of *n* implies nothing about
+*n+1*.
+
+| # | Property | Enforced by | Status |
+|---|---|---|---|
+| P1 | A guest cannot name a physical address outside its own map | Hypervisor RA→HPA translation; `TSBBR` ownership | **Conditional** — depends on **L7** (§8) |
+| P2 | A guest cannot install a translation the hypervisor did not author | The walker's sole data source being the hypervisor-written TSB | **Conditional** — same |
+| P3 | A guest cannot read or write another guest's memory | P1 + P2 + ASID range partitioning ([hypervisor/design-spec.md §3.7](../hypervisor/design-spec.md)) | Conditional on P1/P2 |
+| P4 | A guest cannot reach hypervisor memory | Hypervisor mappings absent from S/U | Architectural; loses to §7.5 and to the folded-P1 speculation escape ([hypervisor/hardware-spec.md §4.4.1a](../hypervisor/hardware-spec.md)) |
+| P5 | A guest cannot execute with another guest's privileges | `SR.HPRIV` non-renamed and serializing | Specified, unimplemented |
+| P6 | A guest cannot *observe* another guest's data through a microarchitectural channel | §8's bar, items **L1**, **L3**, **L4**, **L5**, **L6** | This is the property the bar exists to buy |
+| P7 | A device cannot read or write memory outside its domain | IOMMU | **Currently false by default** — §7.7 |
+
+**Non-guarantees, stated rather than discovered.** Rowhammer and DRAM-level
+effects; power, EM and thermal channels; timing analysis of a victim's own
+*committed* control flow (that is a constant-time-software property — the
+reference is Kocher 1996, and [ooo/j32ooo-spec.md §20](../ooo/j32ooo-spec.md)
+already scopes it out correctly); denial of service and fair scheduling; and
+every residual channel enumerated in §9.
+
+---
+
+## 6. Applicability matrix, per core class
+
+`APPLIES` = the mechanism exists on that class and the design has no complete
+answer. `MITIGATED` = a specified mechanism closes it, named. `N/A` = the
+precondition is structurally absent. **Every `N/A` names the structure whose
+absence it depends on**, so that adding the structure invalidates the row
+loudly.
+
+| Family | In-order class | Speculative class (**the product**) | Notes |
+|---|---|---|---|
+| Meltdown / L1TF (fault-suppressed illegal access) | **N/A** — no transient window past a faulting access | **MITIGATED** by [ooo §9.4 rules 3, 4](../ooo/j32ooo-spec.md) (poison forwarding; no cache lookup on an unresolved PA) | Unimplemented |
+| Spectre v1 (bounds-check bypass) | **N/A** — no branch prediction | **APPLIES** | Delay-on-miss ([ooo §8.2a](../ooo/j32ooo-spec.md)) is the primary and is **formally incomplete** — §7.3 |
+| Spectre v2 (branch-target injection), VMScape | **N/A** — no BTB | **MITIGATED** by `PDID`-tagged predictors + commit-time-only updates | The tag width argument is re-derived in §7.4 |
+| Spectre v4 (speculative store bypass) | **N/A** — no memory-dependence prediction | **APPLIES on J32-OOO** (store-set predictor, [ooo §8.4](../ooo/j32ooo-spec.md)); structurally absent on J32-LT | The product is J32-OOO-based, so it inherits the exposure, not the exemption |
+| MDS / store-buffer, fill-buffer residue | **APPLIES architecturally**, not transiently — §7.8 | **APPLIES** | The SQ residue hole needs no speculation at all |
+| **AnC / translation-structure cache leakage** | **APPLIES** — verdict reversed, §7.1 | **APPLIES**, and worse | The single most consequential re-derivation in this document |
+| TLB side channel (TLBleed, occupancy, miss timing) | **APPLIES** | **APPLIES** | Split 8-ITLB/16-DTLB, shared across contexts, ASID-tagged but not partitioned |
+| **TSB contention** (prime+probe on TSB sets) | **APPLIES** | **APPLIES** | The design already concedes this: "conflict-based prime+probe against it is real" ([mmu/design-spec.md §6.5](../mmu/design-spec.md)) |
+| Cache side channel — L1 | **APPLIES**, bounded to one tenant by the tenancy rule | same | Closed *at an instant* by **L1** of §8; residue across a gang switch is **L1**'s flush obligation |
+| Cache side channel — **L2** | **APPLIES** across cores | same | **Partially** mitigated — §7.6 scopes what way-partitioning closes |
+| Flush+Reload | **APPLIES** — `ocbi`/`ocbp` are user-mode ([cache/l2-spec.md §17.5](../cache/l2-spec.md)) | same | Needs shared memory; therefore couples to page dedup — **L5** |
+| DRAM row-buffer / bandwidth (DRAMA) | **APPLIES** | **APPLIES** | Nothing in the design addresses it |
+| Port / issue-bandwidth contention (PortSmash) | **APPLIES** between contexts | **APPLIES** | Explicitly not mitigated ([ooo §20.2a](../ooo/j32ooo-spec.md)); the answer is the tenancy rule, i.e. **L1** |
+| Shared MSHR occupancy | **APPLIES** | **APPLIES** | 4 MSHRs total, shared across banks *and cores* ([cache/l2-spec.md §12.3](../cache/l2-spec.md)) — a narrow, easily saturated resource |
+| **Guest→host escape via a guest-writable TSB** | n/a (no hypervisor) | **APPLIES** | Not a channel — an escape. §7.5 |
+| **Guest→host escape via folded P1 under stale `SR.HPRIV`** | **N/A** — no speculation on `SR.HPRIV` | **MITIGATED** by [hypervisor §4.4.1a](../hypervisor/hardware-spec.md) | Unimplemented |
+| DMA / IOMMU | **APPLIES** | **APPLIES** | Default-bypass at reset — §7.7 |
+| Rowhammer | out of scope | out of scope | Memory part + physical allocator |
+
+---
+
+## 7. Re-derived verdicts
+
+Each subsection states the old verdict, the leg it stood on, whether that leg
+survives, and what the verdict is now. Per the task's standard: **a correct
+conclusion resting on incorrect reasoning is a defect here.**
+
+### 7.1 AnC / ASLR⊕Cache — verdict reversed from `NO` to `APPLIES`
+
+**Old verdict:** `NO`. **Old leg:** *"No hardware walker, no page-table caches;
+translation is a software handler + TLB."*
+
+**Both halves of that leg are gone, and they are gone for different reasons.**
+
+- *"No hardware walker"* is simply false now. `core/tlb_walk.vhd` is the sole
+  TLB installer.
+- *"No page-table caches"* is still **true** — this design has no MMU-cache
+  hierarchy in Barr's sense. But it was never the load-bearing half. AnC needs
+  *an attacker-observable, address-dependent memory access performed by the
+  translation machinery*. Page-table caches are one way to get that. **A
+  deliberately cached TSB walk is another**, and this design chose it.
+
+**The mechanism, derived from the shipped design:**
+
+1. On every TLB miss the walker probes the TSB set at
+   `TSBPTR = (TSBBR & ~0x1F) | ((hash & mask) << 5)`
+   ([mmu/hardware-spec.md §2.8](../mmu/hardware-spec.md)).
+2. A set is one **32-byte cache line** ([mmu/hardware-spec.md §2.8](../mmu/hardware-spec.md)),
+   and the L1 line is also 32 bytes (`jcore-cpu/cache/cache_pkg.vhd`,
+   `cache_line_width_bits = 5`). **Set granularity and line granularity
+   coincide**, so an observer resolves the *full* set index with no sub-line
+   ambiguity — where AnC had to work through 8 PTEs per line.
+3. Those reads are **cacheable, by an explicit and recently-hardened decision**:
+   **RESOLVED 2026-08-25 — jcore-cpu@master: artifact `core/cpu.vhd` containing `TSB COHERENCY POLICY`.**
+   The policy block states it plainly — the walker drives a physical address,
+   region decode on P1 returns cacheable, and "the walker reads through the very
+   cache those stores go through."
+4. `hash = f(VPN) ⊕ g(ASID)` is **XOR-separable and public**, and
+   [mmu/hardware-spec.md §2.8a](../mmu/hardware-spec.md) says so itself, adding
+   that the residual `g(ASID)` offset space is "only `2^TSB_SIZE_LOG`
+   (64–1024 values), which is brute-forceable by timing probes."
+
+Put together: **one observation of which L1-D line the walker touched yields
+`TSB_SIZE_LOG` bits of a public, XOR-separable function of the victim's VPN**,
+with a per-address-space constant that the design's own spec calls
+brute-forceable. `f` is linear over GF(2) in `HASH_MODE = 1`
+(`VPN ⊕ (VPN >> HASH_SHIFT)`), so repeated observations at attacker-chosen VAs
+give a solvable system rather than independent guesses.
+
+**New verdict: `APPLIES`, on every J-Core part that has the walker — which is
+all of them, including the in-order ones.** Three properties of this verdict
+matter for Wave 3:
+
+- **It does not require speculation.** This is the clearest demonstration that
+  the old "in-order ⇒ safe" framing was answering the wrong question.
+- **It is not new information to this project, only newly connected.**
+  [mmu/design-spec.md §6.5](../mmu/design-spec.md) already concedes TSB
+  prime+probe is real, and [mmu/hardware-spec.md §2.8a](../mmu/hardware-spec.md)
+  already refuses to call the ASID fold a boundary. What was missing was the
+  step from "the TSB is a contention channel" to "the *walker* makes the channel
+  hardware-driven, unavoidable, and indexed by the victim's virtual address" —
+  which is precisely AnC.
+- **The ASLR payload is conditional; the primitive is not.** Whether a given
+  guest randomises its layout is the guest's business. The hardware supplies a
+  VA-recovery oracle either way, and §5's P6 is what it violates.
+
+**What closes it, and what does not.** Cross-*tenant* exploitation at an instant
+is closed by **L1** (one tenant per core, so the L1-D observer is the victim's
+own tenant) — *not* by anything in the MMU. Cross-tenant exploitation through
+the shared **L2** is bounded, not closed, by way-partitioning (§7.6).
+**Intra-guest exploitation — a guest user process against its own guest kernel,
+which is AnC's original setting — is completely open**, and no item in §8's bar
+addresses it. The available mechanism is
+[mmu/hardware-spec.md §2.13a](../mmu/hardware-spec.md)'s per-domain TSB
+partitioning, driven by the guest itself. Deliberately left to Wave 3 (§11).
+
+### 7.2 "The core is non-speculative" — false even for the in-order parts
+
+Not a verdict the previous review stated as a row, but the premise under half
+its rows, so it is re-derived here.
+
+`jcore-cpu/core/cpu.vhd` arms an I-side TSB walk directly off a live fetch miss
+(`walk_i_miss <= '1' when i_at_translated = '1' and sig_inst_o.en = '1' …`),
+while the *fault* is deferred to dispatch (`core/components_pkg.vhd`: "A fetch
+that is squashed before dispatch therefore never raises anything"). The two
+together mean:
+
+> **On the shipping in-order core, a fetch that is later squashed can still have
+> caused a TSB walk — a set of cacheable reads through the L1-D — and a TLB
+> install.**
+
+That is a speculative translation-structure fill, on the part whose
+documentation says it has no speculation at all. It is exactly the surface
+[j4-remediation-plan.md §C2](../j4-remediation-plan.md) flags as "speculative
+TLB/TSB fill", and it composes with §7.1: the *speculative* footprint is
+observable by the same mechanism as the architectural one.
+
+**Verdict: the in-order class is "predictor-free", not "non-speculative", and
+the two are not the same claim.** Wave 3's C2b must cover the I-side walk arm,
+not only the D-side load path.
+
+### 7.3 Delay-on-miss is a good primary and is not a solution
+
+**Ratified as specified, with its completeness claim removed.**
+[ooo/j32ooo-spec.md §8.2a](../ooo/j32ooo-spec.md) says delay-on-miss "closes the
+cache covert channel of §20.2, and it closes it for L1, L2, replacement metadata
+and the coherence fabric simultaneously." Every clause of that is true *for the
+D-side cache-fill channel*, and the sentence is nonetheless the kind of
+completeness claim this project has to stop making: Pensieve (ISCA 2023)
+model-checked delay-on-miss and found Spectre-like attacks against it, and
+Speculative Interference (ASPLOS 2021) leaks through the timing of *older*
+instructions with no speculative miss issued at all.
+
+The design is already better than the sentence: §9.4 rule 2 gives commit-only
+predictor training, rule 3 gives degenerate taint (poison may not form an
+address or a branch condition), rule 5 gives mode snapshots. What is missing is
+(a) the I-side walk arm of §7.2, (b) an honest statement of the residual, and
+(c) the scope fix to §8.2a's sentence. **All three are Wave-3 C2b**, and item
+**L4** of §8 is the pass mark.
+
+### 7.4 "Do not truncate `ASID_TAG` into a predictor index" — conclusion upheld, on a third leg
+
+**Old leg:** truncation "discards the generation field", i.e. the top nibble of
+the 16-bit `ASID_TAG` ([mmu/hardware-spec.md §2.1a](../mmu/hardware-spec.md)).
+**Void** — the nibble is gone:
+**RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: retire the ASID generation nibble".**
+
+**B0a's replacement leg** was that truncation still discards `ASID[11:8]`, "15/16ths
+of the 4096-ASID range". That is arithmetically correct and it is still the
+wrong shape of argument, because it describes a *loss of entropy* when the real
+problem is a *structured collision*.
+
+**The re-derivation.** Take the design's own partition arithmetic
+([hypervisor/design-spec.md §3.7](../hypervisor/design-spec.md)): host gets
+ASIDs 0–2047, and sixteen guests get 128 each from 2048 upward. Truncate to
+`ASID_TAG[7:0]`, the form [ooo/j32ooo-spec.md §20.10](../ooo/j32ooo-spec.md)
+records as the rejected earlier revision:
+
+| Guest | ASID range | Low 8 bits |
+|---|---|---|
+| Guest 1 | 2048–2175 (`0x800`–`0x87F`) | `0x00`–`0x7F` |
+| Guest 2 | 2176–2303 (`0x880`–`0x8FF`) | `0x80`–`0xFF` |
+| Guest 3 | 2304–2431 (`0x900`–`0x97F`) | `0x00`–`0x7F` |
+| … | … | … |
+
+**Guest 3 aliases Guest 1 exactly, one-to-one.** Sixteen guests collapse onto
+**two** predictor domains, and within a colliding pair the map is a *bijection* —
+guest 1's *n*-th ASID and guest 3's *n*-th ASID share a predictor index by
+construction, every time, with no probability involved. The host's 2048 ASIDs
+cover all 256 residues, so the host aliases every guest.
+
+That is a strictly stronger statement than "15/16ths of the range is lost", and
+it is stronger for a specific reason worth carrying forward: **range
+partitioning and low-bit truncation are maximally incompatible.** Contiguous,
+power-of-two-aligned ranges are precisely the allocation pattern that a modular
+truncation folds onto itself perfectly. Had the hypervisor interleaved or hashed
+its ASID assignment, the same truncation would have been merely lossy.
+
+**Verdict: upheld, and now demonstrated rather than asserted.** `PDID` is
+required, and it must not be derived by truncating `ASID_TAG`.
+[ooo/j32ooo-spec.md §20.8](../ooo/j32ooo-spec.md)'s verification row S8 — "a
+pair whose `ASID_TAG` values differ only above bit 7" — is exactly the right
+test, and the table above is the concrete instance to instantiate it with:
+guest 1 versus guest 3.
+
+Two riders, both new:
+
+- **`PDID` is 6 bits and must not be truncated either.** 64 domains against 16
+  guests is comfortable, but [hypervisor/hardware-spec.md §2.8](../hypervisor/hardware-spec.md)
+  already contemplates recycling. Recycling without the predictor-invalidate
+  control reintroduces exactly this collision one level up.
+- **The same argument applies to `L2WAYMASK`, which is keyed by `PDID`**
+  ([cache/l2-spec.md §16.1](../cache/l2-spec.md)). Domain identity is now
+  load-bearing in two structures, not one.
+
+### 7.5 The guest-writable TSB — a guest→host escape, and its merge gate was inverted
+
+**Not a re-derivation of an old verdict — a verdict the old review had no row
+for, and the most severe finding in this document.**
+
+The chain, entirely from merged code and existing specs:
+
+1. The hardware walker installs TLB entries **with no exception and no trap**
+   ([mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md)).
+2. The per-`LDTLB` verification step that used to catch a forged entry is
+   therefore gone. [hypervisor/design-spec.md §6](../hypervisor/design-spec.md)
+   states the replacement argument: "the walker's only data source is the set at
+   `TSBBR | hash`; `TSBBR` is hypervisor-owned and P4-trapped; therefore the
+   walker can only install entries the hypervisor wrote."
+3. That argument holds **only if the guest cannot write its own TSB**. The same
+   section says so: "A guest-writable TSB under a walker is a direct guest→host
+   escape."
+4. The read-only guest TSB mapping is **specified and not implemented**
+   ([hypervisor/design-spec.md §3.8](../hypervisor/design-spec.md), "Status:
+   DESIGNED, not yet implemented").
+5. There is **no hardware bounds check on `TSBBR`**. The only bound is the
+   walker's `timeout_cycles` liveness limit, and
+   [mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md) says a malformed `TSBBR`
+   simply "hangs the walk". The bounds check is hypervisor software that does not
+   exist.
+
+[j4-remediation-plan.md §C2](../j4-remediation-plan.md) required exactly this
+ordering: *"gate the walker's merge on the read-only-guest-TSB enforcement and
+the `TSBBR` bounds check landing first … Until then the walker must keep the
+per-LDTLB verification path."* **The walker merged; neither precondition did;
+and the verification path was retired rather than kept.** The plan's own Track F
+names walker-versus-read-only-TSB ordering as "the cautionary example" of merge
+discipline, and it is the instance that was violated.
+
+**Live exposure today is zero**, and saying so is part of being honest: there is
+no hypervisor, so there is no guest, so there is nothing to escape from. **The
+defect is that the structural argument for P1 and P2 is now owed entirely to
+software nobody has written, with no hardware backstop and no test.** That is
+why §8 gains item **L7**.
+
+### 7.6 L2 way-partitioning — ratified as an allocation control, not as isolation
+
+[cache/l2-spec.md §16.1](../cache/l2-spec.md) is a good mechanism and its own
+text contains the scope it needs. Two clauses do the work, and they point in
+opposite directions:
+
+- *"Prime-and-probe requires the attacker to allocate lines that evict the
+  victim's. Restricted to disjoint ways, it cannot."* — **true**, and this is a
+  real boundary for the occupancy channel.
+- *"**Hits are not restricted.** A domain may hit on a line in any way … the
+  hit-time pLRU update … behave[s] as before."* — so a victim's hit **in the
+  attacker's ways** updates shared replacement metadata. This is DAWG's central
+  finding stated in the spec's own words, one paragraph apart from the claim it
+  qualifies: in a CAT-style scheme, access patterns leak through metadata updates
+  on hitting loads.
+
+Add the two structures the section does not mention at all: the **4 shared
+MSHRs** ([cache/l2-spec.md §12.3](../cache/l2-spec.md), "shared across banks"),
+and DRAM bandwidth. Four MSHRs across two cores and four contexts is not a
+generous pool; saturating it is a low-effort, high-bandwidth channel.
+
+**Verdict:** way-partitioning closes the **allocation/occupancy** channel by
+construction and is worth building. It does not close replacement-metadata,
+MSHR, bank-FIFO or bandwidth channels, and §16.1's "closes the channel" sentence
+must be scoped to occupancy. Item **L5**.
+
+### 7.7 IOMMU — the reset state is on the wrong side, and the fix is narrower than proposed
+
+Read directly from [iommu/hardware-spec.md](../iommu/hardware-spec.md):
+`IOMMU_CTRL` bit `[0] ENABLE` reset value `0` — "IOMMU bypassed for all
+masters"; `BMID_BYPASS_*` resets to "All 1s (every BMID bypasses)"; and the
+spec's own summary, "Until then, the IOMMU is functionally absent — all DMA
+passes through with `PA = IOVA`." `SUPER_BYPASS` (bit `[2]`, "all transactions
+bypass regardless of `BMID_BYPASS`") has **no lock**. IOTLB entries carry a
+`GLOBAL` bit — "If set, match any BMID" — which is the Thunderclap shape:
+IOMMU on, mapping too coarse.
+
+**One sharpening of the bar, in the project's favour.** The proposed bar asks
+for "per-device **deny domains**" as if a new state were needed. It is not: a
+BMID with `BMID_BYPASS[N] = 0` and no matching IOTLB entry **already blocks**,
+latches a fault and raises an IRQ. Deny is the *existing* miss behaviour. What
+is actually wrong is three things, all cheaper than a new state machine:
+
+1. the **reset polarity** of `ENABLE` and `BMID_BYPASS_*`;
+2. `SUPER_BYPASS` having **no write-once lock**;
+3. the **`GLOBAL` IOTLB bit** existing at all — it is the S-I7 lesson
+   (a global bit with no guard is a cross-domain disclosure primitive) reappearing
+   one block over.
+
+**Verdict: bar item ratified, mechanism restated. Launch blocker for any
+configuration with a tenant-influenced DMA master.** Item **L2**.
+
+### 7.8 Lazy FP/SIMD switch — worse than LazyFP, and not because of speculation
+
+[fpu/spec.md §7.3](../fpu/spec.md) specifies the trap-on-first-use lazy model,
+and its restore path reads:
+
+> *"Else: reset the physical FPU to post-reset defaults (`FPSCR = 0x00040001`,
+> FR/XF/FPUL = **undefined** per SH-4, but the hypervisor must write at least
+> FPSCR to its default to ensure determinism)."*
+
+So a fresh vCPU with no saved image inherits **the previous owner's `FR`/`XF`/
+`FPUL` contents, architecturally, with no speculation required**. LazyFP
+(CVE-2018-3665) needed a transient window to read stale registers before the
+`#NM` delivered; here the registers are simply there, readable by committed
+instructions. The `SR.VD`/SIMD analogue is the same shape over a much larger
+file.
+
+The store queue has the identical defect in write form: `PREF` bursts all 32
+bytes, and [sq/spec.md §4](../sq/spec.md) says "Bytes within the queue that were
+never written since the queue's last burst have **undefined** content". A tenant
+that writes one word and bursts publishes the previous owner's bytes to an
+address of its own choosing.
+
+And a third instance nobody had listed: `movca.l R0,@Rn` allocates an L2 line
+"with only the written word defined and the remainder **undefined** until
+written" ([cache/l2-spec.md §17.5](../cache/l2-spec.md)). If "undefined" is
+realised as *whatever the data array way already held*, that is a cross-tenant
+read primitive reachable from user mode.
+
+**Verdict: three concrete instances of "undefined = the previous owner's data",
+in three different subsystems.** Items **L3** and **L6**. Note that all three are
+architectural, so all three apply to the **in-order** class as well — another
+row the old review would have marked `N/A` by inheritance.
+
+### 7.9 S-I3 (stale-TSB rejection) — closed, by a different mechanism, and the closure is stronger
+
+[mmu/security-review.md](../mmu/security-review.md) finding S-I3 warned that a
+4-bit generation discriminator wraps every 16 rollovers and lets a stale TSB
+slot false-hit. Its recorded resolution — thread the generation into `ASID_TAG`
+and rebuild the TSB on `gen_low` wrap — no longer exists.
+
+**Re-derived.** The finding is closed, on two legs that are jointly stronger
+than the one they replace, both merged:
+
+- **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: give every CPU its own TSB".**
+  Per-CPU TSBs remove the cross-CPU sharing that the nibble was protecting.
+- `local_flush_tlb_all()` zeroes the TSB on **every** version wrap, which is
+  strictly stronger than an every-16th-wrap rebuild
+  ([mmu/hardware-spec.md §2.1a](../mmu/hardware-spec.md)).
+
+**There is no residual wrap hazard and no 16-generation window.** Two riders:
+this argument is about *stale-TSB* rejection within one address-space
+generation, and it says nothing about tenant separation, which rests on ASID
+*range partitioning* and is re-derived in §7.4. And the top nibble of
+`ASID_TAG` is now a **reserved always-zero field in RTL** — if anything ever
+starts using it, this verdict reopens.
+
+### 7.10 The two Wave-0 fixes, confirmed merged
+
+Recorded because the previous review predates both and a reader must not
+re-derive them:
+
+- The 16 KB TLB-walker tag-compare livelock is fixed, kernel-side, by writing a
+  canonical tag rather than by changing the walker:
+  **RESOLVED 2026-08-25 — linux@jcore: "sh: jcore: write the canonical 4 KB TSB tag, never addr & PAGE_MASK".**
+  The hardware side of the contract is
+  **RESOLVED 2026-08-25 — jcore-cpu@master: "docs(walker): the tag compare is canonical-4 KB, not `addr & PAGE_MASK`"**
+  with guards at
+  **RESOLVED 2026-08-25 — jcore-cpu@master: "test(mmu): Group-B guards for the TSB tag-granularity contract".**
+- The missing `SR.MD` gate on the P4 MMU-register MMIO path is fixed:
+  **RESOLVED 2026-08-25 — jcore-cpu@master: "fix(mmu): require SR.MD=1 for the P4 MMU-register path".**
+  Note the accepted waiver recorded in
+  [j4-wave0-status.md](../j4-wave0-status.md): the refusal is unconditional, but
+  a one-cycle `dp_p4_viol` pulse can clobber an older pending fault's `TEA`. No
+  leak and no escape; "confined to diagnosis" is the honest ceiling.
+
+---
+
+## 8. The minimum security bar for multi-tenant launch
+
+**Nothing in Wave 3 ships without meeting the item it is gated on, and no
+tenant-facing service opens until every item is `MET`.**
+
+Items are renumbered **L1–L7**. They were `A1`–`A6` in
+[j4-remediation-plan.md §E.11](../j4-remediation-plan.md); those IDs collided
+with Track-A hotfix task numbers `A1`/`A2`, which is a real confusion hazard in
+a document that gates work. The mapping is in the last column.
+
+| ID | Requirement | Verdict | Was |
+|---|---|---|---|
+| **L1** | Core = single tenant at all times | Ratified, one clause added | A1 |
+| **L2** | IOMMU default-deny | Ratified, mechanism narrowed | A2 |
+| **L3** | Eager FP/vector switch or scrub across tenants | Ratified, strengthened | A3 |
+| **L4** | Speculation covers loads **and** frontend | Ratified, scope widened | A4 |
+| **L5** | Cache isolation beyond ways | Ratified, one claim added | A5 |
+| **L6** | Scrub on ownership change; "undefined" banned | Ratified, two instances added | A6 |
+| **L7** | The walker's data source is hypervisor-owned | **New** | — |
+
+### L1 — Core = single tenant at all times
+
+**Requirement.** No two tenants occupy thread contexts of one core at any
+instant. A core may be reallocated between tenants over time only by a gang
+switch that flushes **all** thread-shared state: L1-I, L1-D, TLB, predictors,
+BTB, RAS, stride tables, MSHRs, store-queue buffers, and the FP/SIMD register
+files. Cross-tenant fine-grained MT is out of bounds for launch.
+
+**Ratified.** The rule already exists as normative text —
+[hypervisor/hardware-spec.md §4.7](../hypervisor/hardware-spec.md) and
+[glossary.md §4](../glossary.md) — and the evidence base (MDS, PortSmash, the
+Linux core-scheduling documentation's own "the only full mitigation of cross-HT
+attacks is to disable Hyper-Threading", OpenBSD's SMT removal, AWS Nitro and
+Azure's SMT-off SKUs) supports it as *industry practice at exactly this
+granularity*.
+
+**One clause added, and it is the one that will actually be got wrong.**
+[hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)'s gang-switch
+list has seven items and **does not include the store-queue buffers or the
+FP/SIMD register files**. §7.8 shows both carry the previous owner's data by
+specification. **The gang-switch sequence must be extended, and L1 is not `MET`
+until it is** — otherwise **L1** and **L6** each assume the other covers this,
+which is how a gap survives two reviews.
+
+**Second clause, weaker but recorded:** the rule has no hardware backstop, and
+[ooo/j32ooo-spec.md §18](../ooo/j32ooo-spec.md) calls it the model's weakest
+link. Launch accepts scheduler enforcement — with the industry precedent as the
+justification, not as an excuse — **provided** there is a test that a violating
+placement is detectable. An unenforceable rule with no detector is not a
+control.
+
+**Gated Wave-3 items:** C2c (microreset), C2b (predictor invalidate), C1a/C1b
+(the added clause).
+
+### L2 — IOMMU default-deny
+
+**Requirement.** Block-all at reset (`ENABLE = 1`, `BMID_BYPASS_* = 0`);
+unclaimed and unknown BMIDs stay blocked; `SUPER_BYPASS` gains a **write-once
+lock** cleared only by reset; the IOTLB **`GLOBAL` match bit is removed** or
+made hyperprivileged-write-once; detach and teardown re-protect before the
+device is released; the shared IOTLB is quota'd per BMID.
+
+**Ratified; mechanism narrowed** per §7.7 — "deny" is the existing miss
+behaviour, so this is a reset-polarity change plus two guards, not a new state
+machine. Evidence: Thunderclap (NDSS 2019) for the coarse-mapping failure; Apple
+DART and Windows Kernel DMA Protection for default-deny-from-power-on as the
+norm; the Linux deferred-attach work for the boot-window class.
+
+**Launch blocker only for configurations with a tenant-influenced DMA master** —
+which today means *any* pass-through device and, later, the GPU. Where no such
+master exists, L2 is `N/A` and must be *recorded* as `N/A` rather than silently
+skipped, because adding one device changes the answer.
+
+**Honest cost note:** a default-deny reset means the boot path must program the
+IOMMU before any DMA, which is a real bring-up cost on a board with a boot-time
+DMA engine. That cost is the requirement, not an argument against it.
+
+**Gated Wave-3 items:** C2d, C2a (GPU).
+
+### L3 — Eager FP/vector switch or scrub on every cross-tenant switch
+
+**Requirement.** On a cross-tenant boundary, FP and SIMD architectural state is
+saved and restored **eagerly**, or scrubbed to defined values. The lazy
+trap-on-first-use path may be used **within** a tenant only. A fresh context
+with no saved image gets **defined** register contents, never "undefined".
+
+**Ratified and strengthened.** §7.8 shows the current spec is not merely
+LazyFP-shaped but **architecturally worse**: no speculation is needed. The
+strengthening is the last sentence — the plan's bar said "eager switch or
+scrub", and the concrete defect in [fpu/spec.md §7.3](../fpu/spec.md) is
+specifically the *no-saved-image* branch, which an eager-save discipline alone
+does not fix.
+
+**Gated Wave-3 items:** C1b, C1c.
+
+### L4 — Speculation covers loads **and** the frontend
+
+**Requirement.** Delay-on-miss remains the primary D-side mitigation. Added:
+no secret-dependent speculative I-fetch, BTB, ITLB or **TSB/TLB** fill past an
+unresolved branch; predictor updates at commit only, with the domain captured at
+rename; degenerate-STT taint. Ship a threat model that **names residual channels
+rather than claiming Spectre is closed.**
+
+**Ratified, scope widened twice.**
+
+- **Widening 1 — the walker.** The frontend clause must cover the **TSB walk
+  armed off a speculative fetch** (§7.2). The plan's bar said "speculative
+  I-fetch/BTB/ITLB"; on this design the walker is a *fourth* frontend
+  transmitter and the only one that issues cacheable bus reads.
+- **Widening 2 — the in-order parts.** §7.2 shows the I-side walk arm is on the
+  **shipping in-order core**, so this item is not exclusively a J32-FM
+  obligation.
+
+The "name the residuals" clause is discharged by §9 of this document, and
+[ooo/j32ooo-spec.md §8.2a](../ooo/j32ooo-spec.md)'s completeness sentence must
+be scoped as part of C2b.
+
+**Gated Wave-3 items:** C2b.
+
+### L5 — Cache isolation beyond ways
+
+**Requirement.** Way-partitioning plus: per-tenant **replacement metadata**
+(DAWG semantics — isolate hits, misses and metadata updates), per-tenant
+**MSHR** reservation at the L2, memory-**bandwidth** QoS, **no cross-tenant page
+deduplication**, and **privilege-gated** `ocbi`/`ocbp`/`pref` at the tenant
+boundary.
+
+**Ratified, with one claim added and one scoped.**
+
+- **Added: the L2 MSHR pool is 4 entries, shared across banks and cores**
+  ([cache/l2-spec.md §12.3](../cache/l2-spec.md)). J32-LT already partitions its
+  *core-side* MSHRs (2 demand + 1 prefetch per thread,
+  [ooo/j32lt-spec.md §7.4](../ooo/j32lt-spec.md)), so the "≈0 cost" evidence
+  covers the core side and **not** the L2 side. The L2 pool is the one that
+  spans tenants, and it is the one nobody has costed.
+- **Scoped:** [cache/l2-spec.md §16.1](../cache/l2-spec.md)'s "closes the
+  channel" must be narrowed to the occupancy channel (§7.6).
+- The `ocbi`/`ocbp` gating matters *because* of the page-dedup clause, not
+  independently: Flush+Reload needs shared memory. Deciding "no cross-tenant KSM"
+  and "gate the flush ops" together is one decision, not two.
+
+**Gated Wave-3 items:** C2e.
+
+### L6 — Scrub on ownership change; "undefined = previous tenant's data" is banned
+
+**Requirement.** Store-queue buffers and the FP/SIMD register files are scrubbed
+or fully restored on any ownership change. **No architectural definition
+anywhere may resolve "undefined" to residual state from a previous owner.**
+
+**Ratified; two instances added** beyond the SQ and the register files:
+`movca.l`'s partially-defined L2 line, and the no-saved-image branch of the
+lazy-FPU restore (§7.8). Both are user-mode-reachable.
+
+The ban is a *specification* rule, not only an implementation one: a spec that
+says "undefined" where the hardware will supply the previous owner's bytes has
+already lost, because the implementer is entitled to do the cheap thing.
+Reviewers should treat "undefined" in any tenant-visible context as a defect
+until it is qualified.
+
+**Gated Wave-3 items:** C1a, C1b, C2e.
+
+### L7 — The walker's data source must be hypervisor-owned (NEW)
+
+**Requirement**, all four parts:
+
+1. A guest's TSB is mapped **read-only** to that guest
+   ([hypervisor/design-spec.md §3.8](../hypervisor/design-spec.md)).
+2. Every guest `TSBBR` write is **bounds-checked, totally and without an
+   off-by-one**, against that guest's allocation.
+3. A **dedicated negative test** exists for each: a guest writing a `TSBBR`
+   outside its allocation, and a guest attempting to write its own TSB.
+   [hypervisor/design-spec.md §6](../hypervisor/design-spec.md) already demands
+   this and explains why — "Both properties fail together and silently; neither
+   produces a fault of its own."
+4. The walker's guest-observable counters at `0xFF000054` are **virtualized or
+   denied**, never forwarded raw.
+
+**Why this is a new bar item rather than a Wave-3 detail.** Every other item on
+this list buys resistance to a *side channel*. This one is the difference
+between a guest reading host physical memory and not. It dominates the list, it
+was identified in [j4-remediation-plan.md §C2](../j4-remediation-plan.md) but
+never lifted into the launch bar, and its merge gate has already been inverted
+once (§7.5). An item whose ordering constraint has been violated in practice is
+exactly the item that needs a gate rather than a note.
+
+**Gated Wave-3 items:** the hypervisor implementation itself; C2b for part 4.
+
+### Bar status at the time of writing
+
+| Item | Status | Blocking |
+|---|---|---|
+| L1 | **NOT MET** — rule specified; gang-switch list incomplete; no detector | C2c, C1a/C1b |
+| L2 | **NOT MET** — reset is all-bypass | C2d |
+| L3 | **NOT MET** — lazy model is the specified one | C1b, C1c |
+| L4 | **NOT MET** — specified for cores that do not exist; I-side walk arm uncovered on the core that does | C2b |
+| L5 | **NOT MET** — way-partitioning specified; metadata, L2 MSHRs, bandwidth, KSM, flush-op gating all open | C2e |
+| L6 | **NOT MET** — three specified "undefined"s | C1a, C1b, C2e |
+| L7 | **NOT MET** — both preconditions absent; walker already merged | hypervisor Phase 3 |
+
+Seven of seven. That is the correct reading of the current state and it is not a
+crisis: none of the speculative hardware exists yet, the exposure is latent, and
+this is the cheapest moment in the programme to fix all of it.
+
+---
+
+## 9. The efficiency position, and the evidence status of every number in it
+
+**The position is a project principle** ([j4-remediation-plan.md](../j4-remediation-plan.md),
+guiding principle 5): security must not default to slowness, and for every
+perf-sensitive control we find the cheapest variant that still meets the
+guarantee before accepting an expensive one. This document endorses the position
+and **does not endorse the numbers**, which are the load-bearing part.
+
+The rule this project keeps having to relearn: *a number with no source is an
+estimate wearing a fact's clothes.* Every figure below is classified.
+
+| Claim | Figure | Status | What would settle it |
+|---|---|---|---|
+| Each mitigation costs sub-1% on this core | "~sub-1% each" | **UNSOURCED aggregate.** No in-tree measurement; it is a summary of the per-item estimates below, several of which are themselves estimates | The composite is the thing to measure, on the FPGA, on one workload — D0a |
+| Delay-on-miss cost on a big OoO | −18% (Sakalis, IEEE TC 2020) | **LITERATURE, cited in-tree, not verified by C0.** The plan cites it; this task did not read the paper | Read the paper, or treat as a bound rather than a value |
+| FGMT recovers the DoM cost | — | **UNMEASURED, and the specs agree.** [ooo/j32ooo-spec.md §20.5](../ooo/j32ooo-spec.md) says of delay-on-miss: "**This is a measurement, not a projection**" | D1's speculation-defense gate |
+| In-order speculation shadow | "~2–6 cycles" | **CONTRADICTED IN-TREE.** Both speculative specs state a **7-cycle raw** misprediction penalty ([ooo/j32ooo-spec.md §3.2](../ooo/j32ooo-spec.md), [ooo/j32lt-spec.md §3.5](../ooo/j32lt-spec.md)); J32-OOO reaches 4 only with checkpoint recovery. The 2–6 figure has no in-tree owner | Pick one definition of "shadow" — fetch-to-resolve or resolve-to-redirect — and cite the spec that owns it |
+| Eager FP/SIMD switch of the V-file | "~150–350 cycles" for the [520-byte J32 SIMD context image](../simd/spec.md) | **ESTIMATE, unsourced.** Derived from an assumed bulk-move rate with a dirty-skip; no `movmu`/`movml` throughput measurement exists in-tree | Microbenchmark on the FPGA once `movmu` exists; until then quote a range and say it is arithmetic |
+| Tenant-switch scrub, write-through L1 | "~21k → ~10² cycles" | **MIXES TWO QUANTITIES, and the smaller one invites a wrong reading.** ~10² cycles is plausibly the *microreset*; but [hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md) budgets **~15k cycles per gang switch**, dominated by the incoming tenant's **cold cache**, not by the flush. Both can be true; quoting only the ~10² understates the switch by two orders of magnitude | State scrub cost and switch cost separately, always |
+| A single-cycle flush pulse leaks | — | **ADOPT AS A REQUIREMENT REGARDLESS.** Sourced to the fence.t work in the plan; the design consequence (multi-cycle assert; also reset the replacement LFSR, arbiters and miss handler) is cheap and the failure mode is silent | Nothing — implement it; the cost of being wrong is asymmetric |
+| DAWG-semantics ways | "≤2%" | **LITERATURE (MICRO 2018), not verified by C0** | — |
+| Per-thread MSHR reservation | "≈0" | **PARTIALLY APPLICABLE.** Established for core-side MSHRs on an in-order core; **says nothing about the 4-entry shared L2 pool**, which is the cross-tenant one (§7.6) | Model the L2 pool under a 2-tenant miss-heavy mix — D1's L2 gate |
+| Tenant-tagged BTB beats full flush | "26–37%" | **LITERATURE (ARM CSV2), not verified by C0** | — |
+| Taint unit fits a small FPGA core | "+17% LUT, +2% critical path" (ProSpeCT) | **LITERATURE, not verified by C0.** Note +17% LUT is *not* a small number on an 85F | ECP5 synthesis of the degenerate-taint variant only |
+| L2 way-partitioning cost | "~200 gates" | **IN-TREE ESTIMATE** ([cache/l2-spec.md §16.1](../cache/l2-spec.md)), not a synthesis result | Synthesize |
+| Security-mechanism area, J32-OOO / J32-LT | ~8,400 gates (3.7%) / ~15,200 (6.5%) | **IN-TREE ESTIMATES** ([ooo/j32ooo-spec.md §20.5](../ooo/j32ooo-spec.md), [ooo/j32lt-spec.md §16.5](../ooo/j32lt-spec.md)) for cores that do not exist | Synthesis, after B3 |
+| Full-L2 flush / per-way flush | ~655 µs / ~82 µs | **DERIVED IN-TREE** from an assumed ~200 MB/s. Correct arithmetic on an unmeasured bandwidth | Measure SDRAM bandwidth on the ULX3S — D0a |
+| Gang switch | "~15k cycles (~0.5 ms at 30 MHz)", ≤5% at a ~10 ms quantum | **IN-TREE ESTIMATE, and platform-tagged inconsistently** — 30 MHz here against the plan's ~40 MHz `[FPGA]` target | Re-tag per [j4-remediation-plan.md](../j4-remediation-plan.md) principle 1; measure under D0a |
+| Gang-scheduling removes cross-tenant FGMT contention | — | **TRUE BY CONSTRUCTION, and the strongest item on this list.** It is a placement property, not a performance estimate. It is also the one that fails silently if the scheduler is wrong — hence L1's detector clause | A test that a violating placement is detected |
+
+**What survives, stated plainly.** The *structural* efficiency arguments —
+write-through L1 means no dirty write-back to flush; gang scheduling makes
+cross-tenant FGMT contention absent rather than mitigated; tagged predictors need
+no flush; a short pipeline has a small shadow — are sound and do not depend on
+any number. The *quantities* are estimates, and Wave 3 must not treat any of
+them as a measured result. Where a Wave-3 design says "this costs under 1%", the
+reviewer's question is "which row of this table, and has D0a run yet?"
+
+---
+
+## 10. Residual channels this design does not close
+
+Named because L4 requires it, and because a threat model that lists only what it
+defeats is marketing.
+
+1. **Issue-bandwidth / thread-selection timing.** One context's stalls appear as
+   another's speed-up; the ready-thread arbiter is the mechanism, and removing it
+   removes FGMT. Not mitigated; the answer is L1 (observer and victim are the
+   same tenant).
+2. **L2 replacement metadata**, updated on hits across way partitions (§7.6).
+3. **L2 MSHR occupancy**, 4 entries shared chip-wide.
+4. **DRAM row-buffer and bandwidth contention.** Nothing in the design addresses
+   it; DRAMA shows ~Mbps across CPUs with no shared memory or cache.
+5. **TSB set contention within a guest**, unless the guest partitions its own TSB
+   ([mmu/hardware-spec.md §2.13a](../mmu/hardware-spec.md)).
+6. **Walker timing** — 3 reads for a way-0 hit, 5 for way 1, 4 for a both-ways
+   miss ([mmu/hardware-spec.md §7.0](../mmu/hardware-spec.md)) — is a
+   data-dependent hardware signal on the fast path, where the old review assumed
+   a software slow path.
+7. **The AnC primitive of §7.1, intra-guest.** Open, and not on the launch bar.
+8. **Gang-switch residue in any structure the §4.7.1 list omits.** The list is
+   the control; anything absent from it is a channel.
+9. **Fault and exception oracles** — `EXPEVT`/`TEA`/`MMUFSR` are high-fidelity by
+   design and fine within a tenant.
+10. **Rowhammer**, and everything physical.
+
+---
+
+## 11. Defects found while writing this, deliberately left for later
+
+Recorded rather than fixed, with an owner, because fixing them here would exceed
+C0's remit and hide them in a large commit.
+
+| Defect | Owner |
+|---|---|
+| `jcore-cpu/docs/architecture/tlb.md §7` still claims the core is "strictly non-speculative" and that "the **software** TLB walk … removes … AnC". Both false; cross-repo, so not fixable in this commit | Wave-3 **C2b** (it touches `jcore-cpu` anyway) |
+| **J32-FM — the product — has no owning specification.** One glossary table cell is its entire definition, and the glossary is not authoritative | Wave-2 **B3** |
+| [bus/fabric-spec.md §4.6](../bus/fabric-spec.md) still describes `ASID_TAG` as "12 bits + 4-bit generation", with no supersede marker | Wave-2 **B1** |
+| [ooo/j32lt-spec.md](../ooo/j32lt-spec.md) carries the generation-nibble and no-VMID arguments with **no** supersede header, unlike its J32-OOO sibling | Wave-2 **B1** |
+| **TLB geometry has no owner.** [mmu/hardware-spec.md §4.1](../mmu/hardware-spec.md) is titled "Recommended TLB organization (**suggestion, not mandate**)" and the RTL instantiates 8 ITLB / 16 DTLB entries (`jcore-cpu/core/cpu.vhd`). Nothing normative states the shipped geometry, and [fact-ownership.md](../fact-ownership.md) has no row for it. *(Checked during C0 specifically because it looked like a doc-vs-code contradiction and is not one — the spec declines to mandate.)* | Wave-2 **B1**, then **B0c** |
+| [ooo/j32ooo-spec.md §8.2a](../ooo/j32ooo-spec.md)'s completeness sentence needs scoping (§7.3) | Wave-3 **C2b** |
+| [cache/l2-spec.md §16.1](../cache/l2-spec.md)'s "closes the channel" needs scoping to occupancy (§7.6) | Wave-3 **C2e** |
+| Intra-guest AnC (§7.1) has no bar item and no owner | Wave-3, after C2b |
+| The one-cycle `dp_p4_viol` window clobbers an older fault's `TEA` ([j4-wave0-status.md](../j4-wave0-status.md)) | Wave-3 follow-up, red guard first |
+
+---
+
+## 12. What would reopen this document
+
+- **A second tenant is placed on a core concurrently with another**, for any
+  reason — L1 is the load-bearing assumption of six other verdicts, and its
+  failure re-opens all of them at once.
+- **A hardware backstop for tenancy is proposed.** That would convert L1 from a
+  policy to a control and change what the residuals in §10 cost.
+- **The OoO-vs-FGMT decision (Wave-2 B3) lands on in-order + FGMT.** §4 and §6
+  are written against a speculative product; if the product stops speculating,
+  the speculative column is re-derived — **not deleted**, because §7.2 shows the
+  in-order class is not speculation-free either.
+- **`ASID_TAG[15:12]` is given a meaning.** §7.9's verdict depends on it being
+  reserved and always zero.
+- **D0a produces real numbers.** §9 is a table of estimates; it should shrink
+  every time the board runs.
+- **A tenant-influenced DMA master is added**, which flips L2 from `N/A` to
+  blocking for that configuration.
