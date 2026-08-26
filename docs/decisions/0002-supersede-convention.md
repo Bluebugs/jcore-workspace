@@ -236,6 +236,48 @@ of them at the time of writing — and reports success having verified none. So:
 `--check-waivers` additionally fails on a waiver row that never fired, so the
 waiver list cannot outlive the restatements it covers.
 
+**A shallow clone is the same trap wearing a different hat, and it was open for
+longer.** `resolved-is-merged` asks `git log --format=%s origin/<branch>`. On a
+shallow clone that returns a *truncated* history and **exit 0** — the answer
+looks complete and is not. Both submodules in this workspace were shallow when
+this was found (`jcore-cpu` showed 115 subjects against 1080; `linux` 537), so
+every local run was answering from a fraction of the history: a `RESOLVED`
+marker citing a real commit before the graft boundary **fails**, and a
+`PENDING-MERGE` citing one **passes** — the fail-open direction — with nothing
+in the output saying why the verdict might be wrong.
+
+**But a truncated history is incomplete in only one direction, and the check
+follows that exactly.** `git log` emits only commits genuinely reachable from
+the branch — grafting removes commits, it never invents them — so a subject that
+**is** found is a true positive at any depth. Only *absence* is ambiguous: the
+commit may lie beyond the graft boundary, or may not exist. So the resolution is
+three-way, not two:
+
+| | subject found | subject absent |
+|---|---|---|
+| **complete history** | PASS | FAIL |
+| **shallow history** | PASS | SKIP (a `--strict` failure) |
+
+The first version skipped every marker naming a shallow repository. That was
+fail-closed, but stricter than the question requires: it made `--strict`
+unusable until someone unshallowed a multi-gigabyte repository, for markers
+whose answer was already known. A gate that demands that gets worked around. The
+table above keeps the fail-closed property exactly where the answer is genuinely
+unknown and nowhere else. "Could not determine the depth" is treated as shallow,
+for the same reason.
+
+The fix on a developer's machine is `git -C <sub> fetch --unshallow
+--filter=tree:0`; in CI it is `--filter=tree:0` at clone time, never `--depth`.
+
+One further hazard found by actually doing this, recorded because it was hidden
+by the shallow clone and appeared the instant it was not: **commit subjects are
+bytes, not text.** The Linux history contains subjects that are not valid UTF-8,
+and reading the log with a strict decode raised `UnicodeDecodeError` *inside
+`subprocess`* — neither an answer nor a skip, but a traceback, from a checker
+whose entire purpose is to produce verdicts. The log is now read with
+`errors="replace"`, which degrades a mangled subject into one that simply does
+not match, and "does not match" is a case the table above already handles.
+
 ### What is convention here and not check
 
 Two requirements in §1 are **not** machine-checked, and are listed so nobody
