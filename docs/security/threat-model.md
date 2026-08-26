@@ -56,12 +56,32 @@ process does not:
 
 | Capability | Where it comes from | Why it matters |
 |---|---|---|
-| Writes `ASIDR` natively, **untrapped** | [hypervisor/design-spec.md §5](../hypervisor/design-spec.md): "`PTEH`, `PTEL` and `ASIDR` are write-only staging state … letting a guest load them natively leaks nothing" | The guest chooses the context tag every TLB compare and every TSB index-hash uses. That is fine architecturally (it only reaches its own TSB) and *not* fine microarchitecturally — it is direct control of a structure index |
+| Writes `ASIDR` natively, **untrapped** | [hypervisor/design-spec.md §5](../hypervisor/design-spec.md) — but **its justification has expired**, see below | The guest chooses the context tag every TLB compare and every TSB index-hash uses. That is fine architecturally (it only reaches its own TSB) and *not* fine microarchitecturally — it is direct control of a structure index |
 | Chooses its own virtual addresses and page sizes, and can fault at will | It runs its own MMU (Configuration A, [hypervisor/hardware-spec.md §4.4.5](../hypervisor/hardware-spec.md)) | Every eviction-set construction primitive in the literature assumes far less |
 | Executes privileged SH-4 instructions that reach the memory system directly | `ocbi`/`ocbp`/`ocbwb`/`pref`/`movca.l` are **user-mode** instructions on this design ([cache/l2-spec.md §17.5](../cache/l2-spec.md)) | A guest kernel needs no privilege escalation to reach them; neither does its own user-space |
 | Runs continuously for a whole scheduling quantum on a core it owns | [hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md) budgets a ~10 ms quantum | Attacks that need 10⁶ noise-free samples get them |
 | Uses all thread contexts of its core simultaneously | [hypervisor/hardware-spec.md §4.7](../hypervisor/hardware-spec.md): a core hosts one guest with up to *N* vCPUs | An attacker with two contexts on one core can run a *concurrent* probe against its own victim thread — and, if the tenancy rule is ever violated, against someone else's |
 | Reads hardware counters | walk counters, PMU | [hypervisor/design-spec.md §6](../hypervisor/design-spec.md) already records that the walker counters "simply state the answer, at one load, with no timing apparatus and no noise" |
+
+**One authority in that table is cited for a conclusion it no longer supports**,
+and it is flagged here rather than relied on quietly — it is the same shape as
+the AnC row this document exists to fix.
+[hypervisor/design-spec.md §5](../hypervisor/design-spec.md) permits the guest's
+untrapped `ASIDR` write on the ground that `PTEH`, `PTEL` and `ASIDR` "are
+write-only staging state that hardware consults **only** at `LDTLB` time, so
+letting a guest load them natively leaks nothing." **Hardware no longer consults
+`ASIDR` only at `LDTLB` time.** `LDTLB` is retired from the guest refill path,
+and `core/cpu.vhd` wires `dp_mmu_regs.asidr` straight into the walker, which
+consumes it on **every TLB miss** — as a tag *and*, since Phase 2, as an input to
+the set index ([mmu/hardware-spec.md §2.8](../mmu/hardware-spec.md)). The same §5
+table still prices the guest miss path as "`LDTLB` … traps … **yes — 1**" for an
+instruction that no longer decodes there.
+
+The *conclusion* this document draws is unaffected and is if anything
+strengthened: the capability is real and it is now continuous rather than
+per-refill. What is void is the reason the hypervisor spec gives for tolerating
+it, and a Wave-3 reviewer must not read that spec's "leaks nothing" as a
+current finding. §11 carries the row.
 
 **The adversary is assumed to know everything.** J-Core is open source: the TSB
 index hash, the predictor index functions, the pLRU tree, the victim-LFSR
@@ -194,7 +214,7 @@ of the failure, three of which this task found rather than inherited:
 
 | Class | Parts | Speculation |
 |---|---|---|
-| **In-order, predictor-free** | J1, J2, the shipping J4 RTL (`PRIV_ARCH`), J32 baseline | No branch predictor, no OoO, no data speculation, no prefetcher. **But not "non-speculative"** — see §7.2, the fetch path speculates and the TSB walker is armed off it |
+| **In-order, predictor-free** | J1, J2, the shipping J4 RTL (`PRIV_ARCH`), J32 baseline. **J1/J2 have no MMU and no walker at all** — `core/cpu.vhd` puts both behind `g_tlb_walk : if PRIV_ARCH generate`, so every MMU-derived row of §6 reads `N/A` for them, not `APPLIES` | No branch predictor, no OoO, no data speculation, no prefetcher. **But not "non-speculative"** — see §7.2, the fetch path speculates and the TSB walker is armed off it |
 | **Speculative** | **J32-FM (the product)**, J32-OOO, J32-LT, J64 | Tournament or gshare predictor, BTB, RAS, stride prefetcher, speculative loads; J32-OOO adds full OoO with rename and a store-set memory-dependence predictor |
 
 Every Spectre-class family **applies** to the speculative class. The mitigations
@@ -300,7 +320,11 @@ translation is a software handler + TLB."*
 4. `hash = f(VPN) ⊕ g(ASID)` is **XOR-separable and public**, and
    [mmu/hardware-spec.md §2.8a](../mmu/hardware-spec.md) says so itself, adding
    that the residual `g(ASID)` offset space is "only `2^TSB_SIZE_LOG`
-   (64–1024 values), which is brute-forceable by timing probes."
+   (64–1024 values), which is brute-forceable by timing probes." *(That range is
+   itself narrower than the register allows: [mmu/hardware-spec.md §2.8](../mmu/hardware-spec.md)
+   gives `TSB_SIZE_LOG` a valid range of 6–14, i.e. 64–16384 sets. The
+   discrepancy is pre-existing and does not change the conclusion — a
+   14-bit search is still a search, not an exclusion — but it is a §11 row.)
 
 Put together: **one observation of which L1-D line the walker touched yields
 `TSB_SIZE_LOG` bits of a public, XOR-separable function of the victim's VPN**,
@@ -493,7 +517,9 @@ opposite directions:
 
 Add the two structures the section does not mention at all: the **4 shared
 MSHRs** ([cache/l2-spec.md §12.3](../cache/l2-spec.md), "shared across banks"),
-and DRAM bandwidth. Four MSHRs across two cores and four contexts is not a
+and DRAM bandwidth. Four MSHRs across the T1 baseline's two cores and four
+contexts ([cache/l2-spec.md §12.2](../cache/l2-spec.md) sizes the `requestors`
+vector as "2 cores × 2 threads × {L1-I, L1-D}") is not a
 generous pool; saturating it is a low-effort, high-bandwidth channel.
 
 **Verdict:** way-partitioning closes the **allocation/occupancy** channel by
@@ -579,9 +605,36 @@ than the one they replace, both merged:
 **There is no residual wrap hazard and no 16-generation window.** Two riders:
 this argument is about *stale-TSB* rejection within one address-space
 generation, and it says nothing about tenant separation, which rests on ASID
-*range partitioning* and is re-derived in §7.4. And the top nibble of
-`ASID_TAG` is now a **reserved always-zero field in RTL** — if anything ever
-starts using it, this verdict reopens.
+*range partitioning* and is re-derived in §7.4.
+
+**The second rider is a correction to this document's own first draft, and it
+points the wrong way, so it is stated at length.** `ASID_TAG[15:12]` is **always
+zero by kernel convention, and is not reserved in hardware.** The owning spec
+says so in as many words — [mmu/hardware-spec.md §2.1a](../mmu/hardware-spec.md):
+the retirement commit *"makes no RTL change; the top nibble is simply always zero
+on both sides."* Checked in the merged RTL rather than inferred from that
+sentence:
+
+- `core/datapath.vhm` writes the register unmasked — `when SEL_ASIDR => this.mmu.asidr := zbus`.
+- `core/tlb.vhd` compares **all sixteen bits**: `entry.asid_tag = asid`.
+- `core/cpu.vhd` hands **all sixteen** to the walker — `asidr => dp_mmu_regs.asidr(15 downto 0)` —
+  and `tsb_ptr()` folds all sixteen into the set index.
+
+Zero-ness is enforced only by the kernel's own ASID mask
+(`linux/arch/sh/include/asm/mmu_context.h`), and the kernel is not in the TCB.
+
+**Why this matters here and not merely in the MMU spec.** §1 establishes that the
+adversary writes `ASIDR` **untrapped**. So four *adversary-controlled* bits reach
+the TLB tag compare and the TSB index fold, and describing them as
+hardware-reserved would credit the design with a guard it does not have. The
+**S-I3 verdict is unaffected** — neither merged leg uses the nibble — but by §7's
+own standard a conclusion resting on wrong reasoning is a defect, so the reasoning
+is corrected rather than the verdict.
+
+Note also what the nibble is *not* a hole in: the extra bits widen the tag the
+adversary controls, they do not narrow it. A guest that sets them still misses in
+its own TSB, because the TSB entries it can reach carry the tags the hypervisor
+wrote. The exposure is to §7.4's structural-index concern, not to a tag forgery.
 
 ### 7.10 The two Wave-0 fixes, confirmed merged
 
@@ -638,7 +691,11 @@ files. Cross-tenant fine-grained MT is out of bounds for launch.
 Linux core-scheduling documentation's own "the only full mitigation of cross-HT
 attacks is to disable Hyper-Threading", OpenBSD's SMT removal, AWS Nitro and
 Azure's SMT-off SKUs) supports it as *industry practice at exactly this
-granularity*.
+granularity*. **Not verified by C0** — every item in that list reaches this
+document through [j4-remediation-plan.md §E.5](../j4-remediation-plan.md), and
+none was checked against a primary source by this task. The same label §9 applies
+to the performance literature applies here, and for the same reason: the
+strongest argument on this page should not be the least-audited one.
 
 **One clause added, and it is the one that will actually be got wrong.**
 [hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)'s gang-switch
@@ -818,7 +875,21 @@ guarantee before accepting an expensive one. This document endorses the position
 and **does not endorse the numbers**, which are the load-bearing part.
 
 The rule this project keeps having to relearn: *a number with no source is an
-estimate wearing a fact's clothes.* Every figure below is classified.
+estimate wearing a fact's clothes.*
+
+**Scope, stated so the table is not read as broader than it is.** What follows
+classifies every quantitative claim in
+[j4-remediation-plan.md §E.10 and §D.3](../j4-remediation-plan.md) — the
+minimize-the-loss research pass — plus the in-tree cost figures those claims lean
+on. It does **not** audit every number in every spec; that is B0b (platform tags)
+and B0c (doc-vs-code). A figure absent from this table has not been cleared by
+C0, it has merely not been looked at.
+
+Three categories: **SOURCED** (a citation this task followed to the source),
+**LITERATURE** (a citation this task did *not* follow — the source is named and
+plausible, and that is all), and **ESTIMATE** (arithmetic or judgement, with no
+source). A fourth label, **STRUCTURAL**, marks a claim that is true by
+construction and therefore needs no measurement — only its residual does.
 
 | Claim | Figure | Status | What would settle it |
 |---|---|---|---|
@@ -837,6 +908,12 @@ estimate wearing a fact's clothes.* Every figure below is classified.
 | Security-mechanism area, J32-OOO / J32-LT | ~8,400 gates (3.7%) / ~15,200 (6.5%) | **IN-TREE ESTIMATES** ([ooo/j32ooo-spec.md §20.5](../ooo/j32ooo-spec.md), [ooo/j32lt-spec.md §16.5](../ooo/j32lt-spec.md)) for cores that do not exist | Synthesis, after B3 |
 | Full-L2 flush / per-way flush | ~655 µs / ~82 µs | **DERIVED IN-TREE** from an assumed ~200 MB/s. Correct arithmetic on an unmeasured bandwidth | Measure SDRAM bandwidth on the ULX3S — D0a |
 | Gang switch | "~15k cycles (~0.5 ms at 30 MHz)", ≤5% at a ~10 ms quantum | **IN-TREE ESTIMATE, and platform-tagged inconsistently** — 30 MHz here against the plan's ~40 MHz `[FPGA]` target | Re-tag per [j4-remediation-plan.md](../j4-remediation-plan.md) principle 1; measure under D0a |
+| fence.t full on-core scrub | "<1% perf / 0.13% area" | **LITERATURE, not verified by C0.** The area figure is the one that matters for the ECP5 fit and it is quoted at two significant figures from a paper about a different core | ECP5 synthesis of the microreset, under C2c |
+| Dirty/init tracking makes an untouched save free | "~0" | **STRUCTURAL, and true by construction** — a 2-bit clean/dirty state skips a save that has nothing to save. The *residual* is what fraction of switches actually find the unit clean, which is a workload property and is unmeasured | Instrument FP/SIMD touch rate under D0a |
+| Privileged `ocbi`/`ocbp` | "at ~0 perf" | **UNSOURCED, and the weakest "~0" on this list.** These are the SH-4 cache-maintenance ops the TLB-shootdown path uses ([cache/l2-spec.md §17.5](../cache/l2-spec.md)); privileging them turns each into a trap on whatever path uses them, which is not obviously free. It is free only if user-space genuinely never issues them | Count user-mode `ocbi`/`ocbp`/`pref` in a real workload before assuming zero |
+| MemGuard-style bandwidth throttling | ">50% interference eliminated" | **LITERATURE, not verified by C0.** Note it is a *reduction* figure, not a bound — it does not close the channel | — |
+| Hypervisor UCP epoch sizing | "+11% weighted speedup, <2 kB monitor" | **LITERATURE, not verified by C0.** A *performance* result being used to argue a security control is affordable; the security-relevant number (how much the adaptation itself leaks) is not in it | — |
+| Value prediction adds ~1pp even on OoO | "+1pp" | **LITERATURE, not verified by C0** — and it is cited to justify *not* building something, which is the direction where a weak number is cheapest to accept | — |
 | Gang-scheduling removes cross-tenant FGMT contention | — | **TRUE BY CONSTRUCTION, and the strongest item on this list.** It is a placement property, not a performance estimate. It is also the one that fails silently if the scheduler is wrong — hence L1's detector clause | A test that a violating placement is detected |
 
 **What survives, stated plainly.** The *structural* efficiency arguments —
@@ -888,6 +965,9 @@ C0's remit and hide them in a large commit.
 | **J32-FM — the product — has no owning specification.** One glossary table cell is its entire definition, and the glossary is not authoritative | Wave-2 **B3** |
 | [bus/fabric-spec.md §4.6](../bus/fabric-spec.md) still describes `ASID_TAG` as "12 bits + 4-bit generation", with no supersede marker | Wave-2 **B1** |
 | [ooo/j32lt-spec.md](../ooo/j32lt-spec.md) carries the generation-nibble and no-VMID arguments with **no** supersede header, unlike its J32-OOO sibling | Wave-2 **B1** |
+| **The guest-`ASIDR` justification has expired.** [hypervisor/design-spec.md §5](../hypervisor/design-spec.md) permits the untrapped write because hardware "consults [`ASIDR`] **only** at `LDTLB` time". The walker consumes it on every TLB miss (`core/cpu.vhd`, `asidr => dp_mmu_regs.asidr(15 downto 0)`), as a tag *and* as an index input. The same §5 table also still prices the guest miss path as one `LDTLB` trap for an instruction retired from that path. See §1 | Wave-2 **B1** |
+| **The walker's failure direction is stated two ways.** `jcore-cpu/core/tlb_walk.vhd` says that on timeout the walker "gives up exactly as it does on a tag mismatch — it fails **OPEN**, to the software miss path, never closed into a stall"; [mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md) says a malformed `TSBBR` "hangs the walk". The RTL is the one to believe, and fail-open is the safer of the two — but §7.5's argument quotes the spec, so the contradiction is load-bearing enough to name. *(Neither reading supplies a `TSBBR` bounds check: there is none anywhere in `tlb_walk.vhd`, which is why **L7** exists.)* | Wave-2 **B1** |
+| **`TSB_SIZE_LOG`'s range is stated two ways.** [mmu/hardware-spec.md §2.8](../mmu/hardware-spec.md) allows 6–14 (64–16384 sets); [§2.8a](../mmu/hardware-spec.md)'s brute-force argument says "64–1024 values". Does not change that section's conclusion — see §7.1 | Wave-2 **B1** |
 | **TLB geometry has no owner.** [mmu/hardware-spec.md §4.1](../mmu/hardware-spec.md) is titled "Recommended TLB organization (**suggestion, not mandate**)" and the RTL instantiates 8 ITLB / 16 DTLB entries (`jcore-cpu/core/cpu.vhd`). Nothing normative states the shipped geometry, and [fact-ownership.md](../fact-ownership.md) has no row for it. *(Checked during C0 specifically because it looked like a doc-vs-code contradiction and is not one — the spec declines to mandate.)* | Wave-2 **B1**, then **B0c** |
 | [ooo/j32ooo-spec.md §8.2a](../ooo/j32ooo-spec.md)'s completeness sentence needs scoping (§7.3) | Wave-3 **C2b** |
 | [cache/l2-spec.md §16.1](../cache/l2-spec.md)'s "closes the channel" needs scoping to occupancy (§7.6) | Wave-3 **C2e** |
@@ -907,8 +987,11 @@ C0's remit and hide them in a large commit.
   are written against a speculative product; if the product stops speculating,
   the speculative column is re-derived — **not deleted**, because §7.2 shows the
   in-order class is not speculation-free either.
-- **`ASID_TAG[15:12]` is given a meaning.** §7.9's verdict depends on it being
-  reserved and always zero.
+- **Software *or hardware* gives `ASID_TAG[15:12]` a meaning.** §7.9's verdict
+  depends on the nibble being unused, not on its being reserved — **the RTL
+  already carries it** through the tag compare and the index fold. So the trigger
+  is a *kernel* that stops masking it just as much as an RTL change that assigns
+  it, and the kernel half needs no hardware change to happen.
 - **D0a produces real numbers.** §9 is a table of estimates; it should shrink
   every time the board runs.
 - **A tenant-influenced DMA master is added**, which flips L2 from `N/A` to
