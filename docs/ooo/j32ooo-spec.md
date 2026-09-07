@@ -1233,9 +1233,15 @@ This is the same correction [j32lt-spec §11](j32lt-spec.md) already made for `P
 
 **2 uops**: LDS/STS .L variants (load/store + transfer), some bit instructions (TAS.B), MOV.L @(disp,PC) when in delay slot.
 
-**3 uops**: CAS.L (with fusion).
+**3 uops**: CAS.L (with fusion), RTE (pop SR, pop PC, branch).
 
-**4 uops**: MAC.L, MAC.W, RTE, DIV (sequence).
+**4 uops**: MAC.L, MAC.W, DIV (sequence).
+
+> **SUPERSEDED BY [§4.1](#41-architecture-to-uop-mapping) — 2026-09-07.**
+> This appendix previously listed `RTE` under **4 uops**, against §4.1's
+> per-instruction table, which gives it 3 and says which three. §4.1 is the
+> normative mapping and [j32lt-spec §4.1](j32lt-spec.md) already cites it as 3;
+> this appendix is a summary derived from that table, so the table wins.
 
 **Multi-cycle iterative**: DIV (32 cycles), SLEEP (until wake interrupt — see §10.6).
 
