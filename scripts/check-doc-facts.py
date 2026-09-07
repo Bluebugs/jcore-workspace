@@ -72,12 +72,17 @@ CHECKS = {
                            "B0c"),
     "one-encoding-database": ("a second encoding database, or the canonical one "
                               "missing", "0003"),
+    # 0004 -- platform tags
+    "platform-tag-foreign-part": ("a `[FPGA]`/`[ASIC]` tag on a line naming a "
+                                  "Xilinx-only part (Spartan/Artix/Kintex/"
+                                  "Virtex/Zynq)", "0004"),
 }
 
 DECISION_DOC = {
     "0001": "docs/decisions/0001-one-authority-per-fact.md",
     "0002": "docs/decisions/0002-supersede-convention.md",
     "0003": "docs/decisions/0003-canonical-encoding-database.md",
+    "0004": "docs/decisions/0004-platform-tag-convention.md",
     # The doc-vs-code checks are not decided by a record; they are defined by
     # the registry's own tables, which say what each drives and why.
     "B0c": "docs/fact-ownership.md",
@@ -90,6 +95,21 @@ VALUE_CELL_MAX = 100
 # means the pattern is matching unrelated sizes and has stopped being a
 # guard, which must be a failure rather than a quietly permissive check.
 VALUE_GUARD_MAX_LICENSED = 4
+
+# 0004 rule 3: a `[FPGA]`/`[ASIC]` tag asserts a figure describes CURRENT
+# hardware. Four Xilinx-only FPGA families are not this project's ECP5
+# target -- Zynq is included even though nothing named it at the time 0004
+# was written, because the whole point of an enumerated, fail-closed list is
+# that it does not need the violation to already exist to catch it. A figure
+# from one of these gets marked in prose (0004 §Marking convention), never
+# tagged; tagging it would assert the false thing the mark exists to avoid.
+# Deliberately narrow (see 0004 §Enforcement for why a general "number with
+# no adjacent tag" check was rejected): this one only ever fires on an actual
+# tag placed next to an actual foreign-part name, so it cannot flag a figure
+# that was correctly marked instead of tagged.
+FOREIGN_FPGA_PARTS_RE = re.compile(
+    r"\b(Spartan|Artix|Kintex|Virtex|Zynq)\b", re.IGNORECASE)
+PLATFORM_TAG_RE = re.compile(r"`\[(?:FPGA|ASIC)\]`")
 
 # Per 0002 section 2. A change is "merged" only when it is on this branch.
 # Kept in sync with the table in 0002; that table is the human-readable copy
@@ -1353,6 +1373,35 @@ def check_glossary_is_value_free(cfg, report, waivers):
                     "the rest of the file")
 
 
+def check_platform_tags(cfg, report):
+    """decisions/0004 rule 3, enforced. Registry-independent and scoped to
+    docs/ the same way `glossary-is-value-free` is, for the same reason: it
+    must run even when the registry is broken.
+
+    This is deliberately the narrow, fail-closed check 0004 §Enforcement
+    describes as available but not the same as a general "untagged number"
+    check -- four literal family names, cannot fire on a correctly-marked
+    figure, cannot fail open by construction. It exists because the first
+    version of the platform-tag sweep shipped four sites that broke this
+    exact rule on first use (`` `[FPGA]` `` tagging Spartan-6/Artix-7/
+    Kintex-7 rows in simd/hardware-impl.md) and nothing caught it until
+    design review did."""
+    for path in cfg.markdown_files():
+        try:
+            body = read(path)
+        except (OSError, UnicodeDecodeError):
+            continue  # `readable` (run alongside this) already reports it
+        for n, line in enumerate(body.splitlines(), 1):
+            if PLATFORM_TAG_RE.search(line) and FOREIGN_FPGA_PARTS_RE.search(line):
+                report.fail("platform-tag-foreign-part",
+                            "%s:%d" % (cfg.rel(path), n),
+                            "`` `[FPGA]`/`[ASIC]` `` tag on a line naming a "
+                            "Xilinx-only part. Per decisions/0004 rule 3, "
+                            "mark this in prose instead -- tagging it "
+                            "asserts it describes this project's ECP5 "
+                            "target, which it does not.")
+
+
 def check_facts(cfg, report, facts, waivers):
     corpus = {}
     for p in cfg.markdown_files():
@@ -1961,6 +2010,10 @@ def main():
         # `facts` would have made the strongest rule in 0001 collapse along
         # with the weakest.
         check_glossary_is_value_free(cfg, report, waivers)
+        # 0004, same reasoning: a platform-tag mistake is not a registry fact
+        # and must not go dark just because the registry -- or --facts scoping
+        # -- is involved.
+        check_platform_tags(cfg, report)
         if facts:
             check_facts(cfg, report, facts, waivers)
     if run_super:

@@ -118,6 +118,24 @@ here against the plan's ~40 MHz `` `[FPGA]` `` target"); B0b did not re-open it,
 since re-tagging it is explicitly assigned to measurement task D0a in that same
 row, not to this doc sweep.
 
+## Provenance vocabulary borrowed, not reinvented
+
+Some of the prose this sweep wrote (`fpu/spec.md` §6.8/§6.9,
+`cache/l2-spec.md` §20.3) labels a claim `STRUCTURAL` or "unsourced". Those
+words are not this record's own vocabulary — they belong to
+[security/threat-model.md §9](../security/threat-model.md)'s evidence-status
+scale (`SOURCED` / `LITERATURE` / `ESTIMATE` / `STRUCTURAL`, plus `UNSOURCED`
+used informally in that section's own table body). This record does not
+redefine them; it links back to §9 at each use, per this task's instruction to
+reuse that vocabulary rather than invent a parallel one. Naming the debt
+rather than hiding it: that scale is scoped in its own text as
+*"document-wide, not table-local"* — meaning wide within `threat-model.md` —
+and this sweep is the first thing to cite it from outside that file. It now
+has three users (`threat-model.md` itself, and this sweep's two files) and no
+single place that owns the definitions across all three; formalising that is
+its own small piece of work and is not done here, since it belongs to
+whoever next revisits `threat-model.md` §9, not to a platform-tag sweep.
+
 ## Marking convention, for a figure that cannot be honestly retargeted
 
 A marked figure states, in prose next to the number, all three of:
@@ -130,31 +148,84 @@ A marked figure states, in prose next to the number, all three of:
    gate-level run under the gf180 flow, per Track D0" for `` `[ASIC]` ``.
 
 This is deliberately **not** a [decisions/0002](0002-supersede-convention.md)
-`SUPERSEDED BY` / `HISTORICAL` marker. Those markers are about a *fact* that
-changed and was fixed elsewhere, checked by `resolved-is-merged` against a
-named commit or branch. A platform-stale figure has not been superseded by
-anything — nothing has replaced it, no fix has merged, there is nothing for
-`check-doc-facts.py` to verify against a branch. Borrowing 0002's marker
-grammar here would either fail `marker-grammar` (no repo/branch/commit to cite)
-or, worse, parse successfully against the wrong thing. A plain prose note,
-per the three points above, says the true thing without pretending to be a
-grammar this isn't.
+`SUPERSEDED BY` / `HISTORICAL` marker, and the first version of this record
+gave the wrong reason for that: it said no marker fit because there was "no
+repo/branch/commit to cite", which is true of `RESOLVED` and `PENDING-MERGE`
+but **not of `HISTORICAL`** — that marker's regex is date-only, and its stated
+use in 0002 ("a cost baseline, a retired mechanism") describes a retained
+Spartan-7 figure about as well as it describes anything. The real reason is
+narrower and is the one that survives scrutiny: `HISTORICAL` says *this text
+is accurate about a past state of this project*, kept deliberately as the
+record of what a change replaced. A Spartan-6/Artix-7 figure is not a past
+state of this project — this project never targeted those parts at any point
+in its history; it is a **different project's hardware**, cited here as a
+starting estimate. `SUPERSEDED BY` fits even worse, requiring a replacement
+document section that does not exist. Neither marker's *meaning* is honest
+here, independent of what either regex would accept. A plain prose note, per
+the three points above, says the true thing without borrowing a grammar whose
+meaning doesn't match.
 
 ## Enforcement
 
-**Not mechanically checked**, and that is stated rather than implied.
-`scripts/check-doc-facts.py` enforces [0001](0001-one-authority-per-fact.md)
-and [0002](0002-supersede-convention.md); it has no rule for this record, and
-this task does not add one. A regex for "quantitative claim with no adjacent
-`[FPGA]`/`[ASIC]`" was considered and rejected for the same reason
-`glossary-is-value-free`'s shape list is enumerated rather than claimed
-complete (see [0001](0001-one-authority-per-fact.md)): distinguishing a figure
-that needs a tag from one that is architectural (rule 6) requires knowing
-*what kind of number it is*, not just that a number is present, and a regex
-that gets that wrong in the fail-open direction is worse than the manual sweep
-it would replace. This is a residual, named rather than papered over: **the
-sweep in this commit is a point-in-time correction, and nothing stops the next
-edit from adding an untagged number.** See "What would reopen this" below.
+**`scripts/check-doc-facts.py` now runs `platform-tag-foreign-part`**, added
+2026-09-07 after design review found four sites in `simd/hardware-impl.md`
+that broke this record's own rule 3 on first use — the sweep that introduced
+the rule violated it in the same commit, and nothing caught that until a
+human reviewer read the diff by hand. The check is deliberately narrow and
+enumerated, not a general "does this figure need a tag" judgement: it fails
+when a platform-tag bracket shares a source line with a mention of one of
+five Xilinx-only FPGA families (case-insensitive, word-bounded) — the family
+list, spelled out on its own so this paragraph does not itself trip the
+check: Spartan, Artix, Kintex, Virtex,
+Zynq. Four literals; it cannot fail open, and it cannot fire on a figure that was
+correctly *marked* in prose instead of tagged, because marking prose does
+not use the bracket form. This is exactly the enumeration `decisions/README.md`
+asks for ("a decision with no enforcement is a preference") and exactly the
+shape [0001](0001-one-authority-per-fact.md) uses for `VALUE_SHAPES` — a
+reach that is stated, not claimed complete.
+
+**What this check does not do, stated so the green run is not over-read.** It
+catches a tag placed somewhere it shouldn't be. It does **not** catch a figure
+that needed a tag and has none — that is still a manual-sweep problem, and a
+general regex for "quantitative claim with no adjacent `[FPGA]`/`[ASIC]`" was
+considered and rejected for the same reason `glossary-is-value-free`'s shape
+list is enumerated rather than claimed complete: distinguishing a figure that
+needs a tag from one that is architectural (rule 6) requires knowing *what
+kind of number it is*, not just that a number is present, and a check that
+gets that wrong in the fail-open direction is worse than the manual sweep it
+would replace. That gap is real and is why "What this sweep covered, and what
+it deliberately left", below, matters: the tree is not tagged-complete just
+because this check is green.
+
+## Rejected alternatives
+
+**Reuse 0002's marker grammar (`SUPERSEDED BY` / `HISTORICAL`) for a
+platform-stale figure.** Rejected — see §Marking convention above for the
+full argument. In short: `HISTORICAL`'s regex would accept it, but its
+*meaning* — "accurate about a past state of this project" — does not, because
+a Spartan-6 figure was never a state of this project at all. Using it anyway
+would make the marker grammar mean less than it says.
+
+**A general regex for "quantitative claim with no adjacent
+`[FPGA]`/`[ASIC]`".** Rejected, for the same reason
+[0001](0001-one-authority-per-fact.md) enumerates `VALUE_SHAPES` instead of
+claiming completeness: telling a figure that needs a tag (rule 1) apart from
+one that is architectural and needs none (rule 6) requires knowing what kind
+of number a line contains, not just that a number is present. A check that
+gets this wrong in the fail-open direction — silently passing an untagged
+figure — is worse than no check, because it would be read as proof the sweep
+is complete. `platform-tag-foreign-part` (§Enforcement) takes the narrower,
+enumerable half of the problem instead: not "is this tagged" but "is this
+*specific, wrong* tag present", which four literals answer without
+ambiguity.
+
+**Cross-family or cross-node arithmetic scaling**, to produce an ECP5 number
+from a Spartan/Artix one, or a gf180 number from the 130 nm J2 reference
+figures. Rejected on the evidence in Decision rule 5: two logically-identical
+RTL trees on this core, differing only in operand order, synthesized 368 LUT4
+apart on the ECP5 itself — same family, same node, same design. A ratio
+carried across vendors and process nodes is worth less than that noise floor,
+so no such ratio is computed anywhere in this sweep.
 
 ## What this sweep covered, and what it deliberately left
 
@@ -163,17 +234,59 @@ alongside ECP5 are the SIMD/FPU FPGA figures this task's brief names by file
 and by symptom (Spartan/Artix/130 nm). `cache/l2-spec.md`'s energy-on-FPGA
 figures are the sharper defect found while doing that sweep and are corrected
 in the same commit, since "move all energy claims under `` `[ASIC]` ``" is not
-scoped to one file. A further set of energy-percentage claims exists in
-`ooo/j32ooo-spec.md` and `ooo/j32lt-spec.md` (way-prediction "5–10% energy
-win", the G4/G8 validation gates, the per-cycle activity comparison table) —
-these describe cores that do not exist yet, for a design point ("throughput
-per joule") that is ASIC-only by definition, and are listed here as **found,
-not swept**: each would need the same file-by-file judgement call this record
-took for `l2-spec.md`, and doing that responsibly for two ~800-line
-specifications is more than this task's named scope (SIMD/FPU FPGA figures,
-plus the energy-claim sweep this record's own evidence expanded into) can
-absorb without shortcuts. They are a natural next bite, tracked here rather
-than silently dropped.
+scoped to one file.
+
+**Left inside the files this sweep touched, and not excusable by "not the
+named symptom":**
+
+- `simd/hardware-impl.md` §4 (the swizzle-crossbar area table, "Approximate
+  gate count", ≈1000–8000 gates by lane width) and §5.3 ("Tier 1 area
+  summary", ≈200–5000 gates per feature) — bare gate counts with **no**
+  process or vendor named at all, unlike everything else in this file. This
+  sweep did not resolve whether that silence means "technology-neutral gate
+  equivalent" (defensible) or "unlabelled ASIC estimate" (the same defect as
+  everywhere else in this file, just missing the giveaway vendor name). Listed
+  as genuinely ambiguous rather than guessed at, per this task's own
+  standards.
+
+**Left everywhere else — the tree-wide surface, not just two OoO specs.** An
+earlier draft of this record listed only `ooo/j32ooo-spec.md` and
+`ooo/j32lt-spec.md` as found-but-unswept. A grep for LUT/EBR/MHz/mm²/gate
+patterns across `docs/` (`grep -lrEi` for size, frequency and area shapes)
+turns up figures with no platform tag in at least these further files, none
+of which this task opened:
+
+`hypervisor/design-spec.md`, `hypervisor/hardware-spec.md`,
+`iommu/hardware-spec.md`, `iommu/linux-spec.md`, `j4-remediation-plan.md`
+itself (e.g. "Baseline Fmax (42 vs 80 MHz)", already separately tracked as a
+B1 contradiction, but still untagged prose), `j4-wave0-status.md`,
+`jcore-ulx3s-service-plan.md`, `mmu/design-spec.md`, `mmu/hardware-spec.md`,
+`no-gpu-dual-ecp5-asic.md`, `ooo/j32lt-spec.md`, `ooo/j32ooo-spec.md`,
+`priv-arch/j4-implementation-design.md`, `security/threat-model.md` (which, at
+§9, explicitly defers its own number audit to B0b and B0c — "It does not
+audit every number in every spec; that is B0b... A figure absent from this
+table has not been cleared"), `simd/gpu/architecture.md`,
+`simd/software-impl.md`, `simd/spec.md`, and
+`ulx3s-soc-component-inventory.md`.
+
+That list was produced by a filename-level grep, not by reading each file —
+it says these files *contain* the relevant shapes, not that every occurrence
+in them is a real defect (some may already be correctly scoped by prose, the
+same way several sites this sweep touched were). **The honest summary is: the
+platform-tag principle is not satisfied tree-wide, only in the two files this
+task's brief named plus `cache/l2-spec.md`, `fpu/spec.md`, and this record
+itself.** A reader of this document alone, before this correction, would have
+concluded otherwise. B0b did not have the budget to read seventeen further
+specifications figure-by-figure without shortcuts that would have been worse
+than leaving the list honest; see "What would reopen this".
+
+Within that surface, `ooo/j32ooo-spec.md` and `ooo/j32lt-spec.md` remain the
+most-checked-for case (way-prediction "5–10% energy win", the G4/G8
+validation gates, the per-cycle activity comparison table) — they describe
+cores that do not exist yet, for a design point ("throughput per joule") that
+is `[ASIC]`-only by definition, and each would need the same file-by-file
+judgement call this record took for `l2-spec.md` before it could be tagged
+responsibly.
 
 ## What would reopen this
 
@@ -184,7 +297,23 @@ than silently dropped.
 - **`ooo/j32ooo-spec.md` / `ooo/j32lt-spec.md` get their own platform-tag
   pass.** Until then, treat every energy-percentage figure in those two
   documents as unswept, not as compliant-by-omission.
-- **A mechanical check becomes worth writing** — e.g. if untagged numbers keep
-  landing despite this record, the cost of a conservative (fail-open-tolerant)
-  regex may start to beat the cost of continued manual drift, the same
-  trade [0001](0001-one-authority-per-fact.md) made for `VALUE_SHAPES`.
+- **The tree-wide list in "What this sweep covered" gets worked down.** Each
+  of the seventeen further files either gets tagged or gets a documented
+  reason it needs none; the list here shrinks as that happens, the same
+  burn-down discipline [fact-ownership.md](../fact-ownership.md)'s Waivers
+  table uses. Until then, do not read a green `check-doc-facts.py` run as
+  "the tree is platform-tagged" — it only means no *known-wrong* tag is
+  present (`platform-tag-foreign-part`), not that every figure that needs a
+  tag has one.
+- **`platform-tag-foreign-part` needs a fifth (or Nth) literal.** The list is
+  Spartan/Artix/Kintex/Virtex/Zynq today because those are the names found in
+  the tree; a new foreign FPGA family showing up in a future edit needs its
+  name added to `FOREIGN_FPGA_PARTS_RE`, the same maintenance
+  [0001](0001-one-authority-per-fact.md) already asks of `VALUE_SHAPES`.
+- **A mechanical check for the *absence* of a needed tag becomes worth
+  writing** — e.g. if untagged numbers keep landing despite this record and
+  the enumerated `platform-tag-foreign-part` check, the cost of a
+  conservative (fail-open-tolerant) regex may start to beat the cost of
+  continued manual drift, the same trade [0001](0001-one-authority-per-fact.md)
+  made for `VALUE_SHAPES`. This is a different, harder check than the one
+  added here — see §Enforcement's "what this check does not do".
