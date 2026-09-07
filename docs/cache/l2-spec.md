@@ -56,7 +56,7 @@ The dcache lock state machine (`cache/dcache_ccl.vhm` — `RLOCK1`, `RLOCK2`, `W
 
 The L2 is a **unified, inclusive, write-back, banked, non-blocking, coherent** cache:
 
-- **Unified**: serves all per-core L1-I (read-only) and L1-D (read/write-through) clients. Single tag and data arrays shared.
+- **Unified**: serves all per-core L1-I (read-only) and L1-D clients from a single tag and data array. **The L1-D write policy is tier-dependent** and this bullet used to state only the T0 half: write-through at `[T0]`, write-back under MSI at `[T1/T2]` where a line held `M` is dirty in the L1-D and reaches the L2 on `Wb`. §17.1 owns the policy; [decisions/0007](../decisions/0007-l1d-write-policy-under-msi.md) is the decision and states the DMA consequence, which is the part that changes at T1.
 - **Inclusive of L1**: every line cached in any L1-I or L1-D is also present in L2. L2 evictions force corresponding L1 invalidations. Inclusion is the directory's correctness invariant under T1/T2.
 - **Write-back**: dirty lines stay in L2 until evicted; only writebacks go to SDRAM.
 - **Banked**: 4 banks by address bits (configurable), parallel servicing of non-conflicting requests.
@@ -483,7 +483,7 @@ Unchanged from v1. Per bank (32 KB at baseline): 128 sets × 8 ways × 32-byte l
 
 ### 10.2 Access width
 
-Unchanged. L2 hit returns a full line (32 bytes). Writes from L1-D are 32-bit-word write-throughs (byte-enabled).
+L2 hit returns a full line (32 bytes). **At `[T0]`**, writes from L1-D are 32-bit-word write-throughs (byte-enabled) — unchanged from v1. **At `[T1/T2]`** a store normally lands in the L1-D's `M` line and reaches the array later as a `Wb` (§7.4), so the write-through merge is no longer the common case; both ports exist in one design, per §10.4. This paragraph previously stated the T0 form under a `[T0/T1/T2]` tag it had not earned — see §17.1 and [decisions/0007](../decisions/0007-l1d-write-policy-under-msi.md).
 
 ### 10.3 Way selection
 
@@ -850,9 +850,41 @@ used for the purpose they describe it for.
 
 ## 17. Write Policy and Dirty Bit Handling `[T0/T1/T2]`
 
-### 17.1 Write-through from L1-D
+### 17.1 L1-D write policy: write-through at `[T0]`, write-back at `[T1/T2]`
 
-L1-D writes flow as a coherence message at T1 (`GetM` or `Upgrade` then implicit write into the M-line, finalized with a `Wb` on eviction). T0 uses the v1 write-through-on-each-store path. The L2 tag-array `dirty` bit is set whenever the L2 holds the only up-to-date copy.
+**This section owns the L1-D write policy.** The heading previously read
+"Write-through from L1-D", which contradicted this section's own body and was
+the visible half of a contradiction running through §2, §10.2 and §17.1 against
+§6.3, §7.2, §7.4, §7.5 and §17.2. The decision, its evidence in the shipped RTL,
+the S/I-only alternative it rejects and the DMA obligation it creates are
+[decisions/0007](../decisions/0007-l1d-write-policy-under-msi.md).
+
+- **`[T0]` — write-through, no-allocate on store.** Every store reaches the L2.
+  This is what `jcore-cpu@master` implements: `cache/cache_pkg.vhd`'s L1 line
+  state is a **valid** array with no dirty bit, so an L1-D line cannot be
+  modified-and-held, and `cache/dcache_ccl.vhm` emits a
+  `CACHE_DCMD_WRITESGL_*` / `CACHE_DCMD_WRITEMISS` for every write.
+- **`[T1/T2]` — write-back under MSI.** L1-D writes flow as a coherence message
+  (`GetM` or `Upgrade`, then the store lands in the `M` line), finalized with a
+  `Wb` on `Downgrade`, `Recall` or eviction. `M` means dirty-and-exclusive, per
+  §7.2; the state is unreachable under a write-through L1-D, which is why the
+  two halves of the spec could not both be right.
+
+In both tiers the L2 tag-array `dirty` bit is set whenever the L2 holds the only
+up-to-date copy, and the L2 itself is **write-back toward SDRAM** at every tier
+(§2, §17.2) — that half was never in dispute.
+
+**DMA is not coherent at any tier, and gets harder at T1/T2.**
+[bus/fabric-spec.md §7](../bus/fabric-spec.md) puts only the L2 and the per-core
+L1-D snoop ports on the snoop bus, and the directory's `dir_vec` has one bit per
+core (§7.3), not per bus master. At `[T0]` the write-through L1-D means memory
+is never stale with respect to a CPU, so only device→CPU needs an invalidate. At
+`[T1/T2]` a dirty line can sit in an L1-D that no device transaction snoops, so
+the CPU→device direction needs an explicit write-back (`ocbwb`/`ocbp`, §17.5)
+or an uncached mapping. See
+[decisions/0007](../decisions/0007-l1d-write-policy-under-msi.md) §"The DMA
+consequence" for what this asks of `arch/sh`, and for the routing question it
+leaves open.
 
 ### 17.2 Eviction of dirty lines
 

@@ -281,8 +281,16 @@ A worklist, each item = pick the true value, fix every other doc, add a CI check
 - **Baseline Fmax** (42 vs 80 MHz) — this poisons every throughput table.
 - **Area/BRAM budgets** (OoO ~10k vs 35–45k LUT4; FGMT +1.5–2.5k vs ~13.45k;
   BRAM 104 vs 141 EBR) — supersede with one measured/estimated number (Track D).
-- **L2 write-through vs write-back / MSI-M** (`l2-spec` §2 vs §6-7-17) — this
-  changes correctness, coherence, and the DMA story; resolve before any L2 work.
+- ~~**L2 write-through vs write-back / MSI-M**~~ — **CLOSED**
+  ([cache/l2-spec.md §17.1](cache/l2-spec.md),
+  [decisions/0007](decisions/0007-l1d-write-policy-under-msi.md)). The **L2's**
+  policy was never in dispute (write-back to SDRAM at every tier); the
+  disagreement was the **L1-D**'s, and it was a tier-scoping failure: §2 and
+  §10.2 stated the T0 write-through form under a `[T0/T1/T2]` tag. T0 is
+  write-through — the shipped L1-D has no dirty bit — and T1/T2 are write-back,
+  which is what MSI's `M` state means and what §6.3's local CAS.L requires. The
+  DMA obligation this creates is stated in both places rather than left implied;
+  it is not yet implemented in `arch/sh`.
 - ~~**VIPT vs PIPT L1**~~ — **CLOSED: the answer is PIPT** ([mmu/hardware-spec.md §4.1a](mmu/hardware-spec.md)), established against
   `core/cpu.vhd` rather than adjudicated between documents, with a code binding
   on the relocation bound. `mmu/linux-spec.md` §2.3's VIPT contract and its 4 KB
