@@ -143,7 +143,8 @@ SIZES_VHD = """entity sizes is generic (image_bytes => 520); end entity;
 
 
 def fake_repo(root, name, branch, files, with_origin=False, shallow=False,
-              raw_subject=None):
+              raw_subject=None, dup_subject=None, base_branch=None,
+              origin_branches=()):
     """A throwaway git repo standing in for a submodule.
 
     The checks read code from `origin/<branch>`, so the fixture must publish
@@ -199,6 +200,19 @@ def fake_repo(root, name, branch, files, with_origin=False, shallow=False,
     g("add", "-A")
     g("commit", "-qm", "fixture", "--allow-empty")
     g("update-ref", "refs/remotes/origin/%s" % branch, "HEAD")
+    if base_branch is not None:
+        # An "upstream" ref to subtract, so a fixture can exercise the scoping
+        # in UPSTREAM_BASE: everything committed up to here is upstream, and
+        # everything after it is the project's own work.
+        g("update-ref", "refs/remotes/origin/%s" % base_branch, "HEAD")
+        g("commit", "-qm", "project commit", "--allow-empty")
+        g("update-ref", "refs/remotes/origin/%s" % branch, "HEAD")
+    if dup_subject is not None:
+        # Two commits sharing one subject: the citation then names no single
+        # change. 19,683 subjects on linux's branch are in this state.
+        g("commit", "-qm", dup_subject, "--allow-empty")
+        g("commit", "-qm", dup_subject, "--allow-empty")
+        g("update-ref", "refs/remotes/origin/%s" % branch, "HEAD")
     if raw_subject is not None:
         # A commit subject written byte-for-byte, for the two properties that
         # only raw bytes can exercise: a subject that is not valid UTF-8 (the
@@ -226,6 +240,20 @@ def fake_repo(root, name, branch, files, with_origin=False, shallow=False,
         sha = made.stdout.decode().strip()
         g("update-ref", "HEAD", sha)
         g("update-ref", "refs/remotes/origin/%s" % branch, sha)
+
+    if with_origin:
+        bare = os.path.join(root, "%s-origin.git" % name)
+        subprocess.run(["git", "init", "-q", "--bare", bare], check=True,
+                       env=env, stdout=subprocess.DEVNULL)
+        g("remote", "add", "origin", bare)
+        g("push", "-q", "origin", "HEAD:refs/heads/%s" % branch)
+        # Further branches the fixture's markers name, so a case testing the
+        # merge question is not also tripping the branch-existence arm.
+        for extra in origin_branches:
+            g("push", "-q", "origin", "HEAD:refs/heads/%s" % extra)
+    # BEFORE the shallow block: git refuses to push from a shallow
+    # repository, so a fixture that wants both an origin and a truncated
+    # history has to publish first and truncate second.
     if shallow:
         # A genuine shallow clone: git treats a repo as shallow exactly when
         # $GIT_DIR/shallow exists and names graft points. Two commits, with the
@@ -240,12 +268,6 @@ def fake_repo(root, name, branch, files, with_origin=False, shallow=False,
                                 capture_output=True, text=True, env=env)
         gd = os.path.join(repo, gitdir.stdout.strip())
         write_in(root, os.path.join(gd, "shallow"), head.stdout)
-    if with_origin:
-        bare = os.path.join(root, "%s-origin.git" % name)
-        subprocess.run(["git", "init", "-q", "--bare", bare], check=True,
-                       env=env, stdout=subprocess.DEVNULL)
-        g("remote", "add", "origin", bare)
-        g("push", "-q", "origin", "HEAD:refs/heads/%s" % branch)
     return repo
 
 
@@ -289,7 +311,8 @@ def write_in(tmp, path, text):
 
 def build(tmp, registry=REGISTRY, glossary=GLOSSARY, simd=SIMD, extra=None,
           p4_map=P4_MAP, cpu_files=None, no_cpu_repo=False, cpu_origin=False,
-          cpu_shallow=False, cpu_raw_subject=None):
+          cpu_shallow=False, cpu_raw_subject=None, cpu_dup=None,
+          cpu_base=None, cpu_origin_branches=()):
     docs = os.path.join(tmp, "docs")
     os.makedirs(sandboxed(tmp, os.path.join(docs, "decisions")), exist_ok=True)
     write_in(tmp, os.path.join(docs, "fact-ownership.md"), registry)
@@ -302,7 +325,9 @@ def build(tmp, registry=REGISTRY, glossary=GLOSSARY, simd=SIMD, extra=None,
                  "docs/insns.json": '{"instructions": []}\n'}
         files.update(cpu_files or {})
         fake_repo(tmp, "jcore-cpu", "master", files, with_origin=cpu_origin,
-                  shallow=cpu_shallow, raw_subject=cpu_raw_subject)
+                  shallow=cpu_shallow, raw_subject=cpu_raw_subject,
+                  dup_subject=cpu_dup, base_branch=cpu_base,
+                  origin_branches=cpu_origin_branches)
     for name, text in (extra or {}).items():
         write_in(tmp, os.path.join(docs, name), text)
     return tmp
@@ -335,14 +360,31 @@ def run(tmp, checker, *flags):
 CASES = []
 
 
-def case(name, expect_fail, expect_check=None, **kw):
+def case(name, expect_fail, expect_check=None, expect_text=None,
+         reject_text=None, **kw):
     """expect_fail=True  -> the checker must exit non-zero.
        expect_fail=False -> it must exit zero.
 
     expect_check names the check that must appear in a FAIL line. Exit status
     alone cannot tell "the check I meant fired" from "something else did", so
-    a later change could silently move a case onto a different failure."""
+    a later change could silently move a case onto a different failure.
+
+    expect_text goes one level finer: a substring that must appear in the
+    output. It exists because `expect_check` is not always enough -- several
+    distinct arms report under one check name, and mutation testing found two
+    that a case could not tell apart. Dropping the ambiguity arm from
+    `resolved-is-merged` left the case red under the SAME check, with the
+    message "is not on ... origin/master" instead of "which N commits share";
+    the case passed and the mutant lived. Use it wherever the check name does
+    not identify the arm."""
     kw["expect_check"] = expect_check
+    kw["expect_text"] = expect_text
+    # reject_text asserts a substring is ABSENT. Some defects add output rather
+    # than removing it: dropping the early return after a missing upstream base
+    # left the correct skip in place and then stumbled on into
+    # `origin/None..origin/master`, so every positive assertion still held and
+    # the mutant lived. "Nothing else fired" is sometimes the whole claim.
+    kw["reject_text"] = reject_text
     def wrap(fn):
         CASES.append((name, expect_fail, fn, kw))
         return fn
@@ -1326,6 +1368,101 @@ def _(tmp):
         '# S\n\n> **RESOLVED 2026-08-25 — jcore-cpu@master: "no such commit".**\n'})
 
 
+@case("complete history + absent subject FAILS", True,
+      expect_check="resolved-is-merged",
+      expect_text="Either it is not merged")
+def _(tmp):
+    # The check's CORE claim, and nothing asserted it: a mutant that always
+    # skipped on absence survived the whole suite, because every other absence
+    # case was shallow. This is the complete+absent cell of 0002's table.
+    build(tmp, extra={"spec.md":
+        '# S\n\n> **RESOLVED 2026-08-25 \u2014 jcore-cpu@master: "no such commit".**\n'})
+
+
+@case("a subject shared by two commits FAILS as ambiguous", True,
+      expect_check="resolved-is-merged",
+      expect_text="which 2 commits on jcore-cpu share")
+def _(tmp):
+    # "Which commit does this cite?" has no answer. Both are on the branch, so
+    # the merge question is technically yes -- and the citation has stopped
+    # naming a change, which is what 0002 asks of it.
+    build(tmp, cpu_dup="ambiguous subject", extra={"spec.md":
+        '# S\n\n> **RESOLVED 2026-08-25 \u2014 jcore-cpu@master: "ambiguous subject".**\n'})
+
+
+@case("an UPSTREAM subject is out of scope and FAILS", True,
+      expect_check="resolved-is-merged",
+      mutate=(('UPSTREAM_BASE = {\n    "linux": "master",\n}',
+               'UPSTREAM_BASE = {\n    "linux": "master",\n    "jcore-cpu": "base",\n}'),))
+def _(tmp):
+    # The 1a defect, in miniature. "fixture" is committed before the base ref,
+    # so it is upstream, not this project's work. Unscoped it matched and a
+    # RESOLVED marker citing an unrelated real commit passed; against the real
+    # linux fork the haystack was 1,462,492 commits instead of 74.
+    build(tmp, cpu_base="base", extra={"spec.md":
+        '# S\n\n> **RESOLVED 2026-08-25 \u2014 jcore-cpu@master: "fixture".**\n'})
+
+
+@case("a PROJECT subject is in scope and passes", False,
+      mutate=(('UPSTREAM_BASE = {\n    "linux": "master",\n}',
+               'UPSTREAM_BASE = {\n    "linux": "master",\n    "jcore-cpu": "base",\n}'),))
+def _(tmp):
+    # The other half: scoping must not reject the project's own commits, or it
+    # would fail every correct marker and be reverted within a week.
+    build(tmp, cpu_base="base", extra={"spec.md":
+        '# S\n\n> **RESOLVED 2026-08-25 \u2014 jcore-cpu@master: "project commit".**\n'})
+
+
+@case("a missing upstream base SKIPS rather than searching the wrong haystack",
+      True, expect_check="resolved-is-merged", flags=("--strict",),
+      expect_text="has no origin/absent-base",
+      reject_text="could not read",
+      mutate=(('UPSTREAM_BASE = {\n    "linux": "master",\n}',
+               'UPSTREAM_BASE = {\n    "linux": "master",\n    "jcore-cpu": "absent-base",\n}'),))
+def _(tmp):
+    # `A..B` with a missing A is empty, not an error, so a vanished base would
+    # silently search nothing and fail every marker. Falling back to the whole
+    # branch would silently search the wrong haystack. Neither: skip.
+    build(tmp, extra={"spec.md":
+        '# S\n\n> **RESOLVED 2026-08-25 \u2014 jcore-cpu@master: "fixture".**\n'})
+
+
+@case("PENDING-MERGE whose subject IS on the branch fails", True,
+      expect_check="pending-is-not-merged")
+def _(tmp):
+    # The arm that catches a marker somebody forgot to promote. Unfixtured
+    # until now: a mutant dropping it survived.
+    build(tmp, cpu_origin=True, cpu_origin_branches=("f/x",),
+          extra={"spec.md":
+        '# S\n\n> **PENDING-MERGE 2026-08-25 \u2014 jcore-cpu branch f/x: '
+        '"fixture". Not on master.**\n'})
+
+
+@case("PENDING-MERGE on a shallow clone cannot confirm absence", True,
+      expect_check="pending-is-not-merged", flags=("--strict",),
+      expect_text="absence may only mean truncation")
+def _(tmp):
+    # The mirror image advertised in 0002's table, and unfixtured until now.
+    # This marker's whole claim is absence, and on a truncated history absence
+    # is exactly what cannot be confirmed.
+    build(tmp, cpu_shallow=True, cpu_origin=True, cpu_origin_branches=("f/x",),
+          extra={"spec.md":
+        '# S\n\n> **PENDING-MERGE 2026-08-25 \u2014 jcore-cpu branch f/x: '
+        '"fixture". Not on master.**\n'})
+
+
+@case("a Registry Constant cell over 100 chars fails", True,
+      expect_check="registry-value-is-short")
+def _(tmp):
+    # Round-1 R1c: this check had zero fixtures naming it. It is the substitute
+    # 0001 accepted for a prose-vs-owner check it could not write cleanly, so
+    # it carries more weight than its size suggests.
+    build(tmp, registry=REGISTRY.replace(
+        "SIMD context image: **520 bytes**",
+        "SIMD context image: **520 bytes** " + "and a great deal of explanation "
+        "that belongs in the owning spec rather than in this table" ))
+
+
 @case("a subject split by splitlines() but not by git does not match", True,
       expect_check="resolved-is-merged", flags=("--strict",))
 def _(tmp):
@@ -1594,10 +1731,14 @@ def main():
                 rc, out = run(tmp, this, *kw.get("flags", ()))
                 crashed = "Traceback" in out
                 want = kw.get("expect_check")
+                want_text = kw.get("expect_text")
+                banned = kw.get("reject_text")
                 # argparse rejecting a flag is not a check firing.
                 argparse_error = rc == 2 and "unrecognized arguments" in out
                 status_ok = (rc != 0) == expect_fail
                 right_check = (want is None or ("[%s]" % want) in out)
+                right_text = (want_text is None or want_text in out)
+                clean = (banned is None or banned not in out)
                 # `expect_check` is only *load-bearing* where exit status agrees
                 # and the check identity is what disagrees. Labelling a case
                 # "wrong check fired" when the exit status also mismatched
@@ -1606,7 +1747,8 @@ def main():
                 # the honest number was 1.
                 only_check = status_ok and expect_fail and not right_check
                 ok = ((not crashed) and (not argparse_error)
-                      and status_ok and (right_check or not expect_fail))
+                      and status_ok and (right_check or not expect_fail)
+                      and right_text and clean)
                 if ok:
                     passed += 1
                     status = "pass"
@@ -1619,6 +1761,10 @@ def main():
                         caught_by["argparse guard"] += 1
                     elif only_check:
                         caught_by["expect_check"] += 1
+                    elif not right_text:
+                        caught_by["expect_text"] += 1
+                    elif not clean:
+                        caught_by["reject_text"] += 1
                     else:
                         caught_by["exit status"] += 1
                 why = ""
@@ -1628,6 +1774,11 @@ def main():
                     why = "  [argparse rejected a flag -- not a check]"
                 elif only_check:
                     why = "  [exit status agreed; WRONG CHECK fired, wanted %s]" % want
+                elif not right_text:
+                    why = ("  [exit status and check agreed; wanted message %r]"
+                           % want_text)
+                elif not clean:
+                    why = "  [output contained %r, which must not appear]" % banned
                 elif expect_fail and not status_ok:
                     why = "  [exited 0; expected a failure]"
                 elif not expect_fail and not status_ok:

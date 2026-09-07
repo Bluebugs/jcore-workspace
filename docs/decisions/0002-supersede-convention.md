@@ -269,6 +269,45 @@ for the same reason.
 The fix on a developer's machine is `git -C <sub> fetch --unshallow
 --filter=tree:0`; in CI it is `--filter=tree:0` at clone time, never `--depth`.
 
+### The subject is only as strong as the namespace it is searched in
+
+Unshallowing exposed a second, larger problem, and it is a problem this record
+created: §3 chose subject-line citation, and the depth rule above then made a
+found subject a PASS at any depth. Both are right in isolation. Together they
+searched **1,462,492** commit subjects for a citation that names one of this
+project's own changes — 1,410,912 of them distinct, **19,683** shared by more
+than one commit, and **445** already beginning `sh: fix`, which is this
+project's own convention. A `RESOLVED` marker citing *"sh: Fix build with
+CONFIG_UBSAN=y"* — a real commit, unrelated to anything here — passed. The
+mirror is the same defect the other way up: a *correct* `PENDING-MERGE` citing
+that subject was forced red with "which IS on the branch. Promote it."
+
+That is the wrong haystack, not a bad rule. A marker cites a change **this
+project** made, and on a kernel fork those are a rounding error next to the
+history they sit on: `linux` `origin/jcore` carries 1,462,492 commits, of which
+**74** are the project's. So the search is scoped to
+`origin/<base>..origin/<integration-branch>`, with the base declared per
+repository in `UPSTREAM_BASE` (`linux` → `master`; `jcore-cpu` has none, because
+all 1080 of its commits are the project's own and none of its subjects repeats).
+Verified when this landed: all 12 distinct live markers resolve to exactly one
+commit under this scoping, and none of the 7 `linux` ones exists upstream.
+
+**And a subject that names several commits names none of them.** Resolution is
+now by count: 0 → absent (the depth table above), 1 → merged, more than 1 →
+**fail**, because the citation has stopped identifying a change even though all
+the candidates are on the branch. The remedy in that message is to reword the
+subject or use the artifact form.
+
+**What this still does not prove, stated plainly because the check's name
+overpromises.** A subject citation establishes that *a commit with this subject
+is on the branch*. It does not establish that the commit is the change the
+marker is about. No string-matching scheme can: scoping shrinks the haystack by
+19,700× and ambiguity detection removes the coin flips, but a marker citing a
+real, in-scope, unique commit that has nothing to do with its section will pass.
+That is the residual, and it is why §3 already prefers the **artifact** form
+where identity matters — an artifact is the thing itself rather than a claim
+about it. A reviewer who wants certainty should ask for one.
+
 One further hazard found by actually doing this, recorded because it was hidden
 by the shallow clone and appeared the instant it was not: **commit subjects are
 bytes, not text.** The Linux history contains subjects that are not valid UTF-8,
