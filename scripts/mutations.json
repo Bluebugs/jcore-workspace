@@ -51,6 +51,15 @@
      "old": "        if len(fact.value) > VALUE_CELL_MAX:", "new": "        if False:"},
     {"name": "strict-skip annotation dropped",
      "old": "            if self.ANNOTATE:\n                print(\"::error title=%s::(skipped, --strict) %s\"",
-     "new": "            if False:\n                print(\"::error title=%s::(skipped, --strict) %s\""}
+     "new": "            if False:\n                print(\"::error title=%s::(skipped, --strict) %s\""},
+    {"name": "wording: quote escape swallows every line",
+     "old": "            if any(q in low for q in UNMEASURED_QUOTE_PHRASES):",
+     "new": "            if True:"},
+    {"name": "wording: half-phrase arm dropped",
+     "old": "                if len(half.findall(line)) > canonical:",
+     "new": "                if False:"},
+    {"name": "wording: retired-marking arm dropped",
+     "old": "            if RETIRED_MARKING_RE.search(line):",
+     "new": "            if False:"}
   ]
 }

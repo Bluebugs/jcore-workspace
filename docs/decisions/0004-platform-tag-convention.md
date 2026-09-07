@@ -2,6 +2,14 @@
 
 **Status:** Accepted 2026-09-07. Wave-1 task B0b, from
 [j4-remediation-plan.md §B0](../j4-remediation-plan.md).
+**Partly superseded 2026-09-07 by
+[0005](0005-unmeasured-figures-are-removed.md)**: rule 3, rule 4's marking
+half, and §Marking convention are replaced — an unmeasured figure is now
+*removed* and its place reads that it is unknown, rather than kept with prose
+beside it. Everything else here — the tag itself (rule 1), energy is
+`` `[ASIC]` ``-only (rule 2), no cross-platform scaling (rule 5), what needs no
+tag (rule 6), split mixed claims (rule 7), and the `platform-tag-foreign-part`
+check — stands.
 
 ---
 
@@ -71,16 +79,21 @@ not a re-tag — see that file's diff.
 Lattice ECP5, ~40 MHz.** A figure measured on a different FPGA family —
 Spartan, Artix, Kintex, Virtex, all Xilinx, none of them what this project
 builds on — is not made `` `[FPGA]` `` by tagging it, because the tag would then
-assert it describes current hardware, which it does not. Those figures are
-**marked**, not retagged: state the platform actually measured, that it is not
-the current target, and what would produce the real number. See §Marking
-convention below.
+assert it describes current hardware, which it does not. **The second half of
+this rule is superseded by [0005](0005-unmeasured-figures-are-removed.md):**
+it previously read that such figures are kept and marked in prose; they are now
+removed, and the cell reads that the value is unknown and needs measuring. Only
+the third of the marking convention's three points — say what would produce the
+real number — survives. See §Marking convention below, which carries the
+marker.
 
-**4. `` `[ASIC]` `` should name its process node when known.** The existing
-130 nm figures in `simd/hardware-impl.md` come from "the J2 reference flow" —
-an older, unrelated node, not gf180 (this project's ASIC methodology vehicle
-per principle 1). They are marked for the same reason as rule 3: tagging them
-bare `` `[ASIC]` `` would silently imply they describe the gf180 target.
+**4. `` `[ASIC]` `` should name its process node when known.** That much
+stands. The 130 nm figures in `simd/hardware-impl.md` that this rule was written
+about came from "the J2 reference flow" — an older, unrelated node, not gf180
+(this project's ASIC methodology vehicle per principle 1) — and tagging them
+bare `` `[ASIC]` `` would have implied they describe the gf180 target.
+**Superseded by [0005](0005-unmeasured-figures-are-removed.md) in the same way
+as rule 3:** they are not marked, they are gone.
 
 **5. No cross-platform or cross-node arithmetic scaling.** This task does not
 convert a Spartan/Artix LUT6 count into an ECP5 LUT4 estimate, and does not
@@ -138,6 +151,14 @@ whoever next revisits `threat-model.md` §9, not to a platform-tag sweep.
 
 ## Marking convention, for a figure that cannot be honestly retargeted
 
+> **SUPERSEDED BY [decisions/0005 §Decision](0005-unmeasured-figures-are-removed.md) — 2026-09-07.**
+> A figure that cannot be honestly retargeted is now removed, not marked: its
+> place carries 0005's one canonical phrase for a value nobody has measured,
+> and only point 3 below (what would produce the real number) is kept. The section is retained
+> per [0002](0002-supersede-convention.md) §1 as the record of what 0005
+> replaced — it is not current practice, and the retired wording below must not
+> be applied to new text.
+
 A marked figure states, in prose next to the number, all three of:
 
 1. **What platform it actually describes** (part family, process node).
@@ -183,6 +204,14 @@ not use the bracket form. This is exactly the enumeration `decisions/README.md`
 asks for ("a decision with no enforcement is a preference") and exactly the
 shape [0001](0001-one-authority-per-fact.md) uses for `VALUE_SHAPES` — a
 reach that is stated, not claimed complete.
+
+**Retained under [0005](0005-unmeasured-figures-are-removed.md), unchanged.**
+With the foreign figures removed from the tree rather than marked, this check
+now has nothing to fire on. That is what a check looks like after it has done
+its job, not a reason to relax it: it is what notices a Spartan/Artix/Kintex/
+Virtex/Zynq figure re-entering the tree *with a tag on it*, which is the shape
+the next person reaching for an external datapoint will produce. 0005 adds a
+second check (`unmeasured-figure-wording`) beside it rather than replacing it.
 
 **What this check does not do, stated so the green run is not over-read.** It
 catches a tag placed somewhere it shouldn't be. It does **not** catch a figure
@@ -291,9 +320,11 @@ responsibly.
 ## What would reopen this
 
 - **A gf180 or ECP5 synthesis run lands for the Tier A/B/C SIMD crypto unit.**
-  The marked figures in `simd/hardware-impl.md` §6 and §11 get replaced with
-  real numbers, tagged normally, and the marking notes are removed rather than
-  kept as decoration.
+  The unknown cells in `simd/hardware-impl.md` §6 and §11 get replaced with real
+  numbers, tagged normally, and the "what would produce it" lines are removed
+  rather than kept as decoration. (Those sections previously read as marked
+  foreign figures; per
+  [0005](0005-unmeasured-figures-are-removed.md) they no longer do.)
 - **`ooo/j32ooo-spec.md` / `ooo/j32lt-spec.md` get their own platform-tag
   pass.** Until then, treat every energy-percentage figure in those two
   documents as unswept, not as compliant-by-omission.
