@@ -1183,17 +1183,13 @@ two adds per output. A pipelined implementation produces both
 outputs in 3–6 cycles. The table consumes about 256 × 32 bits = 1 KB
 of ROM. STRUCTURAL ([security/threat-model.md §9](../security/threat-model.md)
 provenance scale), not platform-tagged: 8 Kb of table data fits in a single
-18 Kb block RAM on any family with that block size and enough port width for
-a 256×32 aspect ratio — both ECP5 (Phase-1 target) and Spartan-6 (the
-original wording's target) qualify, since both expose configurable
-depth/width block RAM at 18 Kb. (Lattice calls its 18 Kb block an **EBR**,
-not "BRAM18" — that name is Xilinx's, corrected here rather than left
-implying a part this project isn't building on.) This holds by construction
-from the block size, the table size and the aspect ratio, not from a
-synthesis result, and — per [decisions/0004](../decisions/0004-platform-tag-convention.md)
-rule 6 — a fact that holds across any correctly-implemented target does not
-carry a platform tag; tagging it `[FPGA]` here would be the same over-tagging
-that rule warns against.
+18 Kb block RAM — one **EBR** on the Phase-1 ECP5, and one block on any other
+family whose block is 18 Kb and whose ports reach a 256×32 aspect ratio. This
+is capacity arithmetic — table size against block size — not a synthesis
+result, which is why it is stated as a fact rather than as an unknown
+([decisions/0005](../decisions/0005-unmeasured-figures-are-removed.md) rule 5),
+and per [decisions/0004](../decisions/0004-platform-tag-convention.md) rule 6 a
+fact that holds on any correctly-implemented target carries no platform tag.
 
 ### 6.9 FSRRA — reciprocal square root approximation. [T1]
 
@@ -1252,10 +1248,9 @@ for general inputs.
 
 **Latency hint for implementers.** Table lookup + optional one or
 two refinement multiplies and adds. 3–5 cycles pipelined. Table
-consumes one 18 Kb block RAM — STRUCTURAL
+consumes one 18 Kb block RAM — one EBR on the ECP5. STRUCTURAL
 ([security/threat-model.md §9](../security/threat-model.md)), not
-platform-tagged, same reasoning and same ECP5-naming correction (EBR, not
-"BRAM18") as §6.8 above.
+platform-tagged, same capacity arithmetic as §6.8 above.
 
 ### 6.10 Coprocessor protocol extension for vector beats. [T1]
 

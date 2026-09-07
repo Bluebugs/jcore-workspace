@@ -933,7 +933,7 @@ Unchanged from v1 §16.3 (capacity-driven; coherence does not change capacity).
 | Lock state machine (per bank, distributed)         | (distributed) | (distributed) | 0 |
 | **Subtotal**                                       |               |           | **~69** |
 
-Approximately identical EBR count to v1 (the directory and lock bits fit inside the existing tag-array headroom). Allowance for a small snoop-port FIFO at each L1-D adds 0 EBRs (distributed RAM).
+Approximately identical EBR count to v1 (the directory and lock bits fit inside the existing tag-array headroom). Allowance for a small snoop-port FIFO at each L1-D adds 0 EBRs (distributed RAM). These counts are **capacity arithmetic** — array size divided by the 18 Kb EBR — not a synthesis result, which is why they are stated exactly rather than as unknowns.
 
 T2 grows tag array by +8 bits/line → +~2 EBRs total → **~71 EBRs**.
 
@@ -943,34 +943,17 @@ On ULX3S 85F (208 EBRs total), the L2 uses ~33–34% of available BRAM. Combined
 
 Unchanged from v1: time-multiplex within bank with a 1-cycle pipeline stage for arbitration. Snoop traffic gets a dedicated 1-cycle slot every 4 cycles guaranteed (round-robin among the bank's port consumers) to bound snoop latency.
 
-### 20.3 Power estimate — retracted, no platform established
+### 20.3 Power — `[ASIC]` only
 
-> **B0b (platform-tag sweep), 2026-09-07 — retraction, not a re-tag, and not
-> an `[ASIC]` figure either.** This subsection previously read: "T1 adds
-> ~10–15 mW dynamic across the coherence FSM and snoop driver. Total L2 power
-> on ECP5-85F at 90 MHz: ~40–65 mW. Still negligible at FPGA scale." A first
-> pass of this retraction re-tagged the number `[ASIC]`, which was itself
-> wrong: the figure was estimated *for* an ECP5-85F at 90 MHz, never for any
-> ASIC process, and [decisions/0004](../decisions/0004-platform-tag-convention.md)
-> rule 4 requires an `[ASIC]` figure to name a node — this one cannot,
-> because it has none. Moving a number to a platform nothing produced it on
-> is the same defect this whole record exists to remove, just relocated.
->
-> The sharper argument for retracting it outright, found on a second look:
-> the two copies of this number **disagreed with each other inside this one
-> document**. §20.3 called it "Total L2 power … at 90 MHz"; the Appendix B row
-> for the same figure called it "Static power adder". Total and static are
-> different quantities, and a number that changes what it means between two
-> places in one file was never produced by a tool run against anything — that
-> is what makes the retraction unarguable, independent of the platform
-> question above. Per [j4-remediation-plan.md](../j4-remediation-plan.md)
-> guiding principle 1 and Track D0, energy is out of scope for Phase-1 and
-> not measurable on the ECP5 in any case, so even a self-consistent version of
-> this figure would need retracting as an FPGA claim. It is not deleted (a
-> claim is never silently dropped), only reduced to what can honestly be said
-> about it.
+Energy and power are `[ASIC]`-only for this project
+([j4-remediation-plan.md](../j4-remediation-plan.md) guiding principle 1 and
+Track D0): energy is not measurable on the ECP5, and Phase-1's goals are
+correctness, area and boot-to-Linux.
 
-**No power figure for this block exists on any target.** The ~10–15 mW / ~40–65 mW numbers above are an unsourced estimate (in the sense of [security/threat-model.md §9](../security/threat-model.md)'s provenance scale — no in-tree measurement backs it, on any process) whose platform was never established — not measured on the ECP5 (energy isn't measurable there, per principle 1), and not an ASIC figure either, since no process node was ever behind it. **What would settle it:** on the `[FPGA]` side, nothing — board power is a vendor place-and-route output, not something worth hand-estimating, and per project direction it isn't the goal there anyway. On the `[ASIC]` side, a gate-level power estimate under the gf180 flow (Track D0), driven by real switching activity from a trace, tagged `[ASIC]` with the node it actually used.
+**L2 power, static and dynamic: unknown at this stage — needs measurement.**
+A gate-level power run under the gf180 flow (Track D0), driven by switching
+activity from a real trace, produces it — tagged `[ASIC]` with the node it
+used.
 
 ---
 
@@ -992,7 +975,13 @@ Unchanged from v1: time-multiplex within bank with a 1-cycle pipeline stage for 
 | **L1-D snoop-port upgrade (per core × 2)**      |       — |          600 |   +600 | Extends `dcache_snoop_io_t` v2              |
 | **L1-D MSI state bits (per core × 2)**          |       — |          200 |   +200 | 2 extra tag bits and update logic           |
 
-Total system delta v1 → v2 at T1: **+5,400 LUT4 equivalents** in cache subsystem. Combined with the existing OoO budget ([j32ooo-spec.md §15](../ooo/j32ooo-spec.md): 248k gates ≈ 35–45k LUT4), the v2 coherent L2 adds ~12% to the cache LUT count and ~3% to the full core-plus-cache LUT count. **Fits on ECP5-85F alongside dual-core OoO** with ~50% LUT and ~70% BRAM utilization, leaving room for FPU, SIMD, and SoC peripherals.
+Total system delta v1 → v2 at T1: **+5,400 LUT4 equivalents** in cache subsystem. Combined with the existing OoO budget ([j32ooo-spec.md §15](../ooo/j32ooo-spec.md): 248k gates ≈ 35–45k LUT4), the v2 coherent L2 adds ~12% to the cache LUT count and ~3% to the full core-plus-cache LUT count.
+
+**The whole of this section is a budget, not a measurement.** It says what the
+design is allowed to cost, and the ~50% LUT / ~70% BRAM ECP5-85F utilisation it
+implies — leaving room for FPU, SIMD and SoC peripherals — is the budget's own
+arithmetic. Whether the RTL meets it is unknown at this stage — needs measurement; `yosys` + `nextpnr-ecp5` on the
+ULX3S 85F is what answers that.
 
 T2 additional delta over T1: negligible LUT (~+100 for wider compares), +2 EBRs (wider tags).
 
@@ -1143,6 +1132,11 @@ Wider project terms (FGMT, ASID, BMID, …) live in [glossary.md](../glossary.md
 
 ## Appendix B: Resource Cost Summary on ULX3S 85F `[FPGA]` `[T1 baseline]`
 
+**These are budget figures, not synthesis results.** The EBR row is capacity
+arithmetic (§20.1) and the DSP row is structural; the LUT4 and FF rows are the
+§21 budget. Nothing here has been through `yosys` + `nextpnr-ecp5` on the
+ULX3S 85F, so the utilisation actually achieved is unknown at this stage — needs measurement.
+
 | Resource         | Count       | % of ULX3S 85F |
 | ---------------- | ----------: | -------------: |
 | EBRs (18 Kb)     |    ~69 (T1) / ~71 (T2) |  ~33–34% |
@@ -1150,7 +1144,7 @@ Wider project terms (FGMT, ASID, BMID, …) live in [glossary.md](../glossary.md
 | DSP slices       |            0 |             0% |
 | FFs (registers)  |       ~3,000 |            ~4% |
 | Engineering effort | ~12 weeks (v1 base + coherence + line-lock) | — |
-| Power adder | retracted, no platform established — see §20.3 (the Total/Static naming disagreed with itself; not an FPGA figure, not an ASIC figure either) | — |
+| Power adder | out of scope on `[FPGA]` — energy is `[ASIC]`-only (§20.3) | — |
 
 ## Appendix C: Cross-document anchors
 
