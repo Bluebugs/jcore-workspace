@@ -86,6 +86,14 @@ are the substitute for a check that cannot be written cleanly — see
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
+B1 added `ooo.uops.rte`, `platform.endianness`, `platform.fmax.floor`,
+`platform.fmax.j4.floor`, `mmu.l1.pipt`, `cache.l1d.write`, `mmu.p4.segment`,
+`mmu.p4.window`, `mmu.tsbbr.p1`, `mmu.tlb.itlb` and `mmu.tlb.dtlb`. All but two
+carry a code binding: `ooo.uops.rte` has a value guard instead (the uop count is
+not a constant in any tree), and `cache.l1d.write` has neither — see
+[decisions/0007 §Enforcement](decisions/0007-l1d-write-policy-under-msi.md) for
+why, which is that the T0 property is the *absence* of a dirty bit and T1/T2 has
+no RTL at all.
 
 ## Code bindings
 
@@ -295,7 +303,8 @@ new file.
 
 | Fact | State | Owned by (task) |
 |---|---|---|
-| **P4 register offsets vs real SH-4** (QACR0/QACR1/CCR/CPUINFO) | Partly settled. `TRA`/`EXPEVT`/`INTEVT` and `MMUFSR` are resolved in [soc/p4-mmio-map.md §7](soc/p4-mmio-map.md); the SH-4-compat policy for the rest is not. | Wave-2 **B1**, gated on **B2** (SH-4-as-guest model) |
+| **P4 SH-4 compatibility of QACR0/QACR1/CCR** | The *placement* rule is settled: [soc/p4-mmio-map.md §5](soc/p4-mmio-map.md) rule 8 classifies every MMU-block offset as alias / J-Core addition / deliberate divergence, and every offset the RTL decodes now matches the map. What is not settled is **behaviour**: QACR0/QACR1 are allocated and undecoded, and `CCR` is allocated nowhere. Both need the emulated-SH-4 surface. | Wave-2 **B2** (SH-4-as-guest model) |
+| **CPU P4 decode width vs the P4 block allocation** | Contradictory, and this one is hardware. [soc/p4-mmio-map.md §3.2a](soc/p4-mmio-map.md): `datapath.vhm` gates on `VA[31:24] == 0xFF` and compares only `ma_ad[7:0]`, so on a `PRIV_ARCH` build it consumes all 16 MB of P4 and no block outside its 18 registers is reachable — while §3 of the same map allocates seven such blocks. Both widths are code-bound so neither can move quietly. | **RTL / SoC integration**, not a doc task; found by Wave-2 **B1** |
 | **Instruction encodings** | Not a registry fact by design, and **no longer unresolved as to which file**: [decisions/0003](decisions/0003-canonical-encoding-database.md) makes `jcore-cpu/docs/insns.json` canonical and deletes this repo's copy. Checked by `insns2asm --emit check` and `cpugen insns -check`; prose specs cite it and must not restate bit patterns. | Wave-2 **B4** (the sweep itself) |
 
 ## Waivers

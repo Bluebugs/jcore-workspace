@@ -274,6 +274,29 @@ high-leverage fix)
 
 A worklist, each item = pick the true value, fix every other doc, add a CI check:
 
+> **B1 status — 2026-09-07.** Worked. Every item below is annotated in place
+> with what it resolved to and where the answer now lives. Three things this
+> worklist got wrong about itself, recorded because they are the reusable part:
+>
+> - **Two of the three "area/BRAM" contradictions were not contradictions** — a
+>   unit mismatch (gates vs LUT4) and a scope mismatch (one core vs two). Only
+>   the OoO LUT4 spread was real, and neither of its sides is measured, so
+>   [decisions/0005](decisions/0005-unmeasured-figures-are-removed.md) applies
+>   rather than adjudication.
+> - **Three items were already closed** before this task and are verified, not
+>   re-done: CPUINFO `0x030`/`0x02C`, `TSB_SIZE_LOG` counting sets, and the
+>   EXPEVT *assignments*.
+> - **The "J4" naming item resolves against the glossary**, not for it. See the
+>   long-tail bullet.
+>
+> Eleven registry rows, ten code bindings and one value guard were added,
+> taking `doc-matches-code` from 5 comparisons to 15. Two waiver rows went — one
+> ordinary `restatement-is-linked` row, and the registry's only `value-free`
+> fence together with the row licensing it. Five rows of
+> [security/threat-model.md §11](security/threat-model.md) that named B1 as
+> owner are closed too — that table is part of this worklist and the bullets
+> below are not the whole of it.
+
 - **P4 register map vs real SH-4** — **PARTLY CLOSED.** The map and
   `datapath.vhm` now agree on every offset the RTL decodes; the three stale
   "undecoded in RTL" claims about TRA/EXPEVT/INTEVT/MMUFSR are gone; QACR0 and
