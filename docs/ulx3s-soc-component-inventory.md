@@ -2,8 +2,10 @@
 
 **Status:** High-level decomposition (brainstorm output)
 **Date:** 2026-06-01
-**Context:** The J2 CPU now synthesizes for ECP5 (yosys+ghdl, abc9; ~42 MHz; see
-`mountain-reverie/jcore-cpu` PRs and `memory/ulx3s-boot-ghdl-yosys-approach.md`).
+**Context:** The J2 CPU now synthesizes for ECP5 (yosys+ghdl, abc9). The
+measured clock, and the per-variant figures that matter more than the J2 one,
+are [platform-baseline.md §3](platform-baseline.md) — this line previously
+carried a bare `~42 MHz` of its own.
 This doc inventories everything needed to build a full SoC on the ULX3S
 (LFE5U-85F) and proposes an incremental build order. Companion to
 [`jcore-ulx3s-service-plan.md`](jcore-ulx3s-service-plan.md).

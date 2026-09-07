@@ -740,7 +740,7 @@ Key microarchitecture points the spec pins down:
 - **~10K LUT4 per core** for the dual-issue logic, wakeup, bypass, scoreboarding
 - **SH4 memory model preserved:** stores commit in program order; loads OoO with LSQ hazard checks; `synco` drains the LSQ; CAS.L drains and re-issues without speculation past
 - **Atomicity:** CAS.L now uses **L2 per-line lock** (see [cache/l2-spec.md §6](cache/l2-spec.md)) for J32-OOO and beyond, not legacy bus-lock; J2 cores without L2 keep bus-lock for backward compatibility
-- **Fmax expectation:** ~50–65 MHz on ECP5-6 (down from in-order's ~80 MHz), but ~1.4–1.8× wall-clock improvement on memory-bound tenant workloads via latency hiding
+- **`Fmax` expectation `[FPGA]`:** unknown at this stage — needs measurement. There is no OoO RTL to synthesize; `yosys` + `nextpnr-ecp5` on the ULX3S 85F is what answers it. This bullet previously gave "~50–65 MHz on ECP5-6 (down from in-order's ~80 MHz)" — the 80 MHz in-order baseline it was measured *down from* was itself never measured, and the real in-order baseline is ~42–43 MHz for J2 / ~33 MHz for J4 ([platform-baseline.md §3](platform-baseline.md)), so both ends of that comparison were wrong
 
 Dependencies: Phase 5.5 (differential harness must exist as the safety net before deploying OoO to tenants).
 
@@ -807,25 +807,38 @@ Note: this is upstream Debian/gcc/glibc work, not bounded to a single board. Cou
 
 ## 10. Anticipated throughput at Phase 5
 
-For tenant expectations at the public-service launch (single core, paravirt guest, no SIMD, no FPU acceleration), at ~80 MHz J32:
+For tenant expectations at the public-service launch (single core, paravirt guest, no SIMD, no FPU acceleration):
 
 | Workload | Estimate |
 |---|---|
-| UDP iperf3 | 60–80 Mbit/s |
-| TCP iperf3 | 40–60 Mbit/s |
-| SSH bulk transfer | 5–15 Mbit/s (crypto-bound) |
-| Interactive SSH | excellent (latency-dominated) |
-| Small program compile | seconds–minutes depending on size |
+| UDP iperf3 | unknown at this stage — needs measurement |
+| TCP iperf3 | unknown at this stage — needs measurement |
+| SSH bulk transfer | unknown at this stage — needs measurement (crypto-bound) |
+| Interactive SSH | latency-dominated; no throughput figure applies |
+| Small program compile | unknown at this stage — needs measurement |
 | Linux kernel build on-board | not realistic; cross-compile off-board instead |
 
-Phase 8 SIMD work roughly **doubles** TCP and **3–5×s** SSH throughput.
+**Every number in this table has been removed, and the reason is one number
+underneath all of them.** The table was stated "at ~80 MHz J32". No J32 RTL
+exists to synthesize, so nothing produced 80 MHz; the measured ECP5 baseline is
+~42–43 MHz for J2 and ~33 MHz for J4-with-MMU
+([platform-baseline.md §3](platform-baseline.md)). Rescaling the estimates by
+the ratio is not available either — [decisions/0005](decisions/0005-unmeasured-figures-are-removed.md)
+rule 6 forbids substituting a plausible number, and these were never
+clock-proportional anyway (the network figures are bounded by the MAC and the
+SDRAM controller, neither of which was measured). What produces the real
+numbers is `iperf3` and `ssh` against a booted board at Phase 5.
+
+The Phase 8 SIMD multiplier that stood here ("roughly doubles TCP, 3–5×s SSH")
+went with them: it was a multiplier on figures that are gone, for an
+instruction set with no RTL.
 
 ---
 
 ## 11. Open questions and decisions deferred
 
 - **Verify j-core upstream state.** The LUT estimates assume the j-core repo hasn't moved significantly. Worth a `git log` and mailing-list review before Phase 2 lands. Any new FPU work upstream would shift Phase 7 sizing.
-- **ECP5-6 fmax of the dual-issue OoO J32.** Conservative estimate is 50–65 MHz; the actual number depends heavily on whether the wakeup CAM ends up in LUT logic (longer paths) or BRAM-backed (shorter, lookup-time-dominated). Empirically validate by Phase 6 midpoint.
+- **ECP5-6 `Fmax` of the dual-issue OoO J32:** unknown at this stage — needs measurement. Whether the wakeup CAM lands in LUT logic (longer paths) or BRAM-backed (shorter, lookup-time-dominated) is the structural question that decides it, and it is not answerable on paper. Note the scale the answer has to clear: the *in-order* J4 with an MMU measures ~33 MHz ([platform-baseline.md §3](platform-baseline.md)).
 - ~~**OoO microarchitecture spec.** Write `10-ooo-design-spec.md` before implementation~~ — **DONE.** Specified in [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md) (v0.3, 2026-05). Covers issue rules, retire ordering, LSQ disambiguation (store-set predictor), memory ordering guarantees (SH-Compact weak preserved), hypervisor-visibility (none), FGMT in §13, gate budget in §15. No longer blocks Phase 6.
 - **OoO trace cache / uop cache decision.** Adds BRAM cost but amortizes decode; might be worth it for tight loops. Decide during Phase 6 design.
 - **Bitstream reflash brick rate.** Estimated 5% on remote reflash. Validate with a torture test in Phase 1; if higher than expected, implement the watchdog-revert-to-golden mechanism before Phase 5 public launch.
