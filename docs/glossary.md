@@ -160,6 +160,19 @@ A *thread context* is a complete architectural register set (R0–R15, SR, GBR, 
 
 - **AIC2 — Advanced Interrupt Controller, version 2.** The J-Core per-CPU interrupt controller; in-tree at `jcore-soc/components/misc/aic2.vhm`. Three-tier convention spec at [aic/aic2-spec.md](aic/aic2-spec.md): T0 = baseline (per-source enable/pending/priority/target, IRL output, `aic_com` IPI bus); T1 = FGMT-aware per-(core, thread) delivery; T2 = hypervisor virtualization (per-source `GUEST_OWNED`, vCPU targeting, `jcore_vintc` paravirt ABI). Prior art: SH-4 INTC (1998), OpenPIC (1995), Intel APIC (1993), sun4v interrupt cookies (2005).
 - **ULX3S.** Open-source FPGA development board based on Lattice ECP5 LFE5U-85F-6BG381C. Project target hardware. https://radiona.org/ulx3s/
+- **J4.** The `jcore-cpu` **build variant** for the in-order core with the
+  privileged architecture and the MMU — `variants.toml` `[j4]`, generic
+  `PRIV_ARCH = true`, config `core/cpu_config_j4.vhd`, and the `j4`/`j4c` legs
+  of the `synth-cpu` matrix. It is a *bitstream configuration*, and it is what
+  every MMU, priv-arch and hypervisor document in this workspace is written
+  against. **J32** (§3) is a *product point*: a row in the product table with an
+  FPU tier, a SIMD tier and a threading model. The two are different kinds of
+  name and neither is a synonym for the other. *This entry previously read "J4 —
+  earlier drafts mentioned J4 alongside J32; treated as a synonym for J32
+  baseline in spec text. Prefer J32. Update on sight." That deprecation was
+  never acted on and should not have been: `jcore-cpu@master` names the variant
+  J4 in its authoritative variant table, this workspace's own plans are titled
+  "J4", and "update on sight" would have renamed a build target after a product.*
 - **Endianness.** The byte order of the core, and of the kernel and userspace built for it. One answer for the whole product line, not a per-product-point property — which is why it is a term here and not a column in §3. Owned by [platform-baseline.md §2](platform-baseline.md); the decision and the alternative it rejects are [decisions/0006](decisions/0006-endianness-is-big-endian.md). Not to be confused with SIMD **lane** order, which is a separate convention owned by [simd/spec.md §2.2](simd/spec.md), or with the byte order of a **guest** image, which is the guest's own property.
 - **MCP.** Model Context Protocol server exposed by the platform's management track, allowing Claude Code to drive board control, bitstream lifecycle, and log queries programmatically. See ULX3S plan §7.
 - **Tier 0 / Tier 1 / Tier 1.5.** Service tiers exposed to tenants: Tier 0 = QEMU SH4 user-mode on VPS; Tier 1 = real-hardware paravirtualized SH4 VM on J-core; Tier 1.5 = richer J-core profiles (OoO, dual-core+FGMT, FPU, SIMD). Distinct from FPU/SIMD tiers in §3 above.
@@ -200,5 +213,4 @@ When a doc refers to "existing hardware," it almost always means the J2 implemen
   weeks after it was retired — one of the three staleness findings behind
   [decisions/0001](decisions/0001-one-authority-per-fact.md).*
 - **"Self-hosted" meaning native compilation** — see §1; this platform does not natively develop itself.
-- **J4** — earlier drafts mentioned J4 alongside J32; treated as a synonym for J32 baseline in spec text. Prefer J32. Update on sight.
 - **"SH-Compact"** — used once in [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md) for "SH-2 + J-core extensions." Prefer "SH-2 + J-core ext" or simply "J32 ISA baseline" depending on context.

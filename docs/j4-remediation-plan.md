@@ -308,9 +308,39 @@ A worklist, each item = pick the true value, fix every other doc, add a CI check
   on the relocation bound. `mmu/linux-spec.md` §2.3's VIPT contract and its 4 KB
   page-colouring requirement are withdrawn; the synonym-channel claim in
   `security-review` and `design-spec` holds.
-- **TSBBR = P1 VA vs PA**, **TSB_SIZE_LOG = entries vs sets**, **CPUINFO
-  0x030 vs 0x02C**, **`rte` uop count**, **EXPEVT code assignments**, the
-  MMU-doc "J4" naming the glossary deprecates — the long tail from the review.
+- **The long tail from the review — worked, item by item:**
+  - **TSBBR = P1 VA vs PA** — **CLOSED**
+    ([mmu/hardware-spec.md §2.6](mmu/hardware-spec.md)): it is a P1 kernel
+    virtual address. §2.6's note said so already; its own layout block still read "Physical address of TSB",
+    and the J64 sentence said "64-bit physical address". Both corrected, and the
+    walker's P1 fold is now code-bound to `core/cpu.vhd`
+    ([mmu/hardware-spec.md §2.6](mmu/hardware-spec.md)).
+  - **TSB_SIZE_LOG = entries vs sets** — **was already closed** by the Phase-2
+    walker work; §2.6 and [mmu/design-spec.md](mmu/design-spec.md) both say
+    *sets*. What was still live is its **range**: §2.8a's brute-force argument
+    said "64–1024" against §2.6's 6–14 (64–16384). Corrected in three files;
+    this retires a `security/threat-model.md` §11 row.
+  - **CPUINFO `0x030` vs `0x02C`** — **was already closed** in Wave 1.
+    `0x02C` is MMUFSR ([soc/p4-mmio-map.md §3.2](soc/p4-mmio-map.md), decoded), `0x030` is CPUINFO (allocated, not decoded);
+    [priv-arch/design-spec.md §4.6](priv-arch/design-spec.md) records the
+    superseded relocation proposal. Verified, not re-done.
+  - **`rte` uop count** — **CLOSED: 3.** §4.1's table wins over Appendix A's
+    grouping; [ooo/j32ooo-spec.md §4.1](ooo/j32ooo-spec.md) owns it, with a
+    value guard.
+  - **EXPEVT code assignments** — the *assignments* were already reconciled by
+    [hypervisor/hardware-spec.md §4.2](hypervisor/hardware-spec.md)'s own
+    reconciliation notes ([hypervisor/hardware-spec.md §4.2](hypervisor/hardware-spec.md): `0x180`→`0x1D0`, `0x1A0`→`0x1F0`), and §2.3.1's table
+    is internally consistent. What was live: §4.3 gave the inherited SH-4 range
+    as "`0x040`–`0x130`, `0x500`–`0x740`", which excludes `0x160`/`0x180`/`0x1A0`
+    — the three the paragraph above it insists are inherited — and `0x800`/`0x820`.
+    Corrected to point at the table instead of restating a range.
+  - **The MMU-doc "J4" naming** — **CLOSED the other way.** The glossary
+    deprecated "J4" as a synonym for J32, and nothing complied, including this
+    plan's own filename. It should not have: `jcore-cpu@master`'s
+    `variants.toml` names `[j4]` as the authoritative build variant
+    (`PRIV_ARCH = true`). J4 is a bitstream configuration and J32 is a product
+    point; [glossary §7](glossary.md) now says that, and the deprecation is
+    withdrawn rather than enforced.
 
 ### B2. Write down the SH-4 / Dreamcast compatibility model — as a *guest*, not bare metal
 

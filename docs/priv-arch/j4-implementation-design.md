@@ -11,8 +11,11 @@ PM3–PM4 are a deferred follow-on (§7).
 
 ## 1. Framing
 
-"J4" is, per [`docs/glossary.md`](../glossary.md), a synonym for the **J32**
-baseline: SH-2 + MMU + the SH-4 privileged architecture, SH4-complete, "planned".
+"J4" is, per [`docs/glossary.md`](../glossary.md) §7, the `jcore-cpu` **build
+variant** carrying the SH-4 privileged architecture and the MMU (`variants.toml`
+`[j4]`, `PRIV_ARCH = true`) — not a synonym for the **J32** product point, which
+is what this line used to call it. J32 is the product row in glossary §3;
+J4 is the bitstream this document's changes land in.
 The privileged architecture is the "third bucket" ([`design-spec.md` §1](design-spec.md))
 that turns the SH-2-class J2 into J32/J4, and it is a hard prerequisite for the MMU.
 
