@@ -274,20 +274,20 @@ Reuses the existing integer widening multiplier's shift register and partial-pro
    └─────────────────────────────────────────────────────┘
 ```
 
-**Resource estimate `[ASIC]`-style gate-equivalent count (unit consistent with §6.2/§6.3/§11.1; no process node stated for this figure and none should be assumed):**
+**Resource estimate — untagged, listed in [decisions/0004](../decisions/0004-platform-tag-convention.md) as found but not swept.** The unit ("gates") matches §6.2/§6.3/§11.1's ASIC-flavoured counts, but unlike those this figure carries no process node and no platform claim at all in the original text, and this task did not resolve which it is:
 - Additional logic on top of widening multiplier: ~200 gates (XOR-vs-ADD mux on accumulator, carry-chain mask, mode-bit decode)
 - No new flops
 - Latency: 64 cycles per CLMUL (one cycle per bit of operand B)
 - Throughput: 1 CLMUL per 64 cycles
 
-**When to use:** ultra-low-area J32 deployments where VCLMUL is needed for software correctness but not performance-critical. Embedded `[ASIC]` SoC variants targeting <100k gates total.
+**When to use:** ultra-low-area J32 deployments where VCLMUL is needed for software correctness but not performance-critical. Embedded SoC variants targeting <100k gates total (platform unstated, same caveat as above).
 
 ### 6.5 Tier selection by target
 
 | Target | Recommended Tier 2 tier | Rationale |
 |---|---|---|
-| J32 minimal, `[FPGA]` Spartan-6 class¹ | Tier C | Reuse existing multiplier, minimal new logic |
-| J32-FM, `[FPGA]` Artix-7 / Kintex-7¹ | Tier B | Best area/performance balance |
+| J32 minimal, Spartan-6 class¹ | Tier C | Reuse existing multiplier, minimal new logic |
+| J32-FM, Artix-7 / Kintex-7¹ | Tier B | Best area/performance balance |
 | J64 baseline | Tier B | Standard target |
 | J64 performance / server class | Tier A | Single-cycle for higher clock rates |
 | `[ASIC]` 28 nm or smaller | Tier A | Area penalty negligible at small nodes; power dominates |
@@ -557,7 +557,7 @@ Reference J2 core size `[ASIC]`, 130 nm: ~30,000 gates / 0.25 mm². Tier B rough
 
 **`[ASIC]` 28/40 nm:** GF(2) multiplier area becomes a small fraction of the SoC; Tier A is usually justified for performance. Power, not area, dominates the design choice — Tier A with operand isolation when idle is typically the right call. No absolute figures are given at this node; the claim is qualitative.
 
-**`[FPGA]` targets — Spartan-7 / Artix-7 (Xilinx, 6-input LUT). Not this
+**FPGA targets — Spartan-7 / Artix-7 (Xilinx, 6-input LUT). Not this
 project's Phase-1 target.**
 
 > **Marked, not retargeted** ([decisions/0004](../decisions/0004-platform-tag-convention.md)).
@@ -574,15 +574,25 @@ project's Phase-1 target.**
 > targeting the ULX3S 85F (the board and part this project's Phase-1
 > deliverable actually is).
 
-| Tier | LUTs (Spartan-7 / Artix-7, LUT6) | FFs | DSP48 slices |
-|---|---|---|---|
-| Tier A | 3,500 | 100 | 0 (LUT-only) |
-| Tier B | 2,200 | 600 | 0 |
-| Tier C | 50 (additional) | 10 (additional) | 0 |
+| Tier | LUTs (Spartan-7 / Artix-7, LUT6) | FFs | DSP48 slices | sysDSP slices, ECP5 (STRUCTURAL, not synthesis) |
+|---|---|---|---|---|
+| Tier A | 3,500 | 100 | 0 (LUT-only) | 0 |
+| Tier B | 2,200 | 600 | 0 | 0 |
+| Tier C | 50 (additional) | 10 (additional) | 0 | 0 |
 
-DSP48 blocks are not directly usable for GF(2) multiplication (carry chains are designed for integer arithmetic), and in any case the ECP5 has no DSP48 — its hard-multiplier primitives are Lattice's own sysDSP blocks, structurally different. Some FPGA vendors expose carryless-multiply modes; family-specific, and unconfirmed for ECP5.
+The last column *is* retargeted, not marked, unlike the LUT/FF columns to its
+left: GF(2) multiplication cannot use a hard multiply block on any family,
+because those blocks are built around a carry chain for integer arithmetic
+and this design has none (structural — true by construction from the
+algorithm, not from a synthesis run, and it is the same reason the DSP48
+column reads 0). The ECP5's DSP hard IP is Lattice's own sysDSP block
+(`MULT18X18D` and related primitives) rather than a DSP48, but "not usable
+for this" holds regardless of which vendor's block it is, so 0 transfers
+honestly where the LUT counts do not. Some FPGA vendors expose dedicated
+carryless-multiply modes on their hard blocks; family-specific, and
+unconfirmed for either family here.
 
-**Kintex-7 / Virtex Ultrascale `[FPGA]` (also not this project's target):** Tier A becomes the obvious choice there; LUT cost is negligible relative to total fabric. Whether the same holds on an ECP5-85F — a much smaller part — is unmeasured.
+**Kintex-7 / Virtex Ultrascale (also not this project's target):** Tier A becomes the obvious choice there; LUT cost is negligible relative to total fabric. Whether the same holds on an ECP5-85F — a much smaller part — is unmeasured.
 
 ### 11.2 Timing analysis `[ASIC]`, 130 nm
 
