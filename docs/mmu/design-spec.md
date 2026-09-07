@@ -368,7 +368,7 @@ A mapping is revoked either by flushing the TLB (`MMUCR.TI`, which clears `VALID
 
 ### 6.5 Side-channel posture (residuals)
 
-Time-sliced tenants share the L1 I/D caches and the 32-entry TLB; conventional contention channels (Prime+Probe, Evict+Time, TLB-occupancy, deterministic-NRU eviction-set construction, and data-dependent software-miss-handler timing) remain. They are bounded by the single-hart, non-SMT design (no concurrent observation) and the low clock. Mitigations, if a deployment requires them: flush L1 + TLB on context switch, a constant-time/constant-memory miss handler, and mapping secret pages uncacheable (`C=0`). The move to PIPT L1 caches ([hardware-spec.md §4.1a](hardware-spec.md)) removes the VIPT virtual-synonym channel and the page-coloring correctness dependency — a claim that was written before the relocation landed and is now checked against `core/cpu.vhd` rather than asserted.
+Time-sliced tenants share the L1 I/D caches and the TLBs ([hardware-spec.md §4.1](hardware-spec.md): 8 ITLB + 16 DTLB, not the 32-entry unified TLB this line used to name); conventional contention channels (Prime+Probe, Evict+Time, TLB-occupancy, deterministic-NRU eviction-set construction, and data-dependent software-miss-handler timing) remain. They are bounded by the single-hart, non-SMT design (no concurrent observation) and the low clock. Mitigations, if a deployment requires them: flush L1 + TLB on context switch, a constant-time/constant-memory miss handler, and mapping secret pages uncacheable (`C=0`). The move to PIPT L1 caches ([hardware-spec.md §4.1a](hardware-spec.md)) removes the VIPT virtual-synonym channel and the page-coloring correctness dependency — a claim that was written before the relocation landed and is now checked against `core/cpu.vhd` rather than asserted.
 
 **The TSB is a contention channel too, and Phase 2 hardens it without closing
 it.** The TSB is per-CPU and shared across address spaces, and a hit is roughly
@@ -407,7 +407,7 @@ it.** The TSB is per-CPU and shared across address spaces, and a hit is roughly
 
 ## 7. Performance Characteristics
 
-Target performance metrics (100 MHz J-Core, 16 KB pages, 32-entry fully-associative TLB, 512-entry TSB):
+Target performance metrics (16 KB pages, the TLB geometry of [hardware-spec.md §4.1](hardware-spec.md), 512-entry TSB). *The clock these were computed at — 100 MHz — is not a J-Core figure: the measured ECP5 baseline is ~33 MHz for J4 ([platform-baseline.md §3](../platform-baseline.md)), and the `[ASIC]` target is ~400 MHz+. Read the cycle counts, which are architectural, and not any wall-clock time derived from them:*
 
 | Operation | Cycles |
 |-----------|--------|

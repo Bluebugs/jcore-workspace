@@ -195,7 +195,7 @@ The hypervisor allocates `0x80`–`0x8F` to the 16 guests. The IOMMU's per-BMID 
 
 ### 4.6 BMID and ASID are orthogonal `[T1/T2/T3]`
 
-BMID identifies the **bus master**; ASID identifies the **address space within a CPU MMU** (see [glossary §5](../glossary.md)). They live in different fields, are sized differently (BMID = 8 bits, ASID = 12 bits + 4-bit generation = 16-bit `ASID_TAG`), and are consumed by different blocks (IOMMU vs CPU MMU). A CPU core has one BMID (its master port) and many ASIDs (one per current process / guest). A DMA engine has one BMID and no ASID.
+BMID identifies the **bus master**; ASID identifies the **address space within a CPU MMU** (see [glossary §5](../glossary.md)). They live in different fields, are sized differently (BMID = 8 bits; `ASID_TAG` = 16 bits of which the low 12 are the ASID proper and the top nibble is reserved and always zero — [mmu/hardware-spec.md §2.1a](../mmu/hardware-spec.md); this line previously read "12 bits + 4-bit generation", and the generation nibble was retired 2026-08-25), and are consumed by different blocks (IOMMU vs CPU MMU). A CPU core has one BMID (its master port) and many ASIDs (one per current process / guest). A DMA engine has one BMID and no ASID.
 
 ---
 
