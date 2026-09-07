@@ -24,6 +24,7 @@ Only Python 3 and git are required.
 """
 
 import argparse
+import collections
 import os
 import re
 import subprocess
@@ -1416,6 +1417,26 @@ GIT_ENV_OVERRIDES = (
 )
 
 
+# The commits a marker can legitimately cite are the ones THIS PROJECT made, and
+# for a kernel fork those are a rounding error next to the history they sit on:
+# `origin/jcore` carries 1,462,492 commits, of which **74** are the project's.
+# Searching the whole branch means searching 1.4M upstream subjects for a
+# project subject -- the wrong haystack, and the reason an unrelated real commit
+# ("sh: Fix build with CONFIG_UBSAN=y", Kees Cook, 2024) satisfied a RESOLVED
+# marker. 445 upstream subjects already begin `sh: fix`, which is this project's
+# own convention.
+#
+# A value here names the ref to subtract: the search becomes
+# `<base>..<integration-branch>`. Absent means the whole branch is the project's
+# own work, which is true of jcore-cpu (1080 commits, no duplicate subject).
+#
+# Verified when this landed: all 12 distinct live markers resolve to exactly one
+# commit under this scoping, and none of the 7 linux ones exists upstream.
+UPSTREAM_BASE = {
+    "linux": "master",
+}
+
+
 def git_env(**extra):
     """The inherited environment with every repository redirection removed."""
     env = {k: v for k, v in os.environ.items() if k not in GIT_ENV_OVERRIDES}
@@ -1476,11 +1497,30 @@ class Repos:
                                  "verify markers naming it"
                                  % (repo_name, branch))
             else:
-                rc, log = git(repo, "log", "--format=%s", "origin/%s" % branch)
+                # Scope to the project's own commits where a base is declared;
+                # see UPSTREAM_BASE. `A..B` is empty rather than an error if A
+                # is missing, which would silently search nothing, so the base
+                # is verified first and a missing one is a skip.
+                base = UPSTREAM_BASE.get(repo_name)
+                rev = "origin/%s" % branch
+                if base is not None:
+                    rc_b, _ = git(repo, "rev-parse", "--verify",
+                                  "origin/%s" % base)
+                    if rc_b is None or rc_b != 0:
+                        self.report.skip(
+                            "resolved-is-merged",
+                            "%s has no origin/%s, which is the base its own "
+                            "commits are measured against; scoping the subject "
+                            "search is impossible and searching all of "
+                            "origin/%s instead would be the wrong haystack"
+                            % (repo_name, base, branch))
+                        self._subjects[key] = None
+                        return None
+                    rev = "origin/%s..origin/%s" % (base, branch)
+                rc, log = git(repo, "log", "--format=%s", rev)
                 if rc != 0:
                     self.report.skip("resolved-is-merged",
-                                     "could not read %s origin/%s"
-                                     % (repo_name, branch))
+                                     "could not read %s %s" % (repo_name, rev))
                 else:
                     # split("\n"), NOT splitlines(): the latter also breaks
                     # on \v \f \x1c \x1d \x1e \x85 U+2028 U+2029, none of
@@ -1490,8 +1530,16 @@ class Repos:
                     # match a "subject" no commit has. Note the interaction
                     # with errors="replace" above: \xc2\x85 decodes to U+0085,
                     # which IS a splitlines() boundary.
-                    result = set(l.strip() for l in log.split("\n")
-                                 if l.strip())
+                    #
+                    # A COUNT, not a set. "Which commit does this cite?" has no
+                    # answer when several share the subject, and the previous
+                    # set collapsed that into "present". 19,683 subjects on
+                    # linux's branch are shared by more than one commit.
+                    result = collections.Counter(
+                        l.strip() for l in log.split("\n") if l.strip())
+                    self.report.note(
+                        "resolved-is-merged: %s subject namespace is %d commit(s) "
+                        "(%s)" % (repo_name, sum(result.values()), rev))
         self._subjects[key] = result
         return result
 
@@ -1625,7 +1673,19 @@ def check_resolved_subject(cfg, report, repos, where, m):
     subjects = repos.subjects(repo_name, branch, where)
     if subjects is None:
         return                 # already reported as a skip
-    if subject in subjects:
+    seen = subjects.get(subject, 0)
+    if seen > 1:
+        # "Which commit does this cite?" has no answer. All of them are on the
+        # branch, so the merge question is technically yes -- but the citation
+        # has stopped identifying a change, which is what 0002 asks it to do.
+        # Fail with the remedy rather than pass on a coin flip.
+        report.fail("resolved-is-merged", where,
+                    'RESOLVED cites "%s", which %d commits on %s share. The '
+                    "citation no longer names one change; reword the subject "
+                    "or cite the artifact instead (0002 section 3)."
+                    % (subject, seen, repo_name))
+        return
+    if seen == 1:
         return                 # reachable from the branch: merged, at any depth
     # Absent. On a COMPLETE history that is an answer; on a truncated one it is
     # not -- the commit may sit beyond the graft boundary. Only this branch is
@@ -1697,7 +1757,7 @@ def check_pending(cfg, report, repos, where, m):
                     "is %s." % (stated_integration, repo_name, integration))
     subjects = repos.subjects(repo_name, integration, where)
     if subjects is not None:
-        if subject in subjects:
+        if subjects.get(subject, 0) >= 1:
             # A true positive at any depth, so this verdict needs no caveat.
             report.fail("pending-is-not-merged", where,
                         'PENDING-MERGE cites "%s", which IS on %s origin/%s. '
