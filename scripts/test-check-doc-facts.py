@@ -1636,7 +1636,9 @@ def _(tmp):
     # fixture directory quietly ends up with no .git at all.
     victim = os.path.join(tmp, "victim")
     os.makedirs(victim)
-    env = load_checker_module().git_env()
+    env = load_checker_module().git_env(
+        GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+        GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
     subprocess.run(["git", "-C", victim, "init", "-q"], check=True, env=env)
     subprocess.run(["git", "-C", victim, "commit", "-qm", "base",
                     "--allow-empty"], check=True, env=env)
@@ -1675,7 +1677,9 @@ def _(tmp):
         '# S\n\n> **RESOLVED 2026-08-25 \u2014 jcore-cpu@master: "fixture".**\n'})
     decoy = os.path.join(tmp, "decoy")
     os.makedirs(decoy)
-    env = load_checker_module().git_env()
+    env = load_checker_module().git_env(
+        GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+        GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
     subprocess.run(["git", "-C", decoy, "init", "-q"], check=True, env=env)
     subprocess.run(["git", "-C", decoy, "commit", "-qm", "unrelated",
                     "--allow-empty"], check=True, env=env)
