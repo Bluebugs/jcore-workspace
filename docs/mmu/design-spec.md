@@ -368,7 +368,7 @@ A mapping is revoked either by flushing the TLB (`MMUCR.TI`, which clears `VALID
 
 ### 6.5 Side-channel posture (residuals)
 
-Time-sliced tenants share the L1 I/D caches and the 32-entry TLB; conventional contention channels (Prime+Probe, Evict+Time, TLB-occupancy, deterministic-NRU eviction-set construction, and data-dependent software-miss-handler timing) remain. They are bounded by the single-hart, non-SMT design (no concurrent observation) and the low clock. Mitigations, if a deployment requires them: flush L1 + TLB on context switch, a constant-time/constant-memory miss handler, and mapping secret pages uncacheable (`C=0`). The move to PIPT L1 caches removes the VIPT virtual-synonym channel and the page-coloring correctness dependency.
+Time-sliced tenants share the L1 I/D caches and the 32-entry TLB; conventional contention channels (Prime+Probe, Evict+Time, TLB-occupancy, deterministic-NRU eviction-set construction, and data-dependent software-miss-handler timing) remain. They are bounded by the single-hart, non-SMT design (no concurrent observation) and the low clock. Mitigations, if a deployment requires them: flush L1 + TLB on context switch, a constant-time/constant-memory miss handler, and mapping secret pages uncacheable (`C=0`). The move to PIPT L1 caches ([hardware-spec.md §4.1a](hardware-spec.md)) removes the VIPT virtual-synonym channel and the page-coloring correctness dependency — a claim that was written before the relocation landed and is now checked against `core/cpu.vhd` rather than asserted.
 
 **The TSB is a contention channel too, and Phase 2 hardens it without closing
 it.** The TSB is per-CPU and shared across address spaces, and a hit is roughly

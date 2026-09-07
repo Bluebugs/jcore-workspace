@@ -466,7 +466,7 @@ live RTL:
   under `if PRIV_ARCH generate`.
 - `sim/cpu_tb.vhd:212-217` passes `PRIV_ARCH => true`, and `sim/mmu_sim.sh:54`
   **hard-fails the build** unless it is set.
-- The `pa_tag` port exists only to give the PIPT caches their tag —
+- The `pa_tag` port exists only to give the PIPT caches ([mmu/hardware-spec.md §4.1a](mmu/hardware-spec.md)) their tag —
   `cache/dcache_ccl.vhm:255` says so: *"cpu.vhd relocates the address upstream of
   the cache, so a.a is already a PA."*
 - **An existing passing guard settles it:** `sim/tests/mmuwalkdside.S` runs in

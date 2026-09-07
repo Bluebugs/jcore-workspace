@@ -62,7 +62,7 @@
 > kernel. It does, and that is why C0 wrote a separate document rather than
 > editing this one.
 
-**Date:** 2026-06-27 · **Scope:** the SH-4-class J4 MMU (software-loaded TLB, ASID isolation, SH-4 privileged architecture, VIPT→PIPT L1 caches) as a multi-tenant isolation boundary. Covers (1) the modern MMU/TLB/cache attack landscape and its applicability to this design, (2) a security review of the specification, (3) a security review of the RTL implementation, and (4) verification that design, implementation, and **tests** line up — with the concrete test/hardening gaps.
+**Date:** 2026-06-27 · **Scope:** the SH-4-class J4 MMU (software-loaded TLB, ASID isolation, SH-4 privileged architecture, VIPT→PIPT L1 caches — the transition is complete and PIPT is the shipped organisation, [hardware-spec.md §4.1a](hardware-spec.md)) as a multi-tenant isolation boundary. Covers (1) the modern MMU/TLB/cache attack landscape and its applicability to this design, (2) a security review of the specification, (3) a security review of the RTL implementation, and (4) verification that design, implementation, and **tests** line up — with the concrete test/hardening gaps.
 
 ---
 
@@ -90,7 +90,7 @@ Rated against *this* design (not generic x86). Full catalog in the appendix; thi
 | Transient / speculative | Meltdown, Spectre v1/2/4, L1TF, MDS, Retbleed, Downfall, Inception | **NO** (whole family) | In-order, non-speculative: the forbidden access is never performed; no transient window. |
 | HW page-table-walker cache | AnC / ASLR⊕Cache | **NO** | No hardware walker, no page-table caches; translation is a software handler + TLB. |
 | TLB side/covert channel | TLBleed, TLB occupancy, miss-timing | **PARTIAL** | No SMT → no concurrent observation; only time-sliced cross-context, closed by flush-on-switch. Software miss-handler timing is a J4-specific surface. |
-| Cache side-channel | Prime+Probe, Flush+Reload, Evict+Time | **PARTIAL** | Shared L1 contention survives even under PIPT; bounded by time-slicing. PIPT *removes* VIPT synonym leakage (security-positive). No user `clflush`. |
+| Cache side-channel | Prime+Probe, Flush+Reload, Evict+Time | **PARTIAL** | Shared L1 contention survives even under PIPT; bounded by time-slicing. PIPT *removes* VIPT synonym leakage (security-positive) — and PIPT is now established against the RTL rather than assumed, [hardware-spec.md §4.1a](hardware-spec.md). No user `clflush`. |
 | Page-table / translation | TLB-desync (stale entry), permission-bit confusion, controlled-channel | **APPLIES** | Software-TLB: invalidation correctness and U/W/X decode are entirely yours. **Top correctness risk.** |
 | ASID / context tag | missing flush on recycle, global-bit misuse, ASID confusion | **APPLIES** | Cross-tenant read/write if ASID recycle/global hygiene is wrong. **#1 risk.** |
 | Rowhammer / physical | Rowhammer, RAMBleed, Half-Double | **PARTIAL** | DRAM-dependent; non-ECC SDR on ULX3S is comparatively favorable; MMU's role is physical placement. Core properties don't help here. |
@@ -133,7 +133,7 @@ The spec gets the *plumbing* right (all MMU registers/instructions privileged; A
 
 ## 3. Implementation review (findings)
 
-**Confirmed correct (defenses present):** all MMU instructions privileged (user access traps); valid-gated match (reset/flushed entries never hit); atomic single-cycle LDTLB install; full 16-bit ASID compare with global-OR; G sourced only from privileged `ptel(2)`; protection raises an exception **and** faulting **stores are demoted to reads at the external bus** so memory is never mutated; PIPT relocation strictly gated on `tlb_*_hit='1'` and downstream of the lookup; C-bit faithfully routes cacheability (a tenant cannot force-cache an uncacheable page); bit-11 opcode pinning prevents TLB-nibble aliasing. Permission enforcement is complete across I-fetch/load/store and the user (MD=0) cases — and is **well tested** by `mmufault` (W=0→DPROT_W, X=0→IPROT in user mode, U=0→DPROT_R in user mode, plus the three miss classes, each asserting exception + EXPEVT + TEA).
+**Confirmed correct (defenses present):** all MMU instructions privileged (user access traps); valid-gated match (reset/flushed entries never hit); atomic single-cycle LDTLB install; full 16-bit ASID compare with global-OR; G sourced only from privileged `ptel(2)`; protection raises an exception **and** faulting **stores are demoted to reads at the external bus** so memory is never mutated; PIPT relocation ([hardware-spec.md §4.1a](hardware-spec.md)) strictly gated on `tlb_*_hit='1'` and downstream of the lookup; C-bit faithfully routes cacheability (a tenant cannot force-cache an uncacheable page); bit-11 opcode pinning prevents TLB-nibble aliasing. Permission enforcement is complete across I-fetch/load/store and the user (MD=0) cases — and is **well tested** by `mmufault` (W=0→DPROT_W, X=0→IPROT in user mode, U=0→DPROT_R in user mode, plus the three miss classes, each asserting exception + EXPEVT + TEA).
 
 | # | Sev | Finding (file:line) | Consequence | Fix |
 |---|---|---|---|---|

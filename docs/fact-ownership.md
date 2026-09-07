@@ -76,6 +76,7 @@ are the substitute for a check that cannot be written cleanly — see
 | `platform.endianness` | J-Core is **big**-endian at every product point | [platform-baseline.md §2](platform-baseline.md) | `J-Core is (?:\*\*)?big(?:\*\*)?-endian` |
 | `platform.fmax.floor` | J2 ECP5 `Fmax` CI floor: **40 MHz** (`ECP5_FMIN_MHZ`) | [platform-baseline.md §3](platform-baseline.md) | `ECP5_FMIN_MHZ` |
 | `platform.fmax.j4.floor` | J4 (with MMU) ECP5 `Fmax` CI floor: **30 MHz** | [platform-baseline.md §3](platform-baseline.md) | `\*\*~33 MHz\*\*` |
+| `mmu.l1.pipt` | L1 I/D are **PIPT**; relocation covers `PA[27:12]`, so no index bit is virtual | [mmu/hardware-spec.md §4.1a](mmu/hardware-spec.md) | `PIPT` |
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
@@ -130,10 +131,21 @@ formatting.
 | `platform.endianness` | `J-Core is (?:\*\*)?(big\|little)(?:\*\*)?-endian` | `linux:arch/sh/configs/jcore_defconfig` | `CONFIG_CPU_(\w+)_ENDIAN=y` | `eq-text` |
 | `platform.fmax.floor` | `\*\*(\d+) MHz\*\* \(`ECP5_FMIN_MHZ`\)` | `jcore-cpu:.github/workflows/synth-cpu.yml` | `ECP5_FMIN_MHZ: "(\d+)"` | `eq` |
 | `platform.fmax.j4.floor` | `\*\*~33 MHz\*\*\s*[\|]\s*(\d+) MHz` | `jcore-cpu:.github/workflows/synth-cpu.yml` | `j4\)\s+floor=(\d+)` | `eq` |
+| `mmu.l1.pipt` | `bound of the relocated\s+field — \*\*bit (\d+)\*\*` | `jcore-cpu:core/cpu.vhd` | `db_o\.a\(27 downto (\d+)\) <= \(ppn_lo` | `eq` |
+| `mmu.l1.pipt` | `bound of the relocated\s+field — \*\*bit (\d+)\*\*` | `jcore-cpu:core/cpu.vhd` | `inst_o\.a\(27 downto (\d+)\) <= \(ppn_lo` | `eq` |
 
 Notes on what is deliberately **not** here, so the gaps are visible rather than
 inferred from silence:
 
+- **`mmu.l1.pipt` is bound twice on purpose**, and to the *relocation bound*
+  rather than to the letters `PIPT`. The I-side and the D-side relocate
+  independently in `core/cpu.vhd`, so one binding would leave the other free to
+  drift, and a VIPT I-cache beside a PIPT D-cache is a real configuration
+  somebody could produce. Binding to bit 12 is what makes the check mean
+  something: `PIPT` in a comment is a claim, whereas "the relocated field starts
+  at the bit the L1 index tops out at" is the property, and moving the bound to
+  13 — which is where this design was before the PIPT work — turns the check red
+  rather than leaving a stale word in a comment.
 - **`mmu.tsb.entry` is bound twice on purpose.** The 16 is restated
   independently by the RTL generic map and by the kernel header, and either can
   move without the other. One binding would leave whichever side it did not name

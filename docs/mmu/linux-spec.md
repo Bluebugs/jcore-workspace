@@ -98,62 +98,48 @@ config JCORE_PAE
 #define PAGE_MASK       (~(PAGE_SIZE - 1))
 ```
 
-### 2.3 Cache aliasing and page coloring (VIPT L1 contract)
+### 2.3 Cache aliasing and page colouring — none required ([PIPT L1](hardware-spec.md))
 
-The J-Core L1 data cache is **virtually-indexed, physically-tagged (VIPT)**. On the
-J3 reference core it is **8 KB direct-mapped** with 32-byte lines, so the cache index
-is `VA[12:5]`. The hardware **does not detect synonyms**: it indexes on the virtual
-address and tags on the physical address, and trusts software to prevent two virtual
-aliases of one physical page from landing in different cache lines. This is the same
-contract as the SH-4 manual and is implemented for J-Core exactly as the existing
-`arch/sh` aliasing logic implements it for SH-4.
+> **SUPERSEDED BY [hardware-spec.md §4.1a](hardware-spec.md) — 2026-09-07.**
+> This section specified a **VIPT** L1-D contract and a strict page-colouring
+> obligation on the kernel for 4 KB pages, including an `SHMLBA` of 8 KB and a
+> colour-aligning `arch_get_unmapped_area`. The L1 caches are **PIPT** ([hardware-spec.md §4.1a](hardware-spec.md)): the core
+> relocates the address to a physical one upstream of the cache
+> (`core/cpu.vhd`), so no cache index bit is virtual and two virtual aliases of
+> one physical page cannot land in different lines. **There is nothing for the
+> kernel to do**, and the code this section proposed must not be written.
 
-**When coloring is required.** A virtual alias can diverge from its physical page only
-on index bits that lie *above* the page offset. With an 8 KB index reaching `VA[12]`:
+**The J-Core L1 instruction and data caches are physically-indexed, physically-tagged — PIPT** ([hardware-spec.md §4.1a](hardware-spec.md), which is the normative statement and carries the code binding).
 
-| `CONFIG_PAGE_SIZE` | Page offset | Index bits above offset | Coloring needed? |
-| ------------------ | ----------- | ----------------------- | ---------------- |
-| 16 KB              | `VA[13:0]`  | none (`12 < 14`)        | **No** — alias-free |
-| 64 KB              | `VA[15:0]`  | none                    | **No** |
-| **4 KB**           | `VA[11:0]`  | **`VA[12]`** (1 color bit) | **Yes** |
+**What this means for `arch/sh`, concretely:**
 
-So with the default 16 KB (or 64 KB) pages there is **nothing to do** — `PAGE_SIZE`
-already covers the cache index and aliasing cannot occur. Coloring is required **only**
-for `CONFIG_PAGE_SIZE_4KB`.
+- **No colouring, at any page size.** The VIPT reasoning this section used to
+  carry — index bits above the page offset, one colour bit at 4 KB, none at
+  16 KB or 64 KB — does not apply, because there are no virtual index bits to
+  reason about. `CONFIG_PAGE_SIZE_4KB` needs no special handling.
+- **`SHMLBA` is left alone.** `arch/sh/include/asm/shmparam.h` on `linux@jcore`
+  defines it as `0x4000` for the aliasing SH-3/SH-4 parts, and
+  `arch/sh/mm/mmap.c` sets `shm_align_mask = PAGE_SIZE - 1` — the "sane caches"
+  default — unless a probed cache descriptor says otherwise. J-Core is a sane
+  cache. This section previously proposed writing `0x2000` into that header;
+  that change is withdrawn and was never made.
+- **`COLOUR_ALIGN` is not reached.** `arch_get_unmapped_area[_topdown]` applies
+  it only when `do_colour_align` is set, which needs an aliasing cache. Nothing
+  in the J-Core port sets it.
+- **No flush-on-alias path either.** That was already this section's position
+  and it survives, for a better reason: not "we chose strict colouring instead",
+  but "there is no alias".
 
-**The 4 KB contract.** When 4 KB pages are configured, the kernel must guarantee
-`VA[12] == PA[12]` for every cacheable mapping of a page (strict coloring), so that a
-physical page always occupies the same cache line regardless of which virtual alias is
-used. The alignment quantum is the cache size:
+**The TLB miss handler is unaffected**, as before — and now trivially so. It
+runs in P1 (`PA = VA & 0x1FFFFFFF`), and colouring is not a concept the port
+has.
 
-```c
-/* arch/sh/include/asm/shmparam.h */
-#define SHMLBA          0x2000          /* 8 KB = L1 size; alias boundary */
-
-/* arch/sh/mm/mmap.c — color-aligning allocator (4 KB pages only) */
-#define COLOUR_ALIGN(addr, pgoff) \
-        ((((addr) + shm_align_mask) & ~shm_align_mask) + \
-         (((pgoff) << PAGE_SHIFT) & shm_align_mask))
-/* shm_align_mask = SHMLBA - 1 when PAGE_SIZE < SHMLBA, else 0 */
-```
-
-`arch_get_unmapped_area[_topdown]` uses `COLOUR_ALIGN` so that file/shared mappings
-are placed on a color-consistent boundary; private anonymous pages are colored by the
-same rule at fault-fill time. When `PAGE_SIZE >= SHMLBA` (16 KB / 64 KB),
-`shm_align_mask` is 0 and the allocator degenerates to plain page alignment — no
-runtime cost.
-
-**No flush path is required.** This port uses *strict coloring*, not flush-on-alias, so
-it does **not** depend on cache line-flush/invalidate instructions (`ocbi`/`ocbp`/…),
-which belong to a separate cache milestone. `flush_dcache_page` and friends remain the
-standard `arch/sh` no-alias fast paths.
-
-**The TLB miss handler is unaffected.** Coloring is enforced upstream, at
-`mmap`/fault-fill time, when the PTE is built — never in the miss path. The handler
-runs in P1 (`PA = VA & 0x1FFFFFFF`, where `PA[12] == VA[12]` identically, so the
-handler's own TSB and page-table accesses are inherently color-safe) and simply installs
-whatever the page table already says. See [hardware-spec.md §2 / L1 VIPT note] for the
-matching hardware-side statement of this contract.
+**Why this section existed.** VIPT was a real intermediate state of the design,
+not a misreading: the cache tag RAM was widened to a physical tag and switched
+on `AT` before the full VA→PA relocation landed. Written against that state,
+this contract was correct. `jcore-cpu@master` has since retired the CPU-level
+`mmucolor` page-colouring guard outright, replacing it with guards that assert
+the relocation — see [hardware-spec.md §4.1a](hardware-spec.md) for the commits.
 
 ## 3. Page Table Format
 
@@ -1054,12 +1040,14 @@ The TLB miss assembly uses `mov.l` on J32 and `mov.q` on J64 (or just `MOVL` wit
 - `mprotect` permission changes take effect
 - `fork()` + `exec()` (CoW correctness)
 - Multi-threaded process with shared `mm`
-- **Page coloring (4 KB only, §2.3):** `shmget`/`shmat` the same segment at multiple
-  addresses and assert every attach is `SHMLBA`-aligned (`VA[12]` color-consistent);
-  write-through-one / read-through-another must observe coherent data (no synonym
-  staleness). Verify `arch_get_unmapped_area` returns `COLOUR_ALIGN`ed addresses under
-  `CONFIG_PAGE_SIZE_4KB`, and that the test is a no-op (zero color constraint) under
-  `CONFIG_PAGE_SIZE_16KB`.
+- **Virtual aliasing (§2.3):** `shmget`/`shmat` the same segment at several
+  addresses under `CONFIG_PAGE_SIZE_4KB` and assert that write-through-one /
+  read-through-another observes coherent data. Note what this test is *for*
+  under [PIPT](hardware-spec.md): it asserts the property holds with **no**
+  alignment constraint imposed, which is the opposite of what this bullet asked
+  for while §2.3 specified colouring — it used to require every attach to be
+  `SHMLBA`-aligned and `arch_get_unmapped_area` to return `COLOUR_ALIGN`ed
+  addresses. A colouring assertion here would now be asserting a bug.
 
 ### 13.2 Stress tests
 - LTP `mm` test suite
