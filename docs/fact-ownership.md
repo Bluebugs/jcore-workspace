@@ -73,6 +73,7 @@ are the substitute for a check that cannot be written cleanly — see
 | `hyp.expevt.hcall` | `HCALL`: EXPEVT `0x1D0` at `VBR_HYP + 0x180` | [hypervisor/hardware-spec.md §4.2](hypervisor/hardware-spec.md) | `0x1D0` |
 | `hyp.expevt.hypreg` | Hyperprivileged-register access: EXPEVT `0x1F0` at `VBR_HYP + 0x300` | [hypervisor/hardware-spec.md §4.2](hypervisor/hardware-spec.md) | `0x1F0` |
 | `ooo.uops.rte` | `RTE` cracks to **3 uops** | [ooo/j32ooo-spec.md §4.1](ooo/j32ooo-spec.md) | `(?i)\brte\b.?\s*[\|→]\s*(?:\*\*)?3\b` |
+| `platform.endianness` | J-Core is **big**-endian at every product point | [platform-baseline.md §2](platform-baseline.md) | `J-Core is (?:\*\*)?big(?:\*\*)?-endian` |
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
@@ -102,10 +103,20 @@ Checking the docs against a stale pointer would report agreement with code
 nobody runs.
 
 Relations, enumerated (an unknown name is a failure, not a no-op): `eq` (both
-decimal), `eq-hex` (both hexadecimal, compared numerically) and
-`bytes-from-shift` (doc bytes = 2^code). A `kb-from-shift` relation was
+decimal), `eq-hex` (both hexadecimal, compared numerically),
+`bytes-from-shift` (doc bytes = 2^code) and `eq-text` (neither side is a
+number; the two captures are compared as text, case- and
+surrounding-whitespace-insensitively). A `kb-from-shift` relation was
 defined here and used by no row; it was deleted rather than left as untested
 surface that no fixture could reach.
+
+`eq-text` is the one relation that does not parse its captures as integers, and
+it is here because a byte order has no honest integer
+([decisions/0006](decisions/0006-endianness-is-big-endian.md) §Enforcement).
+Reach for it only when that is true of the fact: a relation that compares
+strings will happily compare two numbers written differently and call them
+different, so a numeric fact bound with `eq-text` is a check that fires on
+formatting.
 
 | Fact ID | Doc pattern | Code | Code pattern | Relation |
 |---|---|---|---|---|
@@ -114,6 +125,7 @@ surface that no fixture could reach.
 | `mmu.tsb.entry` | `(\d+)-byte entr` | `linux:arch/sh/include/cpu-jcore/cpu/mmu_context.h` | `#define JCORE_TSB_ENTRY_BYTES\s+(\d+)` | `eq` |
 | `mmu.tsb.set` | `(\d+)-byte set` | `jcore-cpu:core/datapath_pkg.vhd` | `shift_left\(v_idx, (\d+)\)` | `bytes-from-shift` |
 | `mmu.tsb.tag.shift` | `` `JCORE_TSB_TAG_SHIFT` = \*\*(\d+)\*\* `` | `linux:arch/sh/include/cpu-jcore/cpu/mmu_context.h` | `#define JCORE_TSB_TAG_SHIFT\s+(\d+)` | `eq` |
+| `platform.endianness` | `J-Core is (?:\*\*)?(big\|little)(?:\*\*)?-endian` | `linux:arch/sh/configs/jcore_defconfig` | `CONFIG_CPU_(\w+)_ENDIAN=y` | `eq-text` |
 
 Notes on what is deliberately **not** here, so the gaps are visible rather than
 inferred from silence:
@@ -256,7 +268,6 @@ new file.
 
 | Fact | State | Owned by (task) |
 |---|---|---|
-| **Endianness of the J-Core product line** | Contradictory. [glossary.md §3](glossary.md) tabulates every product point as little-endian; the shipping J2 toolchain target is `sh2eb-linux-muslfdpic` (big-endian) and [fgmt/mt2x2-plan.md §9 Q3](fgmt/mt2x2-plan.md) records the conflict as an explicit open decision. [fpu/spec.md §2.3](fpu/spec.md) already hedges ("Tier 0 may ship big-endian"). | Wave-2 **B1** (listed there as a *mechanical* item; it is not — it needs a product decision before any doc edit is correct) |
 | **P4 register offsets vs real SH-4** (QACR0/QACR1/CCR/CPUINFO) | Partly settled. `TRA`/`EXPEVT`/`INTEVT` and `MMUFSR` are resolved in [soc/p4-mmio-map.md §7](soc/p4-mmio-map.md); the SH-4-compat policy for the rest is not. | Wave-2 **B1**, gated on **B2** (SH-4-as-guest model) |
 | **Instruction encodings** | Not a registry fact by design, and **no longer unresolved as to which file**: [decisions/0003](decisions/0003-canonical-encoding-database.md) makes `jcore-cpu/docs/insns.json` canonical and deletes this repo's copy. Checked by `insns2asm --emit check` and `cpugen insns -check`; prose specs cite it and must not restate bit patterns. | Wave-2 **B4** (the sweep itself) |
 
@@ -279,6 +290,16 @@ must have its own `glossary-fence:some-id` row below. **The checker reads those
 rows**: a fence with no matching row fails, an unnamed fence fails, a reused id
 fails, and a row whose fence is gone fails under `--check-waivers`. One row
 licenses one region, never the file.
+
+**There are no fences today.** The one that existed —
+`glossary-fence:product-table-addr-width`, over the product table's `Addr width`
+column — was retired by Wave-2 **B1**, which deleted the column rather than
+keeping it fenced: the cell restated what the row's own name says by the §3
+naming convention, and the one borrowed value in the region (the J64 VA width)
+now links its owner. That is the shape a fence is supposed to have: a named
+region, a row that expires with it, and a task that removes both. The mechanism
+stays; the fixtures in `scripts/test-check-doc-facts.py` are what exercise it
+now.
 
 `scripts/check-doc-facts.py --check-waivers` fails on a row that never fires, so
 this list cannot quietly outlive the restatements it covers.
@@ -323,4 +344,3 @@ or delete the duplicated value. Both are one-line changes.
 | `simd.sr.vd` | [fpu/spec.md](fpu/spec.md) | §7 preamble; **superseded** by B0a, text rewritten by Wave 2 |
 | `simd.vfpul` | [fpu/spec.md](fpu/spec.md) | §7 preamble still describes VFPUL as live; **superseded** by B0a, text deleted by Wave 2 |
 | `simd.vfpul` | [j4-remediation-plan.md](j4-remediation-plan.md) | the plan quotes the review finding verbatim; clears when the plan is retired |
-| `glossary-fence:product-table-addr-width` | [glossary.md](glossary.md) §3 | Authorises exactly one fenced region — the product table's `Addr width` column, which mixes self-referential naming (J*N* is *N*-bit) with a borrowed MMU fact (the J64 VA width). **The checker reads this row**: delete it and the fence fails; add a fence with any other id and it fails until that id has its own row. Wave-2 **B1** splits the column, then this row and the fence go together. |

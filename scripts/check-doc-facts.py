@@ -439,7 +439,30 @@ RELATIONS = {
     "eq-hex": (16, 16, lambda d, c: d == c),
     # The doc states a size in bytes, the code states a shift.
     "bytes-from-shift": (10, 10, lambda d, c: d == 1 << c),
+    # Neither side is a number. Both captures are compared as text, case- and
+    # surrounding-whitespace-insensitively, so a document may write `big` where
+    # a Kconfig symbol writes `BIG`. `None` for a base is the signal to skip
+    # `_num` entirely: a byte order has no honest integer, and forcing one
+    # would be a fabricated value of exactly the kind 0005 forbids. Added by
+    # decisions/0006 for `platform.endianness`.
+    "eq-text": (None, None, lambda d, c: d == c),
 }
+
+
+def _relation_operands(doc_raw, code_raw, doc_base, code_base):
+    """The pair a relation's predicate is applied to, or None if unparseable.
+
+    Split out from `check_code_bindings` so the numeric and textual cases
+    cannot drift: every relation goes through here, and a base of `None` means
+    "compare the captures as text" rather than "no base was configured".
+    """
+    if doc_base is None or code_base is None:
+        return doc_raw.strip().casefold(), code_raw.strip().casefold()
+    doc_val = _num(doc_raw, doc_base)
+    code_val = _num(code_raw, code_base)
+    if doc_val is None or code_val is None:
+        return None
+    return doc_val, code_val
 
 
 def load_fact_table(cfg, report, check, heading, min_cells, facts, consequence):
@@ -605,14 +628,14 @@ def check_code_bindings(cfg, report, repos, facts, bindings):
         if doc_raw is None or code_raw is None:
             continue
         doc_base, code_base, agree = RELATIONS[b.relation]
-        doc_val = _num(doc_raw, doc_base)
-        code_val = _num(code_raw, code_base)
-        if doc_val is None or code_val is None:
+        operands = _relation_operands(doc_raw, code_raw, doc_base, code_base)
+        if operands is None:
             report.fail("doc-matches-code", where,
                         "captured %r (doc) / %r (code) but relation %s needs "
                         "base-%d / base-%d numbers"
                         % (doc_raw, code_raw, b.relation, doc_base, code_base))
             continue
+        doc_val, code_val = operands
         if not agree(doc_val, code_val):
             report.fail("doc-matches-code", where,
                         "%s says %s, but %s@%s says %s -- these do not satisfy "

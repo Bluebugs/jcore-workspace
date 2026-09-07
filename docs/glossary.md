@@ -70,39 +70,35 @@ Neither this section nor the specs that cite it constitute legal advice or a fre
 
 Family naming uses the convention: **J<width>[-<variant>]** where width is the integer-register width.
 
-> **The `Endianness` column is NOT normative — 2026-08-25.** It reads "little"
-> for every row, and that is contradicted by the shipping J2 toolchain target
-> `sh2eb-linux-muslfdpic` (big-endian) and by
-> [fgmt/mt2x2-plan.md §9 Q3](fgmt/mt2x2-plan.md), which records the choice as an
-> open decision rather than a settled fact. The column is left in place, rather
-> than guessed at, until Wave-2 task **B1** decides it; see
-> [fact-ownership.md](fact-ownership.md) §Unresolved.
+> **The `Endianness` column is gone — 2026-09-07.** It previously read "little"
+> for every row, which was never true of the shipping J2. Wave-2 **B1** decided
+> the question: J-Core is big-endian at every product point, owned by
+> [platform-baseline.md §2](platform-baseline.md), argued in
+> [decisions/0006](decisions/0006-endianness-is-big-endian.md). One answer for
+> every row is not a product-point distinction, so it is a term entry (§7) and
+> not a column.
 >
-> **The `Addr width` column is fenced out of `glossary-is-value-free`.** "J*N*"
-> *is* the width by the naming convention above, so that column's entry on a
-> J*N* row is self-referential naming rather than a borrowed constant — but the
-> parenthesised **VA** width on the J64 row is an MMU fact this document does
-> not own, and a regex cannot tell the two apart. The fence is declared here
-> rather than hidden in a waiver so a
-> reader sees it, and it is registered in
-> [fact-ownership.md](fact-ownership.md) §Waivers so it gets burnt down. Wave-2
-> **B1** should split the column: keep the naming width, move the VA width to
-> the MMU spec, and delete the fence.
+> **The `Addr width` column and its fence are gone — 2026-09-07.** The column
+> restated what the row's own name already says: by the naming convention
+> above, J*N* *is* *N*-bit, so the cell was a copy of the first column. The
+> J64 row additionally carried a **VA** width, which is an MMU fact this
+> document does not own and now links instead
+> ([mmu/design-spec.md §3.7](mmu/design-spec.md)). With both gone the region
+> needs no `value-free: off` fence, and the `glossary-fence:product-table-addr-width`
+> waiver row went with it — the first waiver in
+> [fact-ownership.md](fact-ownership.md) to be retired rather than carried.
 
-<!-- value-free: off (product-table-addr-width) -->
+| Name        | ISA baseline                              | MMU                | FPU tier              | SIMD tier      | OoO | Threading   | Status        |
+|-------------|-------------------------------------------|--------------------|-----------------------|----------------|-----|-------------|---------------|
+| **J2**      | SH-2 + J-core ext (CAS.L, SHAD, SHLD)     | none               | Tier 0 (J2 baseline)  | none           | no  | none        | shipping (see `jcore-cpu/`) |
+| **J2-MT2x2**| J2 + dual-core + MSI L1 coherence         | none               | Tier 0                | none           | no  | FGMT 2-way  | proposal      |
+| **J3**      | SH-2 + MMU                                | yes (SH-4 model)   | Tier 0                | none           | no  | none        | roadmap       |
+| **J32**     | SH-2 + MMU + (optional FPU/SIMD coprocs)  | yes                | Tier 1 (SH4-complete) | Tier 0+1       | no  | none        | planned       |
+| **J32-OOO** | J32 + 2-wide out-of-order                 | yes                | Tier 1                | Tier 0+1       | yes | FGMT 2-way  | spec'd        |
+| **J32-LT**  | J32 + 2-wide light OoO (no rename)        | yes                | Tier 1                | Tier 0+1       | light | FGMT 4-way (barrel) | spec'd        |
+| **J32-FM**  | J32-OOO + full memory subsystem (L2 v2)   | yes                | Tier 1+2 (hyp-aware)  | Tier 0+1+2     | yes | FGMT 2-way  | target        |
+| **J64**     | J32-FM + wider integer regs (per §3 naming) + COMPAT | yes ([VA width](mmu/design-spec.md)) | Tier 1+2              | Tier 0+1+2+3   | yes | FGMT 2-way  | research      |
 
-| Name        | ISA baseline                              | MMU                | FPU tier              | SIMD tier      | OoO | Threading   | Addr width | Endianness | Status        |
-|-------------|-------------------------------------------|--------------------|-----------------------|----------------|-----|-------------|------------|------------|---------------|
-| **J2**      | SH-2 + J-core ext (CAS.L, SHAD, SHLD)     | none               | Tier 0 (J2 baseline)  | none           | no  | none        | 32-bit     | little     | shipping (see `jcore-cpu/`) |
-| **J2-MT2x2**| J2 + dual-core + MSI L1 coherence         | none               | Tier 0                | none           | no  | FGMT 2-way  | 32-bit     | little     | proposal      |
-| **J3**      | SH-2 + MMU                                | yes (SH-4 model)   | Tier 0                | none           | no  | none        | 32-bit     | little     | roadmap       |
-| **J32**     | SH-2 + MMU + (optional FPU/SIMD coprocs)  | yes                | Tier 1 (SH4-complete) | Tier 0+1       | no  | none        | 32-bit     | little     | planned       |
-| **J32-OOO** | J32 + 2-wide out-of-order                 | yes                | Tier 1                | Tier 0+1       | yes | FGMT 2-way  | 32-bit     | little     | spec'd        |
-| **J32-LT**  | J32 + 2-wide light OoO (no rename)        | yes                | Tier 1                | Tier 0+1       | light | FGMT 4-way (barrel) | 32-bit | little   | spec'd        |
-| **J32-FM**  | J32-OOO + full memory subsystem (L2 v2)   | yes                | Tier 1+2 (hyp-aware)  | Tier 0+1+2     | yes | FGMT 2-way  | 32-bit     | little     | target        |
-| **J64**     | J32-FM + 64-bit integer regs + COMPAT     | yes (48-bit VA)    | Tier 1+2              | Tier 0+1+2+3   | yes | FGMT 2-way  | 64-bit     | little     | research      |
-
-<!-- value-free: on -->
 
 Notes:
 - "Tier 0/1/2/3" refer to FPU and SIMD spec tiers; see those specs for tier contents.
@@ -164,6 +160,7 @@ A *thread context* is a complete architectural register set (R0–R15, SR, GBR, 
 
 - **AIC2 — Advanced Interrupt Controller, version 2.** The J-Core per-CPU interrupt controller; in-tree at `jcore-soc/components/misc/aic2.vhm`. Three-tier convention spec at [aic/aic2-spec.md](aic/aic2-spec.md): T0 = baseline (per-source enable/pending/priority/target, IRL output, `aic_com` IPI bus); T1 = FGMT-aware per-(core, thread) delivery; T2 = hypervisor virtualization (per-source `GUEST_OWNED`, vCPU targeting, `jcore_vintc` paravirt ABI). Prior art: SH-4 INTC (1998), OpenPIC (1995), Intel APIC (1993), sun4v interrupt cookies (2005).
 - **ULX3S.** Open-source FPGA development board based on Lattice ECP5 LFE5U-85F-6BG381C. Project target hardware. https://radiona.org/ulx3s/
+- **Endianness.** The byte order of the core, and of the kernel and userspace built for it. One answer for the whole product line, not a per-product-point property — which is why it is a term here and not a column in §3. Owned by [platform-baseline.md §2](platform-baseline.md); the decision and the alternative it rejects are [decisions/0006](decisions/0006-endianness-is-big-endian.md). Not to be confused with SIMD **lane** order, which is a separate convention owned by [simd/spec.md §2.2](simd/spec.md), or with the byte order of a **guest** image, which is the guest's own property.
 - **MCP.** Model Context Protocol server exposed by the platform's management track, allowing Claude Code to drive board control, bitstream lifecycle, and log queries programmatically. See ULX3S plan §7.
 - **Tier 0 / Tier 1 / Tier 1.5.** Service tiers exposed to tenants: Tier 0 = QEMU SH4 user-mode on VPS; Tier 1 = real-hardware paravirtualized SH4 VM on J-core; Tier 1.5 = richer J-core profiles (OoO, dual-core+FGMT, FPU, SIMD). Distinct from FPU/SIMD tiers in §3 above.
 - **sshpiperd.** SSH connection router on the OVH VPS. Tenants SSH to it, it routes to per-tenant board VMs over WireGuard.

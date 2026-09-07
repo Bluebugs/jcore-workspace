@@ -15,8 +15,9 @@ and Tier 2 are new in this revision.
 **ISA reference:** SH-4 FPU (Renesas SH-4 Software Manual,
 Rev. 5.0, ADE-602-156D, 2001) and SH-4A FPU (REJ09B0003-0150Z, 2004).
 **Cross-references:**
-- [../glossary.md](../glossary.md) — product naming, prior-art policy,
-  endianness convention.
+- [../glossary.md](../glossary.md) — product naming, prior-art policy.
+- [../platform-baseline.md §2](../platform-baseline.md) — byte order (the
+  glossary no longer carries it).
 - [../jcore-ulx3s-service-plan.md §6.7](../jcore-ulx3s-service-plan.md)
   — Phase 7 deployment that requires Tier 1 (SH-4-complete) FPU.
 - [../simd/spec.md](../simd/spec.md) §2.1, §2.3 — Tier 0 SIMD
@@ -40,7 +41,7 @@ Rev. 5.0, ADE-602-156D, 2001) and SH-4A FPU (REJ09B0003-0150Z, 2004).
 5. Tier 0 — J2 baseline FPU instruction set
 6. Tier 1 — SH-4-complete FPU
    - 6.1 Overview and product applicability
-   - 6.2 Endianness migration (BE → LE)
+   - 6.2 Endianness migration (BE → LE) — withdrawn, kept as analysis
    - 6.3 SR.FD trap semantics
    - 6.4 Full FPSCR layout (PR / SZ / FR / DN / RM / Cause / Enable /
      Flag)
@@ -102,10 +103,10 @@ Excluded from Tier 0:
 - MMU interaction (J2 is no-MMU).
 - Hypervisor-mediated FPU context switching.
 
-Tier 0 may ship big-endian as on the existing J2 silicon. **However,
-the project endianness baseline is little-endian from Tier 1 onward**
-to match the product table in [../glossary.md §3](../glossary.md);
-the migration is specified in §6.2.
+All tiers are big-endian, per
+[platform-baseline.md §2](../platform-baseline.md). This paragraph
+previously said the baseline became little-endian from Tier 1 onward; see
+§2.3.
 
 **Tier 1 — SH-4-complete FPU. [T1]**
 
@@ -125,8 +126,6 @@ The full SH-4 scalar FPU instruction set. Adds, over Tier 0:
 - **Full FPSCR layout**: PR, SZ, FR, DN, RM, plus the IEEE-754
   Cause / Enable / Flag fields as defined by the SH-4 hardware
   manual.
-- **Little-endian byte order** (matches glossary §3); the endianness
-  migration is specified in §6.2.
 
 Tier 1 is **required** for J32, J32-OOO, J32-FM, and J64 per the
 glossary product table.
@@ -172,9 +171,10 @@ square brackets: **[T0]**, **[T1]**, or **[T2]**. The tag indicates
 the *lowest* tier that mandates the feature. Higher tiers inherit
 without restatement.
 
-When a feature changes semantics across tiers (the canonical case is
-endianness in §6.2), both tier tags appear and the migration is called
-out explicitly.
+When a feature changes semantics across tiers, both tier tags appear and
+the migration is called out explicitly. Endianness used to be this
+document's worked example of that; it is not one any more (§2.3), and no
+replacement example is invented here — the rule stands without one.
 
 ### 1.3 Decision principles (inherited from j2-spec.md v0.4)
 
@@ -278,23 +278,26 @@ state.
 
 ### 2.3 Endianness baseline
 
-Per [../glossary.md §3](../glossary.md), the J-Core product line is
-little-endian from J2 onward in the published product table. The
-existing J2 silicon as shipped by the upstream project has been built
-in both byte orders historically; the archived J2 FPU spec assumed
-big-endian. **This specification follows the glossary**:
+> **SUPERSEDED BY [../platform-baseline.md §2](../platform-baseline.md) — 2026-09-07.**
+> This section previously read that the product line is little-endian from
+> J2 onward and that Tier 1 and Tier 2 are little-endian. J-Core is
+> **big-endian at every product point**; there is no migration.
+> [decisions/0006](../decisions/0006-endianness-is-big-endian.md) is the
+> decision and §6.2 below is the retained record of what it withdrew.
 
-- **Tier 0:** big-endian is acceptable for J2 implementations that
-  match the existing big-endian J2 silicon. Implementations targeting
-  the glossary product line (J2 little-endian) follow the Tier 1
-  endianness convention.
-- **Tier 1 and Tier 2:** little-endian. See §6.2 for the migration
-  details, including the SH-4 manual's specific note on double-FMOV
-  in little-endian mode.
+**All tiers are big-endian**, because the platform is
+([platform-baseline.md §2](../platform-baseline.md)). Nothing in this
+document's tier structure varies with byte order any more: the archived
+j2-spec.md §3.7 big-endian double-`FMOV` handling is the handling at
+Tier 0, Tier 1 and Tier 2 alike.
 
-Where this document and the archived j2-spec.md disagree on
-endianness, **this document wins** per the glossary "single source of
-truth" rule.
+The reason the previous text is void rather than merely outvoted is worth
+one line, because it is a citation failure and not a taste difference: it
+derived a normative migration from the glossary's product table, which
+[decisions/0001](../decisions/0001-one-authority-per-fact.md) found had
+never been true on that column, and invoked a "single source of truth"
+rule that the same record deleted. See
+[decisions/0006 §Why the FPU spec's argument does not survive](../decisions/0006-endianness-is-big-endian.md).
 
 ### 2.4 Prior-art posture
 
@@ -449,9 +452,10 @@ busy window is larger, but the wire-level mechanism is identical.
 
 The wire protocol is endian-neutral: `cop_o.d` and `cop_i.d` carry
 32-bit words, not byte arrays. Endianness only matters where words
-are stitched into 64-bit doubles for FMOV; see §6.2 for the Tier 1
-treatment that supersedes the Tier 0 big-endian-only handling in
-the archived j2-spec.md §3.7.
+are stitched into 64-bit doubles for FMOV, and there it is the archived
+j2-spec.md §3.7 big-endian handling at every tier
+([platform-baseline.md §2](../platform-baseline.md)). §6.2 records the
+little-endian treatment this document used to mandate and no longer does.
 
 ### 3.8 Exception signalling. [T0/T1/T2]
 
@@ -530,19 +534,20 @@ through the existing memory-load and memory-store beats (§7.4).
 | FVn    | {FRn, FR(n+1), FR(n+2), FR(n+3)}, n ∈ {0,4,8,12} | 4 × FP32     | T1   |
 | XMTRX  | XF0..XF15 viewed as 4×4 row-major matrix       | 16 × FP32      | T1   |
 
-**Layout of DRn** in memory (Tier 1 little-endian, see §6.2):
+**Layout of DRn** in memory (big-endian at every tier —
+[platform-baseline.md §2](../platform-baseline.md)):
 
-- FRn holds the **low** 32 bits of the IEEE-754 binary64 value
-  (mantissa low half); FR(n+1) holds the **high** 32 bits (sign,
-  biased exponent, mantissa high 20 bits).
+- FRn holds the **high** 32 bits of the IEEE-754 binary64 value (sign,
+  biased exponent, mantissa high 20 bits); FR(n+1) holds the **low** 32
+  bits.
 - Memory layout: FRn at the lower address, FR(n+1) at the higher
-  address — i.e. low word first in memory, matching little-endian
-  byte order on the bus.
+  address — i.e. high word first in memory, which is what big-endian
+  IEEE-754 binary64 requires.
 
-This is the inverse of the Tier 0 big-endian-only layout described in
-the archived j2-spec.md §3.7, where FRn held the high word at the
-lower address. The migration is unavoidable: little-endian IEEE-754
-binary64 places the low half at the lower address.
+This is the archived j2-spec.md §3.7 layout, unchanged. The paragraph
+here previously said the inverse and called the change "unavoidable"; the
+inversion was a consequence of the little-endian migration §6.2 records
+and withdraws, not of anything about IEEE-754.
 
 **Layout of FVn:** FVn = (FRn, FR(n+1), FR(n+2), FR(n+3)). FIPR
 treats FVn as a column vector. FTRV treats the XMTRX back bank as a
@@ -748,22 +753,31 @@ Beyond the new instructions, Tier 1 brings into scope:
   exception. §6.3.
 - The full FPSCR layout (which Tier 0 already implemented in spirit
   but did not formally require the SH-4 reset value of). §6.4.
-- Little-endian byte order. §6.2.
 - The vector / matrix register-file readout patterns. §4.1, §4.2.
 
-### 6.2 Endianness migration (BE → LE). [T0 → T1]
+### 6.2 Endianness migration (BE → LE) — WITHDRAWN. [T0 → T1]
 
-**Statement.** Tier 0 implementations may ship big-endian to match
-existing J2 silicon. **Tier 1 implementations are little-endian** to
-match [../glossary.md §3](../glossary.md). All J32 / J32-OOO /
-J32-FM / J64 products ship little-endian.
+> **HISTORICAL 2026-09-07.** This section specified a big-endian to
+> little-endian migration at Tier 1. That migration is **not happening**:
+> J-Core is big-endian at every product point ([platform-baseline.md §2](../platform-baseline.md)),
+> argued in [decisions/0006](../decisions/0006-endianness-is-big-endian.md). Nothing
+> below is normative any more.
+>
+> It is kept, rather than deleted, for one reason that is worth more than the
+> section's original purpose: points 1 and 2 are the only place in this
+> workspace that writes down **what actually differs** between the two byte
+> orders for double-`FMOV` register pairing, and the SH-4 / SH-4A anomaly
+> around it. If 0006 is ever reopened — its own "what would reopen this"
+> names the conditions — this is the work that would otherwise have to be
+> redone. Read it as an analysis, not as a requirement.
 
-This section is normative. Where the archived j2-spec.md §3.7 fixes
-the J2 FPU to big-endian-only, **this document supersedes it** for
-the glossary product line. The archived spec remains accurate as a
-historical reference for the existing big-endian J2 silicon.
+**Statement, as it stood.** Tier 0 implementations may ship big-endian to
+match existing J2 silicon; Tier 1 implementations are little-endian. The
+justification given was the glossary's product table, which is exactly the
+citation [decisions/0006](../decisions/0006-endianness-is-big-endian.md)
+rejects.
 
-**What changes from BE to LE.**
+**What would change from BE to LE, if it ever did.**
 
 1. **Double-FMOV halves swap.** For `FMOV @Rm, DRn` with FPSCR.SZ=1:
    - In **big-endian** (Tier 0 legacy): the word at `Rm` is loaded
@@ -1727,9 +1741,11 @@ Inherited from j2-spec.md §9:
    convention.
 9. **FRCHG / FSCHG / FPCHG under SR.FD**: control instructions
    must also trap; verify no silent toggle when SR.FD=1.
-10. **Endianness migration**: cross-check Tier 1 LE double-FMOV
-    against a Tier 0 BE double-FMOV on the same bit pattern; verify
-    the SH-4A-correct LE layout.
+10. **Double-FMOV halves**: `FMOV @Rm, DRn` with `FPSCR.SZ=1` must load
+    the word at `Rm` into FRn as the **high** half of the binary64 and
+    the word at `Rm+4` into FR(n+1) as the low half, at every tier
+    (§4.3). A test asserting the little-endian order is asserting a
+    migration this document withdrew (§6.2).
 
 ### 9.3 Tier 2 tests (additions)
 
@@ -1824,7 +1840,9 @@ Inherited from j2-spec.md §9:
 - **v1.0 (2026-05-25).** Tiered SH-4-complete consolidation.
   Supersedes the archived J2-only `docs/fpu/archive/j2-spec.md`
   (v0.4). Adds Tier 1 (FIPR, FTRV, FSCA, FSRRA, FPCHG, full SR.FD
-  semantics, full FPSCR layout, endianness migration to LE) and
+  semantics, full FPSCR layout, and — withdrawn 2026-09-07 by
+  [decisions/0006](../decisions/0006-endianness-is-big-endian.md) — an
+  endianness migration to LE) and
   Tier 2 (EXC_FPU_DISABLED HEDR cause, per-vCPU FPU-ownership
   flag, lazy FPU context-switch ABI, 136-byte FPU image). Updates
   cross-references in
@@ -1866,7 +1884,6 @@ SH-4 hardware manual (pre-2006, patents expired) and IEEE-754
 | FPCHG                              | T1   | SH-4A hw manual (2004)                                              |
 | SR.FD (FPU-disable) trap           | T1   | SH-4 hw manual §6.2 (2001)                                          |
 | Full FPSCR layout                  | T1   | SH-4 hw manual §6.4 (2001); IEEE-754 §7 (1985)                      |
-| Little-endian double-FMOV layout   | T1   | SH-4A hw manual (2004) "LE fix"; IEEE-754 binary64 layout (1985)    |
 | Lazy FPU context switch            | T2   | 4.4BSD Operating System (McKusick et al. 1996) §3.6;                |
 |                                    |      | VAX FPACC trap (DEC VAX-11 Architecture Manual, 1979);              |
 |                                    |      | UltraSPARC II Programmer Reference Manual (1997) §3.10;             |
@@ -1895,7 +1912,7 @@ instruction; lazy-FPU and trap-on-first-use predate 1990.
 
 | Instruction       | T0 | T1 | T2 | Notes                                              |
 | ----------------- | -- | -- | -- | -------------------------------------------------- |
-| FMOV variants     | ✔  | ✔  | ✔  | Endianness changes BE→LE at T1 for double          |
+| FMOV variants     | ✔  | ✔  | ✔  | Big-endian double layout at every tier (§4.3)      |
 | FLDI0 / FLDI1     | ✔  | ✔  | ✔  |                                                    |
 | FLDS / FSTS       | ✔  | ✔  | ✔  |                                                    |
 | LDS / STS FPUL    | ✔  | ✔  | ✔  |                                                    |

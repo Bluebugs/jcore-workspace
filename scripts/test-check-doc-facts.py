@@ -1063,6 +1063,44 @@ def _(tmp):
           cpu_files={"core/sizes.vhd": 'a <= x"28";\n'})
 
 
+# `eq-text` is the one relation whose captures are not numbers (0006). The two
+# cases below are deliberately a pass/fail pair for the same reason the eq-hex
+# pair is: a fail-case alone passes just as happily when NEITHER pattern
+# matches, which is a different bug wearing the right exit status.
+EQ_TEXT = (REGISTRY.replace("| `eq` |", "| `eq-text` |")
+           .replace("`image is (\\d+) bytes`", "`image is (\\w+)-endian`")
+           .replace("`image_bytes\\s*=>\\s*(\\d+)`",
+                    "`CONFIG_CPU_(\\w+)_ENDIAN=y`"))
+
+
+@case("eq-text compares case-insensitively, so `big` and `BIG` agree", False)
+def _(tmp):
+    build(tmp, registry=EQ_TEXT,
+          simd=SIMD.replace("image is 520 bytes", "image is big-endian"),
+          cpu_files={"core/sizes.vhd": "CONFIG_CPU_BIG_ENDIAN=y\n"})
+
+
+@case("eq-text catches a real text disagreement", True,
+      expect_check="doc-matches-code")
+def _(tmp):
+    build(tmp, registry=EQ_TEXT,
+          simd=SIMD.replace("image is 520 bytes", "image is big-endian"),
+          cpu_files={"core/sizes.vhd": "CONFIG_CPU_LITTLE_ENDIAN=y\n"})
+
+
+@case("eq-text does not silently accept a non-numeric capture under `eq`",
+      True, expect_check="doc-matches-code")
+def _(tmp):
+    # The guard `eq-text` must not weaken: a NUMERIC relation given text still
+    # has to fail on the unparseable capture rather than fall through to a
+    # string compare. `_relation_operands` returns None only when a base is
+    # configured and the capture will not parse, and this is what asserts that
+    # the `None`-base branch did not swallow that case.
+    build(tmp, registry=REGISTRY.replace("`image is (\\d+) bytes`",
+                                         "`image is (\\w+)-endian`"),
+          simd=SIMD.replace("image is 520 bytes", "image is big-endian"))
+
+
 # --------------------------------------------------- p4-offsets-match-rtl
 
 
