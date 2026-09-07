@@ -366,12 +366,36 @@ have very different reach:
 | `LDC Rm, PTEH` / `LDC Rm, PTEL` / `LDC Rm, ASIDR` | in-core `LDC` only — **these registers have no MMIO alias** ([mmu/hardware-spec.md §2.1](../mmu/hardware-spec.md), [§2.1a](../mmu/hardware-spec.md), [§3.1](../mmu/hardware-spec.md)) | no |
 | `LDTLB` / `LDTLB.RN` | traps to `VBR_HYP + 0x190` by §3.4 | **yes — 1** |
 
-So the figure is **one trap per guest TLB refill**, and the "~30 cycles, fast LDTLB trap" row above
-stands. The guest's staging-register writes are not trapped and do not need to be: `PTEH`, `PTEL`
-and `ASIDR` are write-only staging state that hardware consults *only* at `LDTLB` time, so letting
-a guest load them natively leaks nothing — and it is exactly what makes
-[hardware-spec.md §3.3](hardware-spec.md)'s handler work, since the hypervisor reads the guest's
-intended VPN/RFN/ASID straight out of those registers at the trap.
+> **SUPERSEDED BY [../mmu/hardware-spec.md §2.1a, §2.8a](../mmu/hardware-spec.md) — 2026-09-07.**
+> The two paragraphs this note replaces are wrong on the hardware, and one of
+> them is the justification for leaving a guest register write untrapped.
+> Corrected below rather than deleted, because the *conclusion* about `PTEH`
+> and `PTEL` may still hold and only `ASIDR`'s changed; whoever reworks this
+> needs to see which claim failed.
+
+**`ASIDR` is not write-only staging state, and the justification that said so
+has expired.** This section read: *"`PTEH`, `PTEL` and `ASIDR` are write-only
+staging state that hardware consults **only** at `LDTLB` time, so letting a
+guest load them natively leaks nothing."* Read at `jcore-cpu@master`,
+`core/cpu.vhd` passes `asid => dp_mmu_regs.asidr(15 downto 0)` into **both**
+TLB instances as the *match* input — so `ASIDR` is compared on **every
+translation**, not at install time — and the hardware TSB walker folds it into
+the set index on every miss ([../mmu/hardware-spec.md §2.8a](../mmu/hardware-spec.md)).
+An untrapped guest `LDC Rm, ASIDR` therefore changes which TLB entries match and
+which TSB set the walker reads, immediately, with no `LDTLB` involved. **That is
+a hypervisor-design question this task does not answer**; it is recorded here so
+the next revision of §5 starts from the hardware rather than from this
+paragraph. `PTEH` and `PTEL` are genuinely install-time staging and the original
+argument still covers them.
+
+**The `LDTLB` trap row above prices a retired instruction.** `LDTLB` (`0x0038`)
+and `LDTLB.RN` (`0x0078`) were retired from the decoder and the hardware walker
+is now the sole TLB installer ([../mmu/hardware-spec.md §2.6](../mmu/hardware-spec.md),
+both changes merged on `jcore-cpu@master`). A guest cannot execute either
+instruction, so "one trap per guest TLB refill" does not describe the current
+machine: on the walker path there is no guest-visible install step to trap at
+all. What replaces it, per §3.8a and the amendment above, is `TSBBR` ownership —
+which is why that amendment matters more than this table does.
 
 Only `MMUCR` (`0xFF000010`), `TSBBR` (`0xFF000014`) and `TSBCFG` (`0xFF000018`) are genuinely MMIO
 in the P4 core block, and only they take the emulated-MMIO trap. They are boot/config registers
