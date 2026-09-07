@@ -18,7 +18,9 @@ failure rather than a silent pass.
 """
 
 import collections
+import difflib
 import importlib.util
+import itertools
 import os
 import re
 import shutil
@@ -141,7 +143,7 @@ SIZES_VHD = """entity sizes is generic (image_bytes => 520); end entity;
 
 
 def fake_repo(root, name, branch, files, with_origin=False, shallow=False,
-              bad_utf8=False):
+              raw_subject=None):
     """A throwaway git repo standing in for a submodule.
 
     The checks read code from `origin/<branch>`, so the fixture must publish
@@ -178,8 +180,16 @@ def fake_repo(root, name, branch, files, with_origin=False, shallow=False,
     # original incident, still open after the fix that was supposed to close it.
     sandboxed(root, repo)
     os.makedirs(repo)
-    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
-               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+    # The FOURTH sandbox escape, and the same mechanism as the incident this
+    # harness exists to prevent: `git -C repo` does NOT override GIT_DIR, so
+    # with it set every init/commit/update-ref below lands in whatever
+    # repository GIT_DIR names. `sandboxed()` cannot see it, because no path is
+    # passed -- the fixture directory simply ends up with no .git and nothing
+    # looks wrong. Borrowed from the checker rather than re-typed: this is a
+    # safety mechanism, and two copies of one would drift.
+    env = load_checker_module().git_env(
+        GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+        GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
     def g(*args):
         subprocess.run(["git", "-C", repo] + list(args), check=True, env=env,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -189,11 +199,13 @@ def fake_repo(root, name, branch, files, with_origin=False, shallow=False,
     g("add", "-A")
     g("commit", "-qm", "fixture", "--allow-empty")
     g("update-ref", "refs/remotes/origin/%s" % branch, "HEAD")
-    if bad_utf8:
-        # A commit subject that is genuinely not valid UTF-8. Commit subjects
-        # are bytes, and the Linux history really does contain some -- which
-        # made the checker raise UnicodeDecodeError *inside subprocess* the
-        # moment the clone stopped being shallow. A traceback is not a verdict.
+    if raw_subject is not None:
+        # A commit subject written byte-for-byte, for the two properties that
+        # only raw bytes can exercise: a subject that is not valid UTF-8 (the
+        # Linux history has some, and a strict decode raised UnicodeDecodeError
+        # *inside subprocess* the moment the clone stopped being shallow), and
+        # a subject containing a character `str.splitlines()` treats as a line
+        # boundary but git does not.
         #
         # Neither `git commit -F` nor `commit-tree` will do: both warn
         # "commit message did not conform to UTF-8" and transcode from latin-1,
@@ -207,7 +219,7 @@ def fake_repo(root, name, branch, files, with_origin=False, shallow=False,
         body = (b"tree " + tree.stdout.strip().encode()
                 + b"\nparent " + head.stdout.strip().encode()
                 + b"\nauthor t <t@t> 0 +0000\ncommitter t <t@t> 0 +0000\n"
-                + b"\nsubject with a raw \xb4 byte\n")
+                + b"\n" + raw_subject + b"\n")
         made = subprocess.run(
             ["git", "-C", repo, "hash-object", "-t", "commit", "-w", "--stdin"],
             input=body, capture_output=True, env=env)
@@ -277,7 +289,7 @@ def write_in(tmp, path, text):
 
 def build(tmp, registry=REGISTRY, glossary=GLOSSARY, simd=SIMD, extra=None,
           p4_map=P4_MAP, cpu_files=None, no_cpu_repo=False, cpu_origin=False,
-          cpu_shallow=False, cpu_bad_utf8=False):
+          cpu_shallow=False, cpu_raw_subject=None):
     docs = os.path.join(tmp, "docs")
     os.makedirs(sandboxed(tmp, os.path.join(docs, "decisions")), exist_ok=True)
     write_in(tmp, os.path.join(docs, "fact-ownership.md"), registry)
@@ -290,7 +302,7 @@ def build(tmp, registry=REGISTRY, glossary=GLOSSARY, simd=SIMD, extra=None,
                  "docs/insns.json": '{"instructions": []}\n'}
         files.update(cpu_files or {})
         fake_repo(tmp, "jcore-cpu", "master", files, with_origin=cpu_origin,
-                  shallow=cpu_shallow, bad_utf8=cpu_bad_utf8)
+                  shallow=cpu_shallow, raw_subject=cpu_raw_subject)
     for name, text in (extra or {}).items():
         write_in(tmp, os.path.join(docs, name), text)
     return tmp
@@ -1314,13 +1326,29 @@ def _(tmp):
         '# S\n\n> **RESOLVED 2026-08-25 — jcore-cpu@master: "no such commit".**\n'})
 
 
-@case("a non-UTF-8 commit subject does not crash the checker", False)
+@case("a subject split by splitlines() but not by git does not match", True,
+      expect_check="resolved-is-merged", flags=("--strict",))
+def _(tmp):
+    # `str.splitlines()` breaks on eight characters git never emits as a record
+    # separator (\v \f \x1c \x1d \x1e \x85 U+2028 U+2029). Reading the log
+    # with it manufactures "subjects" no commit has: the real subject here is
+    # "prefix\x0bsuffix", and under splitlines() a marker citing just "prefix"
+    # matched a fragment and PASSED. Zero occurrences in 1.46M commits today,
+    # so this is latent -- which is exactly why it needs a fixture rather than
+    # an argument.
+    build(tmp, cpu_raw_subject=b"prefix\x0bsuffix", extra={"spec.md":
+        '# S\n\n> **RESOLVED 2026-08-25 \u2014 jcore-cpu@master: "prefix".**\n'})
+
+
+@case("a non-UTF-8 commit subject does not crash the checker", False,
+      flags=("--strict",))
 def _(tmp):
     # Found by unshallowing linux: `git log --format=%s` over 1.46M commits
     # includes subjects that are not valid UTF-8, and the strict decode raised
     # UnicodeDecodeError inside subprocess. The clone being shallow had hidden
     # it. A crash is neither an answer nor a skip.
-    build(tmp, cpu_bad_utf8=True, extra={"spec.md":
+    build(tmp, cpu_raw_subject=b"subject with a raw \xb4 byte",
+           extra={"spec.md":
         '# S\n\n> **RESOLVED 2026-08-25 — jcore-cpu@master: "fixture".**\n'})
 
 
@@ -1344,6 +1372,73 @@ def _(tmp):
               "| Fact ID | File | Why |\n|---|---|---|\n"
               "| `no-stale-value` | [hyp.md](hyp.md) | different quantity |\n"),
           extra={"hyp.md": "# H\n\nthe 272-byte SIMD image.\n"})
+
+
+@case("GIT_DIR cannot redirect the harness out of the sandbox", False)
+def _(tmp):
+    # The fourth escape route. `git -C <path>` does NOT override GIT_DIR, so
+    # with it set every init/commit/update-ref in fake_repo lands in whatever
+    # repository GIT_DIR names -- the same word, the same ref, the same
+    # mechanism as the incident this harness exists to prevent -- while the
+    # fixture directory quietly ends up with no .git at all.
+    victim = os.path.join(tmp, "victim")
+    os.makedirs(victim)
+    env = load_checker_module().git_env()
+    subprocess.run(["git", "-C", victim, "init", "-q"], check=True, env=env)
+    subprocess.run(["git", "-C", victim, "commit", "-qm", "base",
+                    "--allow-empty"], check=True, env=env)
+    before = subprocess.run(["git", "-C", victim, "for-each-ref"],
+                            capture_output=True, text=True, env=env).stdout
+    inner = os.path.join(tmp, "inner")
+    os.makedirs(inner)
+    old = os.environ.get("GIT_DIR")
+    os.environ["GIT_DIR"] = os.path.join(victim, ".git")
+    try:
+        build(inner)
+    finally:
+        if old is None:
+            os.environ.pop("GIT_DIR", None)
+        else:
+            os.environ["GIT_DIR"] = old
+    after = subprocess.run(["git", "-C", victim, "for-each-ref"],
+                           capture_output=True, text=True, env=env).stdout
+    if before != after:
+        raise AssertionError("GIT_DIR redirected the harness into %s" % victim)
+    if not os.path.exists(os.path.join(inner, "jcore-cpu", ".git")):
+        raise AssertionError("fixture repo was not created where it was asked "
+                             "for; GIT_DIR silently redirected it")
+    build(tmp)
+
+
+@case("GIT_DIR cannot invert the checker's verdicts", False)
+def _(tmp):
+    # Read-only, but the verdicts flip: with GIT_DIR pointed at an unrelated
+    # repository a bogus RESOLVED marker PASSED while every correct one FAILED.
+    # A checker that answers about the wrong repository is worse than one that
+    # declines to answer.
+    inner = os.path.join(tmp, "inner")
+    os.makedirs(inner)
+    build(inner, extra={"spec.md":
+        '# S\n\n> **RESOLVED 2026-08-25 \u2014 jcore-cpu@master: "fixture".**\n'})
+    decoy = os.path.join(tmp, "decoy")
+    os.makedirs(decoy)
+    env = load_checker_module().git_env()
+    subprocess.run(["git", "-C", decoy, "init", "-q"], check=True, env=env)
+    subprocess.run(["git", "-C", decoy, "commit", "-qm", "unrelated",
+                    "--allow-empty"], check=True, env=env)
+    subprocess.run(["git", "-C", decoy, "update-ref",
+                    "refs/remotes/origin/master", "HEAD"], check=True, env=env)
+    # Run the checker ourselves with GIT_DIR poisoned, and restore immediately:
+    # leaking it into the remaining cases would silently re-point every one of
+    # them at the decoy.
+    poisoned = dict(os.environ, GIT_DIR=os.path.join(decoy, ".git"))
+    p = subprocess.run([sys.executable, CHECKER, "--root", inner, "--strict"],
+                       capture_output=True, text=True, env=poisoned)
+    if p.returncode != 0:
+        raise AssertionError(
+            "GIT_DIR redirected the checker: a marker that IS on the fixture "
+            "repo was judged against the decoy.\n%s" % (p.stdout + p.stderr))
+    build(tmp)
 
 
 @case("fake_repo refuses an empty-files repo outside the sandbox", False)
@@ -1546,10 +1641,21 @@ def main():
     finally:
         if shim_dir:
             shutil.rmtree(shim_dir, ignore_errors=True)
-    if tree_before is not None and tree_fingerprint() != tree_before:
+    tree_after = tree_fingerprint() if tree_before is not None else None
+    if tree_before is not None and tree_after != tree_before:
         failed += 1
         print("FAIL sandbox tripwire: the suite modified the real tree "
               "(docs/ contents or a submodule ref changed while it ran)")
+        # Say WHAT moved. A tripwire that reports only "something changed"
+        # sends the next reader hunting, and one that cannot be diagnosed is
+        # one that eventually gets ignored -- which is the failure mode this
+        # whole effort keeps re-learning.
+        for line in itertools.islice(
+                difflib.unified_diff(tree_before.split("\n"),
+                                     tree_after.split("\n"),
+                                     fromfile="before", tofile="after",
+                                     lineterm=""), 25):
+            print("       | %s" % line)
         caught_by["sandbox tripwire"] += 1
     elif tree_before is not None:
         passed += 1
