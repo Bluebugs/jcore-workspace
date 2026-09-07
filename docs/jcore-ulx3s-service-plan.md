@@ -246,7 +246,27 @@ The previously planned standalone "observability host" at home is **eliminated**
 
 ### LUT4 budget (cumulative through phases)
 
-| Component | LUT4 | BRAM | DSP | Phase | Spec |
+> **This table is a budget, and only a budget** — what a block is *allowed* to
+> cost, kept per [decisions/0005](decisions/0005-unmeasured-figures-are-removed.md)
+> rule 4 because the project needs something to be judged against. **No row in
+> it has been measured**, and for most of them nothing could be: there is no
+> OoO, FGMT, L2, FPU or SIMD RTL in `jcore-cpu@master` to synthesize. What
+> answers any row is `yosys` + `nextpnr-ecp5` on the ULX3S 85F, which
+> `jcore-cpu`'s `synth-cpu` workflow already runs for the variants that do
+> exist ([platform-baseline.md §3](platform-baseline.md)).
+>
+> **Two rows disagree with the spec they cite, and both are recorded here
+> rather than reconciled by picking a side** — see
+> [decisions/0005](decisions/0005-unmeasured-figures-are-removed.md) rule 6:
+> the "Phase-1 MMU additions" row budgets +1,500–2,000 LUT4 where
+> [mmu/hardware-spec.md §12](mmu/hardware-spec.md) estimates "~200 LUTs of new
+> logic per CPU", and the "Phase-2 IOMMU" row budgets +2,500–3,500 where
+> [iommu/hardware-spec.md §11](iommu/hardware-spec.md) estimates ~1500. The MMU
+> one is the only area figure in this document that is **answerable today**:
+> `j2` and `j4` are both in the `synth-cpu` ECP5 matrix, so the real LUT4 delta
+> for `PRIV_ARCH` is already being produced and nobody has read it off.
+
+| Component | LUT4 (budget) | BRAM | DSP | Phase | Spec |
 |---|---:|---:|---:|---|---|
 | J32 in-order baseline core | 3,000–5,000 | small | 0 | 2 | `jcore-cpu/` repo (existing RTL) |
 | Phase-1 MMU additions | +1,500–2,000 | small | 0 | 2 | [mmu/design-spec.md](mmu/design-spec.md), [mmu/hardware-spec.md](mmu/hardware-spec.md) |
@@ -258,44 +278,54 @@ The previously planned standalone "observability host" at home is **eliminated**
 | Phase-3 hypervisor (HPRIV, trap delegation) | +100–300 | small | 0 | 4 | [hypervisor/design-spec.md](hypervisor/design-spec.md), [hypervisor/hardware-spec.md](hypervisor/hardware-spec.md); AIC2 Tier 2 [aic/aic2-spec.md §5](aic/aic2-spec.md) |
 | **Phase 4 subtotal (MVP ships here)** | **~15,000–18,500** | ~15% | 0 | | |
 | **Dual-issue OoO J32 upgrade (replaces in-order)** | **+~5,000–7,000 (delta)** | **+15%/core** | 0 | **6** | [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md) |
-| 2nd core + FGMT (per core +1,500–2,500) | +12,000–17,000 | +15% | 0 | 6.5 | [fgmt/dual-fgmt-proposal.md](fgmt/dual-fgmt-proposal.md), [fgmt/mt2x2-plan.md](fgmt/mt2x2-plan.md); coherent L2 [cache/l2-spec.md](cache/l2-spec.md) Tier 1; AIC2 Tier 1 [aic/aic2-spec.md §4](aic/aic2-spec.md) |
+| 2nd core + FGMT (per core +1,500–2,500 LUT4) | +12,000–17,000 | +15% | 0 | 6.5 | [fgmt/dual-fgmt-proposal.md](fgmt/dual-fgmt-proposal.md), [fgmt/mt2x2-plan.md](fgmt/mt2x2-plan.md); coherent L2 [cache/l2-spec.md](cache/l2-spec.md) Tier 1; AIC2 Tier 1 [aic/aic2-spec.md §4](aic/aic2-spec.md) |
 | SH4-compat FPU coprocessor | +11,000–19,000 | small | 4–8 | 7 | [fpu/spec.md](fpu/spec.md) Tier 1 (FIPR/FTRV/FSCA/FSRRA/SR.FD); Tier 2 hypervisor-aware for J32-FM |
 | SIMD prefix unit | +4,000–6,000 | ~3% | 4–8 | 7.5 | [simd/spec.md](simd/spec.md) Tier 0+1 (+Tier 2 GF(2) crypto for VCLMUL/VCRC32C on J32-FM) |
 | J64 datapath widening (optional, deferred) | +2,000–3,000 | small | 0 | 8 | [glossary §3](glossary.md) (J64 row); L2 Tier 2 (`ADDR_WIDTH=40`) per [cache/l2-spec.md](cache/l2-spec.md) |
 | **Full SH4-rich stack (Phase 7.5)** | **~50,000–100,000 LUT4** (range, not point — see caveat) | **~70–75%** | **8–16 DSP** | | J32-FM product point — see [glossary §3](glossary.md) |
 
-The OoO J32 design is BRAM-heavy by deliberate choice (state in BRAM, logic in LUTs). The plan's narrative target was ~10K LUT4 per core including dual-issue logic; the [ooo/j32ooo-spec.md §15](ooo/j32ooo-spec.md) gate budget converts to ~35–45k LUT4 per core including L1 caches. These two figures are *not* reconciled — see "OoO LUT-count uncertainty" below.
+The OoO J32 design is BRAM-heavy by deliberate choice (state in BRAM, logic in LUTs). What one OoO core costs in LUT4 is unknown at this stage — needs measurement; see "OoO LUT-count uncertainty" below for the two bounds that used to be presented as competing answers.
 
 OoO J64 is **explicitly out of scope** for the 85F — a quad-issue OoO J64 core would consume the entire device (~50–80K LUT4 alone). If pursued, it lives on a separate FPGA platform as a research target.
 
 ### OoO LUT-count uncertainty — **decision required before Phase 6 commits**
 
-The single biggest unknown in this budget is the actual LUT cost of one OoO J32 core on ECP5-6. Two figures circulate, both internally inconsistent:
+**The LUT4 cost of one OoO J32 core on ECP5-6 is
+unknown at this stage — needs measurement.** `yosys` + `nextpnr-ecp5` on the ULX3S 85F is what produces it,
+against RTL that does not exist yet: there is no OoO core, no FGMT machinery
+and no L2 in `jcore-cpu@master`, so nothing here could have been measured and
+nothing here was.
 
-| Source | LUT4 per OoO core |
-|---|---|
-| This plan's prior narrative ("BRAM-heavy by design") | ~10k |
-| This plan's §5 row "OoO upgrade delta" | +5–7k delta from in-order's 3–5k → 8–12k total |
-| [ooo/j32ooo-spec.md §15](ooo/j32ooo-spec.md) gate budget (230k gates ÷ 5–6 gates/LUT4) | **35–45k** (the spec's own ULX3S statement: "~35–45k LUTs for core + caches") |
-| [ooo/j32ooo-spec.md §11](ooo/j32ooo-spec.md) narrative claim | "~10K LUT4 per core including the dual-issue logic" |
+Two bounds circulated, and this section previously presented them as competing
+answers — an optimistic ~10k and a pessimistic 35–45k, with a three-row
+Phase-6/6.5/7.5 utilisation table derived from both. That table is removed per
+[decisions/0005](decisions/0005-unmeasured-figures-are-removed.md) rule 2: it
+read as data, and it was arithmetic on two numbers nobody produced. The bounds
+themselves are kept, as bounds, because the *spread* is the finding:
 
-The OoO spec is internally inconsistent (its narrative and its §15 gate-budget conversion disagree by ~4×). Until empirical ECP5-6 synthesis numbers exist, the budget below is presented as a range:
+- **~10k LUT4 per core.** Originates in this document, §"Phase 6" below, as an
+  unhedged bullet. **It has no other source.** This table previously cited it
+  to `ooo/j32ooo-spec.md` §11; that string appears nowhere in that file, and
+  `ooo/j32ooo-spec.md` §15.1 cites *this plan* for it in return. The two
+  documents were citing each other for a figure only one of them ever
+  asserted, and the "internal inconsistency of the OoO spec" this paragraph
+  used to describe was a broken back-reference making a disagreement between
+  two files look like one inside a third.
+- **~35–45k LUT4 per core + caches.** [ooo/j32ooo-spec.md §15](ooo/j32ooo-spec.md),
+  an a-priori block gate count converted at an assumed and unvalidated
+  gates-per-LUT4 ratio. Its own §15.1 says so.
 
-| Phase | Optimistic (10k/core narrative) | Pessimistic (35–45k/core gate budget) |
-|---|---|---|
-| Phase 6 (single-core OoO) | ~25k LUT4 (~30%) | ~50k LUT4 (~60%) |
-| Phase 6.5 (dual-core + L2 v2) | ~40k LUT4 (~50%) | ~95k LUT4 (**~113% — does not fit**) |
-| Phase 7.5 (+ FPU + SIMD) | ~55k LUT4 (~65%) | ~110k LUT4 (**~131% — does not fit**) |
+They differ by ~4× and neither is measured, so neither wins — 0005 rule 6.
 
 **Decision-gate at Phase 6 midpoint:** synthesize a representative OoO subset (rename + ROB + 1 ALU + L1$) on ECP5-6 with nextpnr; measure actual LUT count. If the empirical number trends toward the pessimistic end, Phase 6.5 dual-core on the 85F is at risk and one of the following must be picked:
 
-1. **Asymmetric SMP:** one OoO core + one in-order J32 core (host on OoO, lighter VMs on in-order). Saves ~30k LUT vs symmetric dual OoO.
-2. **Smaller L1 caches:** 16 KB I + 16 KB D per core instead of 32+32. Saves ~36 EBRs and some LUT; costs ~5–15% IPC.
+1. **Asymmetric SMP:** one OoO core + one in-order J32 core (host on OoO, lighter VMs on in-order). Saving: unknown at this stage — needs measurement; it is a *difference* of two unmeasured core costs, so it is the least knowable of these five.
+2. **Smaller L1 caches:** 16 KB I + 16 KB D per core instead of 32+32. Saves **36 EBRs** — structural, not measured: it is half of the 4 × ~18 EBRs [cache/l2-spec.md §20.1](cache/l2-spec.md) books for two cores' L1s. LUT saving and the IPC cost are each unknown at this stage — needs measurement.
 3. **Single-core OoO only on 85F**, defer dual-core to a larger FPGA (ECP5-100F or similar).
-4. **De-feature OoO:** smaller ROB (20→12 entries), single ALU. Saves ~20% LUT.
-5. **Reconcile the OoO spec §15** with its own narrative, presumably by re-counting gates per LUT4 with empirical data — the spec may simply be over-counted.
+4. **De-feature OoO:** smaller ROB (20→12 entries), single ALU. Saving: unknown at this stage — needs measurement.
+5. **Re-derive the OoO gate budget against real synthesis data.** Note this is no longer "reconcile the spec with its own narrative": the narrative belongs to *this* document, not to the spec (see above).
 
-**J32-LT does not solve this.** [ooo/j32lt-spec.md §12.1](ooo/j32lt-spec.md) estimates the light 4-way-FGMT core at ~220k gates against J32-OOO's ~222k — deleting the issue queue, the rename machinery, the store-set predictor, and two predictor tables is almost exactly cancelled by quadrupling the thread contexts. J32-LT is an **energy** design point, not an area one, and substituting it for J32-OOO leaves the Phase 6.5 fit problem untouched. Do not treat "light OoO" as a LUT-budget mitigation.
+**J32-LT does not solve this.** [ooo/j32lt-spec.md §12.1](ooo/j32lt-spec.md) estimates the light 4-way-FGMT core at ~235k gates against J32-OOO's ~230k (this paragraph previously said ~220k / ~222k, which are `ooo/j32ooo-spec.md`'s header figures, not §12.1's) — deleting the issue queue, the rename machinery, the store-set predictor, and two predictor tables is almost exactly cancelled by quadrupling the thread contexts. J32-LT is an **energy** design point, not an area one, and substituting it for J32-OOO leaves the Phase 6.5 fit problem untouched. Do not treat "light OoO" as a LUT-budget mitigation.
 
 It does, however, change *what a core is worth* on this board — though **not in the way an earlier draft of this paragraph claimed**. That draft read 4 hardware threads at ~1.55 aggregate IPC as "roughly four tenant VMs per core", and concluded that one J32-LT core might beat two J32-OOO cores for a concurrency-driven service. That conclusion is withdrawn: [hypervisor/hardware-spec.md §4.7](hypervisor/hardware-spec.md) makes a **core** the unit of guest allocation, because the four contexts share one L1, one TLB, one TSB and one predictor set. Four contexts are four vCPUs for **one** tenant, not four tenants.
 
@@ -303,12 +333,32 @@ The corrected comparison: one J32-LT core serves **one** tenant with 4 vCPUs; tw
 
 ### BRAM budget — corrected
 
-The plan's prior "~50% BRAM at Phase 7.5" was an under-estimate. Per [cache/l2-spec.md §20.1](cache/l2-spec.md): two cores × (32 KB I + 32 KB D) = 72 EBRs plus the 128 KB L2 at 71 EBRs = **141 EBRs (~67%) for the cache subsystem alone**. Add FPU FSCA/FSRRA tables (+2), SIMD register file (+1.5–2), AIC2 + PMU shadow + hypervisor scratch (+5–10) → **~150–155 EBRs (~73–75%)** at Phase 7.5.
+**"104 EBR vs 141 EBR" was never a disagreement.** The two count different
+machines: [ooo/j32ooo-spec.md §11.5](ooo/j32ooo-spec.md)'s ~104 is **one**
+core's L1-I + L1-D + the L2; [cache/l2-spec.md §20.1](cache/l2-spec.md)'s 141
+is **two** cores' L1s + the L2. The difference is one extra L1 pair, 36 EBRs,
+and 104 + 36 = 140. Both are capacity arithmetic — array size ÷ the 18 Kb EBR —
+and `l2-spec.md` §20.1 labels itself as such in so many words. Neither is a
+synthesis result and neither needed to be: an EBR count for an array of known
+size is structural, per
+[decisions/0005](decisions/0005-unmeasured-figures-are-removed.md) rule 5. What
+was wrong was two documents stating scope-different totals without either
+saying which machine it counted.
+
+Per [cache/l2-spec.md §20.1](cache/l2-spec.md), for the **dual-core**
+configuration: two cores × (32 KB I + 32 KB D) = 72 EBRs, plus the 128 KB L2 at
+~69 EBRs, ≈ **141 EBRs (~68%) for the cache subsystem alone** — structural
+arithmetic, not a measurement. (This line previously wrote the L2 as 71, which
+is the T2 wide-address figure, and then still totalled 141; 72 + 71 is 143.)
+Adding FPU FSCA/FSRRA tables, the SIMD register file, and AIC2 + PMU shadow +
+hypervisor scratch pushes it higher, by an amount that is
+unknown at this stage — needs measurement, since unlike the cache arrays those are not fixed-size
+structures whose EBR count follows from arithmetic.
 
 Still fits the 85F's 208 EBRs, but the BRAM budget is *the* binding constraint at Phase 6.5 onward — much more so than LUT in the optimistic OoO scenario. **BRAM mitigation levers** (decide at Phase 6 design freeze):
 
-- Shrink L2 from 128 KB to 64 KB → −30 EBRs (modest IPC cost on memory-bound workloads).
-- Shrink L1s from 32+32 to 16+16 per core → −36 EBRs (notable IPC cost; combines with L2 sizing decision).
+- Shrink L2 from 128 KB to 64 KB → −30 EBRs (structural: halving the data array; the IPC cost on memory-bound workloads is unknown at this stage — needs measurement).
+- Shrink L1s from 32+32 to 16+16 per core → −36 EBRs (structural, as above; IPC cost unknown at this stage — needs measurement).
 - Drop next-line prefetcher / stride prefetcher MSHRs to save a few EBRs of metadata.
 
 ### Memory budget (per board, 32 MB)
@@ -737,7 +787,7 @@ Key microarchitecture points the spec pins down:
 
 - **Two integer ALUs**, one of each specialized unit (mul, shift, eventual FPU, eventual SIMD coprocessor port)
 - **BRAM-heavy state:** rename map, reorder buffer, issue queue, load-store queue, physical register file, branch predictor all in BRAM. ~15% of total BRAM per core.
-- **~10K LUT4 per core** for the dual-issue logic, wakeup, bypass, scoreboarding
+- **LUT4 per core** for the dual-issue logic, wakeup, bypass, scoreboarding: unknown at this stage — needs measurement. This bullet previously carried a bare "~10K LUT4 per core", unhedged, and it is the origin of the optimistic bound in §5's "OoO LUT-count uncertainty" — including the copy that `ooo/j32ooo-spec.md` §15.1 attributes back to this plan
 - **SH4 memory model preserved:** stores commit in program order; loads OoO with LSQ hazard checks; `synco` drains the LSQ; CAS.L drains and re-issues without speculation past
 - **Atomicity:** CAS.L now uses **L2 per-line lock** (see [cache/l2-spec.md §6](cache/l2-spec.md)) for J32-OOO and beyond, not legacy bus-lock; J2 cores without L2 keep bus-lock for backward compatibility
 - **`Fmax` expectation `[FPGA]`:** unknown at this stage — needs measurement. There is no OoO RTL to synthesize; `yosys` + `nextpnr-ecp5` on the ULX3S 85F is what answers it. This bullet previously gave "~50–65 MHz on ECP5-6 (down from in-order's ~80 MHz)" — the 80 MHz in-order baseline it was measured *down from* was itself never measured, and the real in-order baseline is ~42–43 MHz for J2 / ~33 MHz for J4 ([platform-baseline.md §3](platform-baseline.md)), so both ends of that comparison were wrong

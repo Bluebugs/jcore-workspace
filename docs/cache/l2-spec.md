@@ -471,7 +471,7 @@ Per bank (baseline 128 sets, 8 ways):
 | T1   |           35 |                   280 |                   35,840 |       ~2.0    |
 | T2   |           43 |                   344 |                   44,032 |       ~2.5    |
 
-Across 4 banks: T0 ~5 EBRs, T1 ~8 EBRs, T2 ~10 EBRs. Within ULX3S budget. In practice tags are split across multiple narrow EBRs read in parallel because EBR ports cap at 36 bits; realistic mapping is 4–6 EBRs per bank, **16–24 EBRs total** for tag storage across 4 banks at T1 — the same envelope as v1.
+Across 4 banks: T0 ~5 EBRs, T1 ~8 EBRs, T2 ~10 EBRs — this is the figure §20.1's allocation table books. In practice tags are split across multiple narrow EBRs read in parallel because EBR ports cap at 36 bits; the realistic *mapped* count is therefore higher than the *capacity* count, 4–6 EBRs per bank or **16–24 EBRs total** at T1. Both numbers are structural; they answer different questions (bits needed vs blocks consumed after port-width packing), and §20.1's total uses the capacity figure. Which of the two the ECP5 mapper actually produces is unknown at this stage — needs measurement.
 
 ---
 
@@ -753,7 +753,7 @@ Per-line scaling with `NUM_CORES`:
 
 For T2 (40-bit PA), the only additional cost is the wider tag field (+8 bits/line) — see §9.3.
 
-LUT cost of directory state-machine: estimated 1.5k LUT4 equivalents for the bank-local directory FSM, snoop-issue logic, in-flight-set tracking, and lock-age scanner. Across 4 banks: ~6k LUT4. Comparable to the MSHR pool.
+LUT cost of directory state-machine: unknown at this stage — needs measurement, like everything else in §21, which says of itself that it is a budget rather than a measurement. This sentence previously estimated 1.5k LUT4 equivalents per bank and ~6k across 4 banks, which is inconsistent with §21's own table booking the directory FSM at 2,400 LUT4 for all four banks together — two different unmeasured numbers for one block, in one document.
 
 ---
 
@@ -937,7 +937,13 @@ Approximately identical EBR count to v1 (the directory and lock bits fit inside 
 
 T2 grows tag array by +8 bits/line → +~2 EBRs total → **~71 EBRs**.
 
-On ULX3S 85F (208 EBRs total), the L2 uses ~33–34% of available BRAM. Combined with two cores' worth of L1-I and L1-D (4 × ~18 EBRs = 72 EBRs), the full **dual-core coherent** cache hierarchy uses **~70% of ULX3S BRAMs** (141 of 208). Within budget for J32-FM on ULX3S 85F.
+On ULX3S 85F (208 EBRs total), the L2 uses ~33–34% of available BRAM. Combined with two cores' worth of L1-I and L1-D (4 × ~18 EBRs = 72 EBRs), the full **dual-core coherent** cache hierarchy uses **~68% of ULX3S BRAMs** (141 of 208, from 72 + the ~69 above). Within budget for J32-FM on ULX3S 85F.
+
+**Read the scope, not just the number.** This 141 counts **two** cores' L1 pairs
+plus one L2. [ooo/j32ooo-spec.md §11.5](../ooo/j32ooo-spec.md)'s ~104 counts
+**one** core's L1 pair plus the same L2, and the ~37 difference is the second
+pair. The two were tracked as a "104 vs 141" contradiction; they are the same
+capacity arithmetic over different machines, and both now say which machine.
 
 ### 20.2 Synthesis considerations
 
