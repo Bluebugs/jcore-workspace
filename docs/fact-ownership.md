@@ -72,6 +72,7 @@ are the substitute for a check that cannot be written cleanly — see
 | `bus.bmid.width` | `BMID`: **8 bits**, `0x00`/`0xFF` reserved | [bus/fabric-spec.md §4](bus/fabric-spec.md) | `8-bit BMID` |
 | `hyp.expevt.hcall` | `HCALL`: EXPEVT `0x1D0` at `VBR_HYP + 0x180` | [hypervisor/hardware-spec.md §4.2](hypervisor/hardware-spec.md) | `0x1D0` |
 | `hyp.expevt.hypreg` | Hyperprivileged-register access: EXPEVT `0x1F0` at `VBR_HYP + 0x300` | [hypervisor/hardware-spec.md §4.2](hypervisor/hardware-spec.md) | `0x1F0` |
+| `ooo.uops.rte` | `RTE` cracks to **3 uops** | [ooo/j32ooo-spec.md §4.1](ooo/j32ooo-spec.md) | `(?i)\brte\b.?\s*[\|→]\s*(?:\*\*)?3\b` |
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
@@ -229,6 +230,7 @@ Two escapes, and they are different things:
 |---|---|---|
 | `fpu.context.t2` | `(\d+)[-\s]byte\s+FPU\s+(?:[\w/-]+\s+)*image` | `(\d+)[-\s]byte\s+FPU\s+(?:[\w/-]+\s+)*image` |
 | `simd.context.j32` | `(\d+)[-\s]byte\s+SIMD\s+(?:[\w/-]+\s+)*image` | `(\d+)[-\s]byte\s+(?:SIMD\|context-switch)\s+(?:[\w/-]+\s+)*image` |
+| `ooo.uops.rte` | `(?i)\brte\b.?\s*[\|→]\s*(?:\*\*)?(\d+)\b` | `(?i)\brte\b.?\s*[\|→]\s*(?:\*\*)?(\d+)\b` |
 
 ## Image layouts
 
