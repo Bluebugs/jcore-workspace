@@ -44,3 +44,5 @@ Each record carries, in this order:
 | [0003](0003-canonical-encoding-database.md) | One encoding database: `jcore-cpu/docs/insns.json` | Accepted 2026-08-25 |
 | [0004](0004-platform-tag-convention.md) | Platform tags: `[FPGA]` / `[ASIC]`, and which numbers need one | Accepted 2026-09-07; rules 3–4 and §Marking convention superseded by [0005](0005-unmeasured-figures-are-removed.md) |
 | [0005](0005-unmeasured-figures-are-removed.md) | An unmeasured figure is removed, not annotated | Accepted 2026-09-07 |
+| [0006](0006-endianness-is-big-endian.md) | J-Core is big-endian, at every product point | Accepted 2026-09-07 |
+| [0007](0007-l1d-write-policy-under-msi.md) | The L1-D is write-through at T0 and write-back under MSI at T1/T2 | Accepted 2026-09-07 |
