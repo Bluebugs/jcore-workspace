@@ -181,6 +181,13 @@ class Report:
         self.skips += 1
         if self.strict:
             self.failures += 1
+            # Annotate here too. Under --strict a skip IS a failure, and it was
+            # the one failure class with no `::error::` line -- so exactly the
+            # failures that mean "nothing was verified" were the ones a
+            # contributor could not see without opening the log.
+            if self.ANNOTATE:
+                print("::error title=%s::(skipped, --strict) %s"
+                      % (check, message))
             print("FAIL  [%s] (skipped, --strict) %s" % (check, message))
         else:
             print("SKIP  [%s] %s" % (check, message))
@@ -843,6 +850,15 @@ def check_no_stale_value(cfg, report, facts, guards, waivers):
     if not guards:
         return
     owners = {f.id: f for f in facts}
+    # Every number written in any Registry `Constant` cell. This is a second,
+    # independently maintained statement of the same values -- weaker than a
+    # per-fact comparison would be, since any row's number counts, but strong
+    # enough for the case it exists to catch: a retired value like 272 or 132
+    # appears in no cell at all, because the row was corrected when the fact
+    # was. The weakness is stated rather than hidden.
+    registry_values = set()
+    for f in facts:
+        registry_values.update(re.findall(r"\d+", f.value))
     corpus = {}
     for p in cfg.markdown_files():
         # The decision records quote retired values on purpose -- 0001's whole
@@ -889,6 +905,24 @@ def check_no_stale_value(cfg, report, facts, guards, waivers):
                         "canonical pattern %s matches nothing in the owner %s; "
                         "there is no value to compare restatements against"
                         % (g.canonical.pattern, cfg.rel(fact.owner)))
+            continue
+        # M1 is narrowed by the retraction rule above, not eliminated: a BARE
+        # stale value in the owner still licenses itself. Add "the 272-byte
+        # SIMD image is what Tier 1 shipped" to simd/spec.md -- no retraction
+        # phrase, so nothing exempts it -- and 272 becomes licensed tree-wide
+        # again. The owner is the authority on the value, but it is not the
+        # only place the value is written down: the Registry's own Constant
+        # cells state it too, and they are maintained by a different edit.
+        # Requiring the two to agree means a bare stale value has to be written
+        # into BOTH before it licenses anything.
+        stray = [v for v in licensed if v not in registry_values]
+        if stray:
+            report.fail("no-stale-value", g.id,
+                        "the owner %s states %s for this fact, which appears "
+                        "in no Registry `Constant` cell. Either the owner has "
+                        "a stale value that would otherwise license itself "
+                        "tree-wide, or the Registry has not been updated."
+                        % (cfg.rel(fact.owner), "/".join(stray)))
             continue
         if len(licensed) > VALUE_GUARD_MAX_LICENSED:
             report.fail("no-stale-value", g.id,
@@ -1563,7 +1597,23 @@ class Repos:
             return self._shallow[repo_name]
         repo = os.path.join(self.cfg.root, repo_name)
         rc, out = git(repo, "rev-parse", "--is-shallow-repository")
-        result = None if (rc is None or rc != 0) else (out.strip() == "true")
+        if rc is None or rc != 0:
+            self._shallow[repo_name] = None
+            return None
+        result = out.strip() == "true"
+        if not result:
+            # `git replace --graft` truncates history just as effectively and
+            # reports "false" here, so a grafted repo would take the
+            # complete+absent row and FAIL a correct marker, with a remedy
+            # (`fetch --unshallow`) that would not help. Replacement refs make
+            # the walk unrepresentative in the same way; treat them the same.
+            rc_r, refs = git(repo, "for-each-ref", "--format=%(refname)",
+                             "refs/replace")
+            if rc_r is None:
+                self._shallow[repo_name] = None
+                return None
+            if refs.strip():
+                result = True
         self._shallow[repo_name] = result
         return result
 
@@ -1694,16 +1744,28 @@ def check_resolved_subject(cfg, report, repos, where, m):
     if shallow is not False:
         report.skip("resolved-is-merged",
                     '%s: "%s" is not in the history available for %s, and that '
-                    "history is %s. Cannot distinguish 'beyond the graft "
-                    "boundary' from 'does not exist' -- run `git -C %s fetch "
-                    "--unshallow --filter=tree:0`."
+                    "history is %s. Cannot distinguish 'beyond the boundary' "
+                    "from 'does not exist' -- for a shallow clone run "
+                    "`git -C %s fetch --unshallow --filter=tree:0`; for a "
+                    "grafted one, drop the refs/replace entries."
                     % (where, subject, repo_name,
-                       "shallow" if shallow else "of unknown depth", repo_name))
+                       "INCOMPLETE (shallow, or grafted via refs/replace)"
+                       if shallow else "of UNKNOWN completeness", repo_name))
         return
+    # If any subject in the searched range had bytes that would not decode,
+    # say so. Otherwise a commit that IS merged is reported as "not merged ...
+    # or the subject was reworded", and the only way to satisfy the check is to
+    # paste U+FFFD into the document -- a fix that looks like vandalism and
+    # cures nothing.
+    mangled = any("\ufffd" in k for k in subjects)
+    hint = ("" if not mangled else
+            " NOTE: at least one subject in the searched range contains bytes "
+            "that are not valid UTF-8 and were replaced with U+FFFD; if this "
+            "marker cites one of them, no spelling of it can match.")
     report.fail("resolved-is-merged", where,
                 'RESOLVED cites "%s" but it is not on %s origin/%s. Either '
                 "it is not merged (use PENDING-MERGE) or the subject was "
-                "reworded." % (subject, repo_name, branch))
+                "reworded.%s" % (subject, repo_name, branch, hint))
 
 
 def check_resolved_artifact(cfg, report, repos, where, m):
