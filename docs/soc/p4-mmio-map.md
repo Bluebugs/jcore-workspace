@@ -98,8 +98,9 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 | `0x030`     | CPUINFO    | Per-CPU hart ID + capability flags — **allocated, NOT implemented in current RTL** (see note below) |
 | `0x034`     | reserved   | proposed `PTEU` (PAE only, [mmu/hardware-spec.md §2.10](../mmu/hardware-spec.md)) |
 | `0x038`     | ASIDR      | Address-space identifier, **read-only alias, decoded in RTL** (`P4_ASIDR`). J-core addition with no stock SH-4 offset, hence `0x038` (`0x034` stays reserved for the proposed `PTEU`). Replaces the retired `STC ASIDR,Rn`; write path stays `LDC Rm,ASIDR` (D7). Linux's `get_asid()` reads this. |
-| `0x03C`     | QACR0      | Store-queue 0 area register (`0xFF00003C`), see [../sq/spec.md §3](../sq/spec.md) |
-| `0x040`     | QACR1      | Store-queue 1 area register (`0xFF000040`), see [../sq/spec.md §3](../sq/spec.md) |
+| `0x03C`     | QACR0      | Store-queue 0 area register (`0xFF00003C`) — **allocated, NOT implemented in current RTL** (see the silent-failure note below), see [../sq/spec.md §3](../sq/spec.md) |
+| `0x040`     | QACR1      | Store-queue 1 area register (`0xFF000040`) — **allocated, NOT implemented in current RTL**, see [../sq/spec.md §3](../sq/spec.md) |
+| `0x044`     | reserved   | no allocation; falls in the silent-zero class below. Previously absent from this table altogether — neither allocated nor reserved, in a table headed "current allocations" |
 | `0x048`     | TSBSLOT    | TSB slot-address helper — **decoded in RTL** (`core/datapath.vhm`, `P4_TSBSLOT`, read/write alongside TSBBR/TSBCFG/TSBPTR). Write a VA, read the same address back to get `tsb_ptr(VA)` — the exact slot address the hardware TSB walker (`core/tlb_walk.vhd`) and TSBPTR-on-fault use. Only the VA is latched; the index function is evaluated on the read, so `core/datapath_pkg.vhd`'s `tsb_ptr()` remains the single implementation. Added in Phase-2 Task 2 so Linux's `jcore_tsb_slot_offset()` bit-for-bit C mirror could be deleted; kernel side is `JCORE_TSB_SLOT` (`0xFF000048`) in `arch/sh/include/cpu-jcore/cpu/mmu_context.h`. |
 | `0x04C`     | TSBVSEED   | TSB victim-selector seed — **decoded in RTL** (`core/datapath.vhm`, `P4_TSBVSEED`). **WRITE-ONLY**: there is no read case, so a read returns the decoder's hard zero *deliberately*, not by omission. Seeds the LFSR that nominates which way of a 2-way TSB set to replace when neither tag matches. The seed comes from the OS at MMU init precisely because it must not be public — this is an open-source core, so the polynomial and any constant seed compiled into the RTL are readable by anyone. If software could read the seed back, so could an attacker. Kernel side is `JCORE_TSB_VSEED`. See [mmu/hardware-spec.md §2.13](../mmu/hardware-spec.md). |
 | `0x050`     | TSBVICT    | TSB victim nomination — **decoded in RTL** (`core/datapath.vhm`, `P4_TSBVICT`). **READ-ONLY**, and only bit 0 is meaningful: the way to replace. **The read advances the LFSR**, so each read consumes one bit and no two reads observe the same state; neither the seed nor the LFSR state is ever readable. Kernel side is `JCORE_TSB_VICTIM`. |
@@ -151,8 +152,8 @@ offsets. See
 [../mmu/hardware-spec.md §2.1](../mmu/hardware-spec.md) (PTEH), §2.1a (ASIDR) and §2.2 (PTEL).
 PTEU ([mmu/hardware-spec.md §2.10](../mmu/hardware-spec.md), PAE-only) is likewise LDC/STC-only.
 
-The RTL is the ground truth here: `jcore-cpu/core/datapath.vhm` (the `p4_sel_v` decode, around
-`:1697` and following) decodes `0x08` TTB, `0x0C` TEA, `0x10` MMUCR, `0x14` TSBBR, `0x18` TSBCFG,
+The RTL is the ground truth here: `jcore-cpu/core/datapath.vhm` (the `p4_sel_v` decode, inside the
+`if PRIV_ARCH then` block) decodes `0x08` TTB, `0x0C` TEA, `0x10` MMUCR, `0x14` TSBBR, `0x18` TSBCFG,
 `0x1C` TSBPTR (read-only), `0x20` TRA, `0x24` EXPEVT, `0x28` INTEVT, `0x2C` MMUFSR, `0x048`
 TSBSLOT, `0x04C` TSBVSEED (write-only), `0x050` TSBVICT (read-only), `0x054` TSBCNT (read-only)
 and the read-only `0x00` PTEH / `0x04` PTEL / `0x38` ASIDR aliases. Those three have **read**
@@ -174,18 +175,83 @@ aliases); `arch/sh/mm/tlb-jcore.c` uses `ldc %0, pteh`.
 
 **Undecoded P4 offsets fail SILENTLY (normative hazard).** A load or store to a P4 offset in this
 block that the hardware does not decode raises **no exception and no bus error**. Writes fall into
-the decoder's `when others => null` arm (`datapath.vhm:1174`) and are discarded; reads fall into
-`when others => this.m_dr_next := (others => '0')` (`datapath.vhm:1184`) and return **zero**, with
-`m_en` still asserted so the access completes normally from the pipeline's point of view. Software
+the decoder's `when others => null` arm and are discarded; reads fall into
+`when others => this.m_dr_next := (others => '0')` and return **zero**, with
+`m_en` still asserted so the access completes normally from the pipeline's point of view.
+*(Line numbers were pinned here and had drifted; grep the arms instead.)* Software
 that uses a phantom P4 address therefore observes a register that is permanently zero and never
 faults — a failure mode that is easy to mistake for "the feature is disabled". Any address in this
-sub-block marked *reserved*, or marked *allocated but not implemented* (CPUINFO `0x030`), behaves
-this way today. TRA/EXPEVT/INTEVT and MMUFSR are no longer in that category — the RTL decodes all
-four. There are zero occurrences of `cpuinfo` in
-any `.vhd`/`.vhm` source; its allocation is a valid reservation, but reading it returns zero rather
-than a hart ID. The same holds for the Linux `TRA`/`EXPEVT`/`INTEVT` defines: they now name the
-correct architectural addresses, but until `datapath.vhm` decodes them a kernel reading them through
-MMIO now reads the real register.
+sub-block marked *reserved*, or marked *allocated but not implemented*, behaves this way today —
+`0x030` CPUINFO, `0x034`, `0x03C` QACR0, `0x040` QACR1, `0x044`, and `0x05C`–`0xFFC`.
+TRA/EXPEVT/INTEVT and MMUFSR are **not** in that category: the RTL decodes all four
+(`datapath.vhm`, `P4_TRA`/`P4_EXPEVT`/`P4_INTEVT`/`P4_MMUFSR`), so a kernel reading them through
+MMIO reads the real register. There are zero occurrences of `cpuinfo` in any `.vhd`/`.vhm` source;
+its allocation is a valid reservation, but reading it returns zero rather than a hart ID.
+
+*(This paragraph previously ended with a sentence that contradicted itself mid-way — "until
+`datapath.vhm` decodes them a kernel reading them through MMIO now reads the real register" — a
+leftover from before the decode landed, sitting two sentences after the line that says it did. It
+also listed only CPUINFO as marked not-implemented while QACR0 and QACR1 carried no such marker,
+which `scripts/check-doc-facts.py`'s own `check_p4_offsets` docstring asserted they did.)*
+
+### 3.2a How wide the CPU's P4 decode actually is — a normative hazard, and a live defect
+
+**This map allocates P4 by 4 KB / 64 KB block. `datapath.vhm` does not decode
+it that way, and on a `PRIV_ARCH` build it does not leave any of P4 to the
+fabric at all.** Found while reconciling this map against the RTL for Wave-2
+**B1**; recorded here because it is the map's problem to state and somebody
+else's to fix.
+
+Two facts, both read at `jcore-cpu@master`:
+
+1. **The segment test is one byte wide.** `core/datapath_pkg.vhd`'s
+   `seg_decode` returns `SEG_P4` for `va(31 downto 24) = x"FF"` — the whole
+   16 MB from `0xFF000000` to `0xFFFFFFFF`, not the 4 KB this map's §3.2
+   sub-allocates.
+2. **The register test is one byte wide too.** The `p4_sel_v` chain compares
+   only `ma_ad(7 downto 0)`. Nothing looks at `ma_ad(23 downto 8)`.
+
+Two consequences follow, and the second is the serious one.
+
+**Aliasing.** Each of the 18 decoded registers answers at *every* 256-byte
+stride across the whole 16 MB. `0xFF000010`, `0xFF000110`, `0xFF104010` and
+`0xFFFFFF10` all select `P4_MMUCR`.
+
+**Everything else in P4 is swallowed.** In `datapath.vhm` the external bus
+assignment `this.data_o := to_data_o(...)` sits in the `else` arm of the
+privilege/serve gate — i.e. it runs only for a **non-P4** access. So on a
+`PRIV_ARCH` build *every* supervisor access to `0xFF......` is consumed inside
+the datapath: matching low bytes hit a CSR, and non-matching ones hit
+`when others`, which discards the write and returns zero. **No P4 address
+outside `datapath.vhm`'s 18 is reachable at all.** That includes, by this map's
+own §3 table: the SoC-wide **SMP release** register at `0xFF00FF00`, the **PMU**
+at `0xFF001000`, the **hypervisor** block at `0xFF002000`, the **IOMMU** at
+`0xFF010000`, **AIC2** at `0xFF020000`, the **L2 CSRs** at `0xFF040000`, and
+every peripheral bank at `0xFF100000+`. On a non-`PRIV_ARCH` (J2) build the gate
+does not exist and P4 reaches the bus normally, which is why this has not bitten
+yet — no shipped J4 SoC uses those blocks.
+
+**This map already knew half of it and allocated against it anyway.** §3.2's
+blockquote says "P4 accesses never reach `cpu.vhd`'s *return path*, because
+`datapath.vhm` consumes them first — which is why genuinely debug-only windows
+once sat at P2 `0xABCD0F00` instead." That is this same mechanism, described as
+a curiosity in a note about register placement, three sections away from a table
+that assigns seven blocks to addresses the mechanism eats.
+
+**What this does not decide.** Which side is wrong. The RTL could grow a
+window check (`ma_ad(23 downto 12) = 0` for the MMU block, and a pass-through
+for the rest of P4), or this map could move the non-MMU blocks out of the
+`0xFF` segment. That is an RTL and SoC-integration decision with a privilege
+dimension — the gate that swallows these accesses is also the gate that stops a
+user-mode store to `0xFF000014` repointing the TSB walker (`mmup4priv`), so
+narrowing it needs care rather than a smaller mask. **It is not B1's to make**,
+and B1 does not make it.
+
+**What is enforced now.** `mmu.p4.segment` and `mmu.p4.window` in
+[fact-ownership.md](../fact-ownership.md) §Code bindings pin both widths — the
+`0xFF` segment test and the 8-bit offset compare — against `datapath_pkg.vhd`
+and `datapath.vhm`. Neither can narrow or widen without this section going red,
+which is the least a doc-side task can do about a hardware question.
 
 ### 3.3 SoC-wide control (`0xFF00F000`–`0xFF00FFFF`)
 
@@ -236,6 +302,38 @@ Rules for adding new P4 allocations:
 5. **Document the per-CPU vs SoC-wide property** explicitly in the table above.
 6. **Cite the canonical spec** for the block in the table's "Spec" column.
 7. **Update both this map and the [bus/fabric-spec.md §3](../bus/fabric-spec.md) slave-port table** in the same change; they must agree.
+8. **State the SH-4 relationship in the row, in one of three words.** Every
+   allocation in `0xFF000000`–`0xFF000FFF` is one of:
+   - **alias** — the register exists on SH-4 and J-Core places it at the *stock
+     SH-4 offset*, so SH-4-aware kernels, debuggers and simulators keep working.
+     `PTEH 0x000`, `PTEL 0x004`, `TTB 0x008`, `TEA 0x00C`, `MMUCR 0x010`,
+     `TRA 0x020`, `EXPEVT 0x024`, `INTEVT 0x028`. The RTL says why in as many
+     words: *"the MMIO aliases exist so generic (non-J-core) SH-4 kernel code
+     that pokes 0xFF0000{20,24,28} keeps working"* (`datapath.vhm`).
+   - **J-Core addition** — no stock SH-4 offset exists, so any free offset will
+     do and the row says which and why. `ASIDR 0x038` (`0x034` held for `PTEU`),
+     `TSBBR`/`TSBCFG`/`TSBPTR` `0x014`–`0x01C`, `TSBSLOT`/`TSBVSEED`/`TSBVICT`/
+     `TSBCNT`/`TLBINST` `0x048`–`0x058`, `CPUINFO 0x030`.
+   - **deliberate divergence** — the register is J-Core-only *and* the obvious
+     offset is occupied by an SH-4 register, so the row names the collision it
+     dodged. Exactly one today: `MMUFSR` at `0x02C`, moved off `0x028` because
+     that is SH-4's `INTEVT`, onto an offset *"which SH-4 and SH-4A both leave
+     free"* (`datapath.vhm`).
+
+   **A fourth case is deliberately absent: a register at an offset SH-4 uses
+   for something else.** No allocation here does that and none may be added
+   without amending this rule, because that is the one arrangement an
+   SH-4-aware kernel cannot detect.
+
+   **This rule covers placement, not behaviour.** Whether an SH-4 *guest* sees
+   the SH-4 semantics of a register it pokes is a hypervisor
+   emulation-fidelity question, and the compatibility model that decides it is
+   **Wave-2 B2** ([j4-remediation-plan.md §B2](../j4-remediation-plan.md)).
+   `QACR0`/`QACR1` and `CCR` are the open cases and are gated on it: `QACR0`
+   and `QACR1` are allocated and unimplemented (§3.2), and **`CCR` is not
+   allocated at all** — it appears nowhere in this map and nowhere in
+   `jcore-cpu`'s RTL. §7 item 3 records the related `0xF0000000`–`0xF7FFFFFF`
+   cache-array region as uncommitted for the same reason.
 
 ---
 
@@ -286,7 +384,9 @@ All references pre-2006, satisfying the project-wide prior-art policy ([glossary
    [§3.2](#32-mmu-sub-allocation-0xff000000-0xff000fff) for the full rationale and for the
    flagged functional overlap between CPUINFO's `HART_ID` and jcore-soc's `jcore,cpuid-mmio` at
    `0xABCD0600`.
-   **Residual (not part of this question):** all four offsets remain undecoded in RTL, so the
-   Linux defines still read as constant zero until `datapath.vhm` implements them. That is an
-   implementation task, not an allocation dispute.
+   **Residual — CLOSED 2026-09-07.** This paragraph previously read that "all four offsets remain
+   undecoded in RTL, so the Linux defines still read as constant zero". They are decoded:
+   `datapath.vhm` selects `P4_TRA` at `x"20"`, `P4_EXPEVT` at `x"24"`, `P4_INTEVT` at `x"28"` and
+   `P4_MMUFSR` at `x"2C"`, with `TRA` read/write and `EXPEVT`/`INTEVT` read-only. §3.2 said so
+   already; this residual note outlived it.
 5. **64-bit J64 P4 layout.** This map specifies the 32-bit J32 layout. J64 retains P4 at the same virtual addresses (high half of address space) but with wider underlying PA — see [mmu/design-spec.md §3.7](../mmu/design-spec.md). No new addresses are introduced by J64; the existing allocations remain valid.

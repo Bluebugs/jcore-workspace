@@ -274,9 +274,21 @@ high-leverage fix)
 
 A worklist, each item = pick the true value, fix every other doc, add a CI check:
 
-- **P4 register map vs real SH-4** (QACR0/QACR1/CCR/ASIDR/CPUINFO/TRA offsets):
-  decide the SH-4-compat policy in B2, then make the map and `datapath.vhm`
-  agree and encode the decision (alias vs deliberate-divergence-documented).
+- **P4 register map vs real SH-4** — **PARTLY CLOSED.** The map and
+  `datapath.vhm` now agree on every offset the RTL decodes; the three stale
+  "undecoded in RTL" claims about TRA/EXPEVT/INTEVT/MMUFSR are gone; QACR0 and
+  QACR1 carry the allocated-but-unimplemented marker the checker's own docstring
+  claimed they had; `0x044` exists as a row. The alias-vs-divergence decision is
+  **encoded as an allocation rule**, [soc/p4-mmio-map.md §5](soc/p4-mmio-map.md)
+  rule 8: every MMU-block row is *alias* (stock SH-4 offset), *J-Core addition*
+  (no SH-4 offset exists) or *deliberate divergence* (names the SH-4 register it
+  dodged — `MMUFSR` off `INTEVT`'s `0x028`, the only one). **Still gated on B2:**
+  QACR0/QACR1 behaviour and `CCR`, which is allocated nowhere and decoded
+  nowhere. **Found while doing this, and larger than the item:**
+  [§3.2a](soc/p4-mmio-map.md) — the CPU's P4 decode is byte-wide in both
+  dimensions, so on a `PRIV_ARCH` build the datapath consumes *all* of
+  `0xFF......` and no P4 block outside it is reachable. That is an RTL question,
+  not a doc one; both widths are now code-bound so they cannot move quietly.
 - **Endianness** (glossary "little" vs `sh2eb` big-endian builds & mt2x2 note).
 - **Baseline Fmax** (42 vs 80 MHz) — this poisons every throughput table.
 - **Area/BRAM budgets** (OoO ~10k vs 35–45k LUT4; FGMT +1.5–2.5k vs ~13.45k;
