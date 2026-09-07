@@ -1068,7 +1068,7 @@ The cumulative beneficiary surface across the three implemented tiers:
 | Compression |   |   | ✔ | gzip/zlib CRC folding (VCLMUL.D + software constants for CRC-32-IEEE) |
 | Scientific / autovec | ✔ |   |   | Generic vertical/horizontal FP & integer kernels, SpMV (gather), reductions |
 
-Combined named-algorithm count across Tiers 0+1+2: ≈ 70+ algorithms in production use. The per-tier cost (Tier 0: 2096 architectural bits + ~5–15% area; Tier 1: ≈4k gates; Tier 2: ≈16k gates Karatsuba pipelined) amortises across this surface.
+Combined named-algorithm count across Tiers 0+1+2: ≈ 70+ algorithms in production use. Tier 0 costs 2096 architectural bits, which is structural. The per-tier **area** cost — the number this paragraph's amortisation argument needs — is unknown at this stage — needs measurement: no tier has been synthesized for the ULX3S/ECP5 or for gf180, and [hardware-impl.md §11.1](hardware-impl.md) is the authority for it when it exists. The argument the cost amortises across a wide algorithm surface stands on the algorithm count alone.
 
 ---
 

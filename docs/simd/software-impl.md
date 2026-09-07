@@ -433,7 +433,7 @@ void hqc_poly_mul(const uint64_t *a, const uint64_t *b, uint64_t *result,
 }
 ```
 
-**Expected performance:** O(n²/64) cycles for the schoolbook variant. For HQC-128 (n ≈ 17,669 bits, ~277 64-bit words): ~76,000 VCLMUL.D operations per multiply, or ~25–30 µs on a 500 MHz core. Layer Karatsuba (or Toom-Cook) on top for O(n^log₂3 / 64); reference implementations exist in the HQC NIST submission package.
+**Expected performance:** O(n²/64) cycles for the schoolbook variant. For HQC-128 (n ≈ 17,669 bits, ~277 64-bit words): ~76,000 VCLMUL.D operations per multiply, or ~25–30 µs at the 500 MHz `[ASIC]` design target (a goal, not a measured clock). Layer Karatsuba (or Toom-Cook) on top for O(n^log₂3 / 64); reference implementations exist in the HQC NIST submission package.
 
 ### 6.5 Reed-Solomon FEC decoder
 
@@ -585,7 +585,7 @@ All of these auto-select based on HWCAP at library load.
 
 ## 10. Performance characterisation
 
-### 10.1 Expected speedups (Tier B Tier 2 hardware, 500 MHz)
+### 10.1 Expected speedups (Tier B Tier 2 hardware)
 
 | Workload | Software baseline | With Tier 2 | Speedup |
 |---|---|---|---|
@@ -596,6 +596,13 @@ All of these auto-select based on HWCAP at library load.
 | HQC multiply (HQC-128) | ~800 µs | ~25 µs | 30× |
 
 Tier A is 10–15% faster; Tier C is 10–20× slower (still correctness-equivalent, not throughput-equivalent).
+
+These are **projections from cycle counts**, not measurements: no Tier 2
+hardware exists on either target. Cycle counts are architectural and hold on
+any implementation; wherever a figure below is quoted in seconds it assumes the
+`[ASIC]` design target of 400–500 MHz ([hardware-impl.md §11.1](hardware-impl.md)),
+which is a goal, not an achieved clock. The Phase-1 `[FPGA]` target is ~40 MHz,
+an order of magnitude away, so no wall-clock figure here transfers to it.
 
 ### 10.2 Cycle counting methodology
 
