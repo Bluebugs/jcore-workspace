@@ -327,15 +327,15 @@ translation is a software handler + TLB."*
    cache those stores go through."
 4. `hash = f(VPN) ⊕ g(ASID)` is **XOR-separable and public**, and
    [mmu/hardware-spec.md §2.8a](../mmu/hardware-spec.md) says so itself, adding
-   that the residual `g(ASID)` offset space is "only `2^TSB_SIZE_LOG`
-   (64–1024 values), which is brute-forceable by timing probes." *(That range is
-   itself narrower than the register allows: [mmu/hardware-spec.md §2.8](../mmu/hardware-spec.md)
-   gives `TSB_SIZE_LOG` a valid range of 6–14, i.e. 64–16384 sets. The
-   discrepancy is pre-existing and does not change the conclusion — a
-   14-bit search is still a search, not an exclusion. It is **not** immaterial to
-   the attack's cost, though: `TSB_SIZE_LOG` sets how many index bits exist to be
-   learned, and therefore how many observations the solve above needs. A §11
-   row.)
+   that the residual `g(ASID)` offset space is "only `2^TSB_SIZE_LOG`" and is
+   brute-forceable by timing probes. *(That section previously gave the range as
+   "64–1024 values", narrower than the register allows; it now reads 64–16384,
+   matching [mmu/hardware-spec.md §2.6](../mmu/hardware-spec.md)'s valid range of
+   6–14. Corrected by Wave-2 **B1**, so the §11 row that tracked it is retired.
+   The correction does not change the conclusion — a 14-bit search is still a
+   search, not an exclusion — but it was never immaterial to the attack's
+   **cost**, since `TSB_SIZE_LOG` sets how many index bits exist to be learned
+   and therefore how many observations the solve above needs.)
 
 Put together: **one observation of which L1-D line the walker touched yields
 `min(TSB_SIZE_LOG, log2(L1-D sets))` bits of a public, XOR-separable function of
@@ -348,7 +348,7 @@ disturbed, so it can never learn more bits per observation than the cache has se
 index bits, however large the TSB is. On the numbers available that is 8 —
 `jcore-cpu/cache/cache_pkg.vhd` carries `cache_index_bits : natural := 8` (256
 sets) — so the claim is exact for `TSB_SIZE_LOG ≤ 8` and was overstated by up to
-6 bits at the top of the 6–14 range §2.8 permits.
+6 bits at the top of the 6–14 range §2.6 permits.
 
 **One caveat on that 8, found while checking it, and it cuts against relying on
 the number rather than the shape:** `cache_index_bits` is *defined and referenced
@@ -1124,7 +1124,6 @@ C0's remit and hide them in a large commit.
 | [ooo/j32lt-spec.md](../ooo/j32lt-spec.md) carries the generation-nibble and no-VMID arguments with **no** supersede header, unlike its J32-OOO sibling | Wave-2 **B1** |
 | **The guest-`ASIDR` justification has expired.** [hypervisor/design-spec.md §5](../hypervisor/design-spec.md) permits the untrapped write because hardware "consults [`ASIDR`] **only** at `LDTLB` time". The walker consumes it on every TLB miss (`core/cpu.vhd`, `asidr => dp_mmu_regs.asidr(15 downto 0)`), as a tag *and* as an index input. The same §5 table also still prices the guest miss path as one `LDTLB` trap for an instruction retired from that path. See §1 | Wave-2 **B1** |
 | **The walker's failure direction is stated two ways.** `jcore-cpu/core/tlb_walk.vhd` says that on timeout the walker "gives up exactly as it does on a tag mismatch — it fails **OPEN**, to the software miss path, never closed into a stall"; [mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md) says a malformed `TSBBR` "hangs the walk". The RTL is the one to believe, and fail-open is the safer of the two — but §7.5's argument quotes the spec, so the contradiction is load-bearing enough to name. *(Neither reading supplies a `TSBBR` bounds check: there is none anywhere in `tlb_walk.vhd`, which is why **L7** exists.)* | Wave-2 **B1** |
-| **`TSB_SIZE_LOG`'s range is stated two ways.** [mmu/hardware-spec.md §2.8](../mmu/hardware-spec.md) allows 6–14 (64–16384 sets); [§2.8a](../mmu/hardware-spec.md)'s brute-force argument says "64–1024 values". Neither section's conclusion changes, but the range is what sets the *cost* of §7.1's attack, so this is not the cosmetic discrepancy it looks like | Wave-2 **B1** |
 | **The L1 cache geometry is not established.** `jcore-cpu/cache/cache_pkg.vhd`'s `cache_index_bits` is defined and referenced nowhere in the RTL, and its comment names the i-cache while §7.1's bound needs the **D**-cache. §7.1 is written not to depend on the value; a doc-vs-code check should establish it | Wave-1 **B0c** |
 | **TLB geometry has no owner.** [mmu/hardware-spec.md §4.1](../mmu/hardware-spec.md) is titled "Recommended TLB organization (**suggestion, not mandate**)" and the RTL instantiates 8 ITLB / 16 DTLB entries (`jcore-cpu/core/cpu.vhd`). Nothing normative states the shipped geometry, and [fact-ownership.md](../fact-ownership.md) has no row for it. *(Checked during C0 specifically because it looked like a doc-vs-code contradiction and is not one — the spec declines to mandate.)* | Wave-2 **B1**, then **B0c** |
 | [ooo/j32ooo-spec.md §8.2a](../ooo/j32ooo-spec.md)'s completeness sentence needs scoping (§7.3) | Wave-3 **C2b** |

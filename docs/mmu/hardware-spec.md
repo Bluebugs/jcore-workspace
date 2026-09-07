@@ -226,8 +226,9 @@ Holds the base address of the per-CPU TSB and configuration bits.
 
 **J32 layout (32 bits):**
 ```
-[31:N+5] TSB_BASE      Physical address of TSB. Must be aligned to 
-                       32 × 2^N bytes (TSB size).
+[31:N+5] TSB_BASE      P1 kernel VIRTUAL address of the TSB (see the note
+                       above; NOT a raw physical address). Must be aligned
+                       to 32 × 2^N bytes (TSB size).
 [N+4:5]  reserved (0)
 [4]      reserved (0)
 [3:0]    TSB_SIZE_LOG  log2(number of TSB SETS). Valid: 6–14
@@ -236,7 +237,23 @@ Holds the base address of the per-CPU TSB and configuration bits.
                        bytes (each set is 32 bytes = 2 ways × 16 B).
 ```
 
-On J64, TSB_BASE widens to a 64-bit physical address. The low 4 bits remain `TSB_SIZE_LOG`.
+*(The `TSB_BASE` line previously read "Physical address of TSB", flatly
+contradicting the note above it — the same wording, in the same section, that
+the note says was stale and "not harmless". Correcting the prose and leaving the
+layout block is how a fix half-lands.)*
+
+**The P1 fold, normatively.** P1 is untranslated by architecture: the walker
+takes the top three address bits `**100**` to `000` before issuing its physical
+read, i.e. `PA = VA & 0x1FFFFFFF`. `core/cpu.vhd`'s `walk_own` takeover arm does
+exactly this, and its comment names the case: *"Every TSBBR the guards and
+linux@jcore program is a P1 kernel address (e.g. 0x80002C04), which the software
+miss handler reads through the fold; without folding here the walker reads an
+unmapped 0x8xxxxxxx and the SRAM model rejects it."* `mmu.tsbbr.p1` in
+[fact-ownership.md](../fact-ownership.md) binds that bit pattern.
+
+On J64, `TSB_BASE` widens correspondingly. It remains a P1 kernel virtual
+address, not a physical one; the low 4 bits remain `TSB_SIZE_LOG`. *(This
+sentence previously said "widens to a 64-bit physical address".)*
 
 > **Amendment — Phase 2 of the hardware-walker work.**
 > **RESOLVED 2026-08-25 — jcore-cpu@master: "rtl(mmu): the hardware walker is the sole TLB installer".**
@@ -331,8 +348,13 @@ processes). Both are worth having.
 What it does **not** do. The fold is XOR-separable —
 `hash = f(vpn) ⊕ g(asid)` — and **J-Core is open source, so `g` is public**.
 The attacker recomputes it. All that is left to find is the victim's `ASID`
-contribution, and the offset space is only `2^TSB_SIZE_LOG` (64–1024 values),
-which is brute-forceable by timing probes. The attacker is delayed by a search,
+contribution, and the offset space is only `2^TSB_SIZE_LOG` — **64 to 16384
+values**, the full range §2.6 permits — which is brute-forceable by timing
+probes. *(This previously read "64–1024 values", a range narrower than the
+register allows. It does not change the conclusion — a 14-bit search is still a
+search — but it is what sets the attack's cost, so it is not cosmetic:
+`TSB_SIZE_LOG` decides how many index bits exist to be learned. Flagged by
+[security/threat-model.md §11](../security/threat-model.md).)* The attacker is delayed by a search,
 not excluded. Isolation is §2.13a's per-domain partitioning, and only that.
 
 The fold is deliberately **not** a bare `vpn ^ asid`. The `<< 5` spread with a

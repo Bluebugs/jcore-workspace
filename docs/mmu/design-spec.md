@@ -384,7 +384,9 @@ it.** The TSB is per-CPU and shared across address spaces, and a hit is roughly
 - **What it did not change.** Neither is a boundary. **J-Core is open source**,
   so the fold `g` in `hash = f(vpn) ⊕ g(asid)` is public and recomputable, and
   the remaining unknown lives in an offset space of only `2^TSB_SIZE_LOG`
-  (64–1024) — brute-forceable by timing probes. The attacker is delayed by a
+  (64–16384, per [hardware-spec.md §2.6](hardware-spec.md)) — brute-forceable by
+  timing probes. *(Previously read "64–1024", narrower than the register
+  allows.)* The attacker is delayed by a
   search, not excluded. **No document in this workspace should describe the
   fold as isolation.**
 - **What a boundary would be.** Per-domain TSB partitioning: disjoint index
