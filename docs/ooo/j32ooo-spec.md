@@ -646,9 +646,21 @@ Prior art: Chen & Baer 1995 reference prediction tables; Jouppi 1990 stream buff
 | L2 unified (128 KB / 8-way)        |      68 |  6,000 |
 | Stride prefetcher (×2 threads)     |       0 |  3,000 |
 | Next-line prefetcher (L1-I)        |       0 |    500 |
-| **Total cache subsystem**          | **~104** | **~18,500** |
+| **Total cache subsystem, ONE core** | **~104** | **~18,500** |
 
-On ULX3S 85F (208 BRAMs available), ~50% of BRAMs go to cache hierarchy. ~18k LUTs (~22% of 84k LUT capacity). Comfortable.
+The EBR column is **capacity arithmetic** — array size ÷ the 18 Kb EBR — not a
+synthesis result, and needs no measurement for that reason
+([decisions/0005](../decisions/0005-unmeasured-figures-are-removed.md) rule 5).
+The LUT column is a **budget** and is not measured; there is no L1, L2 or
+prefetcher RTL of this shape in `jcore-cpu@master` to synthesize.
+
+**This total counts ONE core's L1 pair.** [cache/l2-spec.md §20.1](../cache/l2-spec.md)'s
+~141 EBRs counts **two**, plus the same L2, and the ~37 difference is the second
+L1-I/L1-D pair. The two were reported for years as a "104 vs 141" contradiction;
+they are the same arithmetic over different machines, and the fix is that each
+now says which. On the 85F's 208 EBRs, one core's hierarchy is ~50%; the
+dual-core configuration this spec targets at Phase 6.5 is ~68%, and that is the
+number to plan against.
 
 ---
 
@@ -829,6 +841,17 @@ No software-exposed priority hint interface is provided in this revision. All pr
 | Cross-thread isolation checks (LSQ, forwarding)      |        1,500 |
 | **Total FGMT incremental cost**                      |   **~13,450** |
 
+**The column is gates, and the unit is the whole point.** These are a-priori
+block estimates in **gate equivalents**, not LUT4, and no FGMT RTL exists in
+`jcore-cpu@master` to measure. [jcore-ulx3s-service-plan.md §5](../jcore-ulx3s-service-plan.md)
+budgets FGMT at **+1,500–2,500 LUT4** per core, and the two were catalogued as
+a contradiction ("+1.5–2.5k vs ~13.45k") on the strength of the numerals alone.
+At this document's own assumed ~5–7 gates/LUT4 (§15.1), 13,450 gates is roughly
+1.9–2.7k LUT4 — the service plan's range. There is nothing to reconcile except
+the missing unit, and the unit is now on both. Neither figure is measured, so
+neither confirms the other; what this removes is a contradiction that was never
+there.
+
 Plus the PMU's per-thread shadowing (already counted in §12.4). Net saving vs v0.2 SMT cost (~14,850): ~1,400 gates from the simpler arbiter and no IQ reservation.
 
 ### 13.6 Prior art summary
@@ -882,17 +905,41 @@ Under FGMT, both threads on the same core share the same view of memory through 
 | MMU (deferred, separate spec)    |            – |
 | **Total core + caches**          |  **256,850** |
 
-On ULX3S 85F (estimates — **awaiting empirical validation**, see §15.1):
+On ULX3S 85F:
 
-- ~35–45k LUTs for the core + caches (~50% of 84k LUT capacity)
-- ~104 BRAMs (~50% of 208 BRAMs) — **stale**; reconcile with [cache/l2-spec.md §20.1](../cache/l2-spec.md) which counts ~141 EBRs (~70%) for dual-core L1+L2 alone
+- **LUT4 for the core + caches: unknown at this stage — needs measurement.**
+  `yosys` + `nextpnr-ecp5` on the ULX3S 85F is what produces it, and it cannot
+  be run yet: there is no OoO RTL in `jcore-cpu@master`. The ~35–45k figure
+  that stood here was the gate subtotal above divided by an assumed
+  gates-per-LUT4 ratio (§15.1), i.e. arithmetic on an estimate, and it is
+  removed rather than annotated per
+  [decisions/0005](../decisions/0005-unmeasured-figures-are-removed.md). The
+  **budget** it was serving is kept and lives in
+  [jcore-ulx3s-service-plan.md §5](../jcore-ulx3s-service-plan.md), labelled as
+  a budget.
+- **EBRs: ~104 for one core's L1 pair plus the L2** (§11.5), or ~141 for the
+  dual-core configuration ([cache/l2-spec.md §20.1](../cache/l2-spec.md)).
+  Structural, not measured. This bullet previously called the 104 "stale" and
+  asked for it to be reconciled with the 141; nothing was stale — see §11.5.
 - 2–3 DSP slices
 
 ### 15.1 Caveat — synthesis validation required
 
-The 256,850-gate total above is an a-priori block estimate, converted to LUTs with an assumed ratio of ~5–7 gates/LUT4. Two consumers of this number (this section's "~35–45k LUTs" claim, and the [service plan's §5 LUT4 budget](../jcore-ulx3s-service-plan.md)) currently disagree by ~4× with the service-plan narrative claim of "~10K LUT4 per core" — see the "OoO LUT-count uncertainty" subsection in the service plan §5 for the full discussion of the three options and the Phase 6 decision-gate.
+The 256,850-gate total above is an a-priori block estimate. Converting it to
+LUT4 needs a gates-per-LUT4 ratio that nothing here has validated, which is why
+§15's LUT4 line no longer states one.
 
-**Action item before Phase 6 RTL commits:** synthesize a representative OoO subset (rename + ROB + 1 ALU + L1$) on ECP5-6 with nextpnr; measure actual LUT4 count; update this section with the empirical number; reconcile with the service plan and the L2 v2 spec BRAM estimate. Until that measurement exists, treat both the ~35–45k LUT figure and the "~10K LUT4 per core" figure as bounds, not predictions.
+**One correction to what this paragraph used to say, because it sent readers
+the wrong way.** It described the ~4× disagreement as being with "the
+service-plan narrative claim of ~10K LUT4 per core", and
+[jcore-ulx3s-service-plan.md §5](../jcore-ulx3s-service-plan.md) in turn
+attributed that claim to **§11 of this document**. The string appears nowhere
+in this file. Only the service plan ever asserted it, in its own Phase 6 scope
+bullet, and the two documents were citing each other for it — so what looked
+like an inconsistency inside the OoO spec was a circular reference between two
+files. The service plan's §5 now records this.
+
+**Action item before Phase 6 RTL commits:** synthesize a representative OoO subset (rename + ROB + 1 ALU + L1$) on ECP5-6 with `nextpnr-ecp5`; measure actual LUT4 count; state it here with its platform tag. Until that measurement exists there is no LUT4 figure for an OoO core in this workspace, and the ~10k and ~35–45k that used to be offered as candidates are kept only as the *bounds* [jcore-ulx3s-service-plan.md §5](../jcore-ulx3s-service-plan.md) presents them as.
 
 Plenty of headroom for SoC peripherals (Ethernet, UART, GPIO, SDRAM controller).
 
