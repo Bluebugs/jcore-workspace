@@ -247,6 +247,25 @@ high-leverage fix)
 > unaudited. **Do not read this line, or a green `check-doc-facts.py`, as
 > "the tree is platform-tagged."**
 
+> **B0d — change of approach (2026-09-07), on the project owner's
+> instruction.** B0b kept each figure it could not honestly retarget and put
+> prose beside it. That is reversed: a figure nobody measured for the ULX3S/
+> ECP5 or for gf180 is **removed**, and the cell where it stood reads that the
+> value is not known and has to be measured, in one canonical wording, with at
+> most one line saying what would produce it. Budgets, goals and targets stay
+> and are labelled as such; so do values that are structural rather than
+> measured. The rule is
+> [decisions/0005](decisions/0005-unmeasured-figures-are-removed.md), which
+> supersedes 0004's rule 3, rule 4's marking half and its Marking convention,
+> and is enforced by `check-doc-facts.py`'s `unmeasured-figure-wording` check.
+> Applied to `simd/hardware-impl.md`, `cache/l2-spec.md` and `fpu/spec.md`.
+> The bullet below still reads "retarget ... onto ECP5 LUT4/BRAM": that is
+> what the plan said, and it is left as written rather than quietly edited —
+> but retargeting a figure across vendors is arithmetic on a number nobody
+> measured, so what B0d did instead is remove it. The seventeen further specs
+> B0b listed as unswept are still unswept, and 0005 changes what should be
+> done to them without having done it.
+
 - **Platform tags.** Introduce the `[FPGA]`/`[ASIC]` tag rule and sweep existing
   numbers. Retarget the SIMD/FPU FPGA figures (currently Spartan/Artix/130 nm)
   onto ECP5 LUT4/BRAM for Phase-1, and move all energy claims under `[ASIC]`.
