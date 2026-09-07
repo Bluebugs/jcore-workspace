@@ -185,15 +185,20 @@ Full 64×64 AND array + Wallace-tree XOR reduction in one cycle.
    Vm[63:0] ─────────┘                       └────────────┘
 ```
 
-**Resource estimate (130 nm):**
+**Resource estimate `[ASIC]`, 130 nm (J2 reference flow — not gf180, this
+project's ASIC methodology vehicle; no gf180 or ECP5 equivalent has been
+measured. See [decisions/0004](../decisions/0004-platform-tag-convention.md)):**
 - AND gates: 4096
 - XOR gates: ~4030
 - Total: ~25k equivalent gates
 - Latency: 1 cycle
 - Throughput: 1 CLMUL per cycle
-- Critical path: AND + 6 XORs ≈ 0.8 ns at 130 nm (1.25 GHz theoretical; 250–400 MHz practical)
+- Critical path `[ASIC]`, 130 nm: AND + 6 XORs ≈ 0.8 ns (1.25 GHz theoretical; 250–400 MHz practical)
 
-**When to use:** J64 performance tier, ASIC targets with generous area budget, FPGA on Kintex / Virtex class parts.
+**When to use:** J64 performance tier, an `[ASIC]` target with a generous area
+budget, or an FPGA large enough to absorb it (Kintex / Virtex class — not this
+project's Phase-1 ULX3S/ECP5 target; see §11.1 for the `[FPGA]` figures and
+their status).
 
 ### 6.3 Implementation Tier B — pipelined Karatsuba (recommended baseline)
 
@@ -235,14 +240,15 @@ Pipeline:
    └──────────────────────────────────────────────────────────┘
 ```
 
-**Resource estimate (130 nm):**
+**Resource estimate `[ASIC]`, 130 nm (J2 reference flow — same node caveat as
+§6.2 above):**
 - 3× 32×32 GF(2) multipliers: ~12k gates
 - Combining logic: ~500 gates
 - Pipeline registers: ~600 flops
 - Total: ~16k equivalent gates
 - Latency: 3 cycles
 - Throughput: 1 CLMUL per cycle (fully pipelined)
-- Critical path per stage: ~0.5 ns at 130 nm; target 400–500 MHz
+- Critical path per stage `[ASIC]`, 130 nm: ~0.5 ns; target 400–500 MHz
 
 **When to use:** J32-FM and J64 baseline (recommended default). ~35–40% area savings versus Tier A at the cost of 3-cycle latency.
 
@@ -268,23 +274,35 @@ Reuses the existing integer widening multiplier's shift register and partial-pro
    └─────────────────────────────────────────────────────┘
 ```
 
-**Resource estimate:**
+**Resource estimate `[ASIC]`-style gate-equivalent count (unit consistent with §6.2/§6.3/§11.1; no process node stated for this figure and none should be assumed):**
 - Additional logic on top of widening multiplier: ~200 gates (XOR-vs-ADD mux on accumulator, carry-chain mask, mode-bit decode)
 - No new flops
 - Latency: 64 cycles per CLMUL (one cycle per bit of operand B)
 - Throughput: 1 CLMUL per 64 cycles
 
-**When to use:** ultra-low-area J32 deployments where VCLMUL is needed for software correctness but not performance-critical. Embedded SoC variants targeting <100k gates total.
+**When to use:** ultra-low-area J32 deployments where VCLMUL is needed for software correctness but not performance-critical. Embedded `[ASIC]` SoC variants targeting <100k gates total.
 
 ### 6.5 Tier selection by target
 
 | Target | Recommended Tier 2 tier | Rationale |
 |---|---|---|
-| J32 minimal (FPGA Spartan-6 class) | Tier C | Reuse existing multiplier, minimal new logic |
-| J32-FM (FPGA Artix-7 / Kintex-7) | Tier B | Best area/performance balance |
+| J32 minimal, `[FPGA]` Spartan-6 class¹ | Tier C | Reuse existing multiplier, minimal new logic |
+| J32-FM, `[FPGA]` Artix-7 / Kintex-7¹ | Tier B | Best area/performance balance |
 | J64 baseline | Tier B | Standard target |
 | J64 performance / server class | Tier A | Single-cycle for higher clock rates |
-| ASIC 28 nm or smaller | Tier A | Area penalty negligible at small nodes; power dominates |
+| `[ASIC]` 28 nm or smaller | Tier A | Area penalty negligible at small nodes; power dominates |
+
+¹ **Marked, not retargeted** ([decisions/0004](../decisions/0004-platform-tag-convention.md)).
+These two rows name Xilinx parts (Spartan-6, Artix-7, Kintex-7) nobody is
+building this project on. The Phase-1 target is the **ULX3S board with a
+Lattice ECP5** (~40 MHz), a different vendor and a different LUT architecture
+(4-input vs these families' 6-input). The tier picks above were reasoned from
+Spartan/Artix area figures, not from ECP5 synthesis, and this project has
+measured evidence that scaling a LUT count across families is not trustworthy
+even *within* one family at one node (§11.1's noise-floor citation). Re-derive
+the ECP5 pick from an actual `yosys`/`nextpnr-ecp5` build targeting the ULX3S
+85F before relying on it; until then, treat "Tier C for the smallest FPGA
+target" as an unverified carry-forward, not a measured recommendation.
 
 ---
 
@@ -525,7 +543,9 @@ Three target kernels:
 
 ### 11.1 Synthesis targets
 
-**130 nm (J2 reference flow):**
+**`[ASIC]`, 130 nm (J2 reference flow — not gf180, this project's ASIC
+methodology vehicle; no gf180 equivalent has been measured. See
+[decisions/0004](../decisions/0004-platform-tag-convention.md)):**
 
 | Tier | Estimated gates | Estimated area | Estimated max freq |
 |---|---|---|---|
@@ -533,23 +553,40 @@ Three target kernels:
 | Tier B (Karatsuba pipelined) | 16,000 | 0.13 mm² | 500 MHz |
 | Tier C (iterative) | 200 (additional) | 0.002 mm² (additional) | No impact on freq |
 
-Reference J2 core size: ~30,000 gates / 0.25 mm² at 130 nm. Tier B roughly doubles the SIMD execution unit area; the total core grows by perhaps 40–50%.
+Reference J2 core size `[ASIC]`, 130 nm: ~30,000 gates / 0.25 mm². Tier B roughly doubles the SIMD execution unit area; the total core grows by perhaps 40–50%. (This ratio is dimensionless and likely survives a node/family change better than the absolute figures do, but it has not been checked against anything newer than the 130 nm baseline.)
 
-**28/40 nm modern ASIC:** GF(2) multiplier area becomes a small fraction of the SoC; Tier A is usually justified for performance. Power, not area, dominates the design choice — Tier A with operand isolation when idle is typically the right call.
+**`[ASIC]` 28/40 nm:** GF(2) multiplier area becomes a small fraction of the SoC; Tier A is usually justified for performance. Power, not area, dominates the design choice — Tier A with operand isolation when idle is typically the right call. No absolute figures are given at this node; the claim is qualitative.
 
-**FPGA targets (Spartan-7 / Artix-7):**
+**`[FPGA]` targets — Spartan-7 / Artix-7 (Xilinx, 6-input LUT). Not this
+project's Phase-1 target.**
 
-| Tier | LUTs | FFs | DSP48 slices |
+> **Marked, not retargeted** ([decisions/0004](../decisions/0004-platform-tag-convention.md)).
+> Phase-1 for this project is the **ULX3S board with a Lattice ECP5**, a
+> 4-input-LUT (LUT4) fabric at ~40 MHz — a different vendor, a different LUT
+> architecture, and (see below) no DSP48 primitive at all. Converting the
+> LUT6 counts below into LUT4 counts by a fixed ratio is exactly the kind of
+> scaling this project has been burned by: two logically identical RTL trees
+> on this core, differing only in the operand order of one `or`, synthesized
+> **368 LUT4 apart** on the ECP5 — a same-family, same-node noise floor larger
+> than most of the deltas in the table below. A cross-vendor, cross-LUT-width
+> estimate is worth less than that, so none is given. **What would settle
+> it:** synthesize Tier A/B/C for the ECP5 with `yosys` + `nextpnr-ecp5`,
+> targeting the ULX3S 85F (the board and part this project's Phase-1
+> deliverable actually is).
+
+| Tier | LUTs (Spartan-7 / Artix-7, LUT6) | FFs | DSP48 slices |
 |---|---|---|---|
 | Tier A | 3,500 | 100 | 0 (LUT-only) |
 | Tier B | 2,200 | 600 | 0 |
 | Tier C | 50 (additional) | 10 (additional) | 0 |
 
-DSP48 blocks are not directly usable for GF(2) multiplication (carry chains are designed for integer arithmetic). Some FPGA vendors expose carryless-multiply modes; family-specific.
+DSP48 blocks are not directly usable for GF(2) multiplication (carry chains are designed for integer arithmetic), and in any case the ECP5 has no DSP48 — its hard-multiplier primitives are Lattice's own sysDSP blocks, structurally different. Some FPGA vendors expose carryless-multiply modes; family-specific, and unconfirmed for ECP5.
 
-**Kintex-7 / Virtex Ultrascale:** Tier A becomes the obvious choice; LUT cost is negligible relative to total fabric.
+**Kintex-7 / Virtex Ultrascale `[FPGA]` (also not this project's target):** Tier A becomes the obvious choice there; LUT cost is negligible relative to total fabric. Whether the same holds on an ECP5-85F — a much smaller part — is unmeasured.
 
-### 11.2 Timing analysis
+### 11.2 Timing analysis `[ASIC]`, 130 nm
+
+Same node caveat as §11.1: J2 reference flow, not gf180; no gf180 or ECP5 equivalent measured.
 
 **Tier A critical path:**
 ```
@@ -565,13 +602,23 @@ Stage 2 (the three sub-multipliers): each is 32-bit AND + 5-level XOR tree
 ```
 Choose 400–500 MHz target.
 
-### 11.3 Power and operand isolation
+### 11.3 Power and operand isolation — `[ASIC]` only
 
-To minimise dynamic power, AND-mask the multiplier inputs when no CLMUL is being issued. 128 AND gates + one OR-of-valid-signals — negligible silicon, 30–50% dynamic-power savings on cores where CLMUL is not in the critical path.
+> Energy and power are an `[ASIC]`-only concern for this project
+> ([decisions/0004](../decisions/0004-platform-tag-convention.md);
+> [j4-remediation-plan.md](../j4-remediation-plan.md) guiding principle 1 and
+> Track D0): Phase-1 goals on the ULX3S/ECP5 are correctness, area, and
+> boot-to-Linux, and energy is explicitly out of scope — it is not measurable
+> on the FPGA and must not be presented as if it were. Every figure in this
+> subsection is `[ASIC]`, and the ones with an absolute mW value are
+> additionally at the stale 130 nm node from §11.1/§11.2 — not gf180, not
+> measured there either.
+
+To minimise dynamic power, AND-mask the multiplier inputs when no CLMUL is being issued. 128 AND gates + one OR-of-valid-signals — negligible silicon, an estimated 30–50% dynamic-power savings `[ASIC]` on cores where CLMUL is not in the critical path.
 
 Activity factor: GF(2) operations have high bit-toggle rates (every AND output is independent of its neighbours). Expect 30–40% activity in the multiplier core during sustained CLMUL throughput. Mitigations: operand isolation, clock gating (gate the multiplier clock when no CLMUL is active in any pipeline stage), power-down mode for the entire GF unit when SIMD is disabled.
 
-Estimated impact: Tier B at sustained 100% CLMUL throughput @ 500 MHz / 130 nm: 15–25 mW. With operand isolation and clock gating during typical mixed workloads (10–20% CLMUL): 3–5 mW average. Negligible relative to the core's total power budget.
+Estimated impact `[ASIC]`, 130 nm: Tier B at sustained 100% CLMUL throughput @ 500 MHz: 15–25 mW. With operand isolation and clock gating during typical mixed workloads (10–20% CLMUL): 3–5 mW average. Negligible relative to the core's total power budget — but, per the note above, this is a 130 nm ASIC estimate and says nothing about the ECP5, where no power figure is meaningful to give.
 
 ---
 
@@ -608,7 +655,7 @@ For new J-core variants adding Tier 2:
 - [ ] RAID-6 4-disk syndrome test passes against Linux md output
 - [ ] Linux boots with `crc32c-jcore` enabled (replaces `crc32c-generic` via `cra_priority`)
 - [ ] `dm-crypt` AES-GCM volume mounts and benchmarks within 80% of theoretical CLMUL throughput
-- [ ] FPGA bitstream meets timing on target board (Artix-7 or chosen reference)
+- [ ] `[FPGA]` bitstream meets timing on target board (ULX3S / ECP5, this project's Phase-1 target)
 - [ ] Performance counters report sensible values during a kernel build
 - [ ] Documentation updated: ISA reference, encoding map, programmer's guide, feature register bit
 

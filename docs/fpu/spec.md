@@ -1181,7 +1181,14 @@ trap.
 **Latency hint for implementers.** Table lookup + one multiply +
 two adds per output. A pipelined implementation produces both
 outputs in 3–6 cycles. The table consumes about 256 × 32 bits = 1 KB
-of ROM (one BRAM18 on ECP5 / Spartan-6 class FPGAs).
+of ROM — `[FPGA]`, STRUCTURAL: 8 Kb of table data fits in a single
+18 Kb block RAM on any family with that block size, ECP5's Phase-1
+target included (Lattice calls its 18 Kb block an **EBR**, not
+"BRAM18" — that name is Xilinx's, corrected here rather than left
+implying a part this project isn't building on; Spartan-6 also uses
+an 18 Kb block, hence the original wording). This is true by
+construction from the block size and table size, not a synthesis
+result, so it needs no further platform tag.
 
 ### 6.9 FSRRA — reciprocal square root approximation. [T1]
 
@@ -1240,7 +1247,8 @@ for general inputs.
 
 **Latency hint for implementers.** Table lookup + optional one or
 two refinement multiplies and adds. 3–5 cycles pipelined. Table
-consumes one BRAM18.
+consumes one 18 Kb block RAM — `[FPGA]`, STRUCTURAL, same reasoning
+and same ECP5-naming correction (EBR, not "BRAM18") as §6.8 above.
 
 ### 6.10 Coprocessor protocol extension for vector beats. [T1]
 
