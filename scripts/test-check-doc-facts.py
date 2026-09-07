@@ -5,6 +5,8 @@
     scripts/test-check-doc-facts.py -v                   # show checker output
     scripts/test-check-doc-facts.py --against OLD.py     # run against an older
                                                          # checker as a control
+    scripts/test-check-doc-facts.py --checker PATH       # exercise this checker
+    scripts/test-check-doc-facts.py --mutate-sweep       # mutation sweep
 
 
 Why fixtures and not the real tree: the first version of this suite mutated
@@ -15,12 +17,47 @@ very bug it was written for. Each case below builds a minimal tree in a temp
 directory and asserts the exit status, so the *absence* of a check is a test
 failure rather than a silent pass.
 
+
+THE MUTATION SWEEP, and why it does not touch the working tree
+--------------------------------------------------------------
+
+`--mutate-sweep` reads `scripts/mutations.json`, applies each mutation to a
+COPY of the checker in a temp directory, and runs the whole suite against that
+copy via `--checker`. A mutant that the suite does not turn red is a guard
+nothing asserts. A mutation whose target no longer appears exactly once is a
+FAILURE, not a skip: otherwise the sweep quietly shrinks as the checker changes
+and reports a clean run over fewer and fewer guards.
+
+It exists in this form because of two separate lessons, both learned the hard
+way during Wave-1 B0c:
+
+1. **An in-place sweep is indistinguishable, to anyone else, from a real
+   regression.** Three interrupted sweeps left a mutant sitting in
+   `check-doc-facts.py`. A reviewer found one, checked `ps`, saw no sweep
+   running, and reverted it with `git checkout --` -- while a sweep was in
+   fact still in flight. That revert turned a killed mutant into a reported
+   survivor. `ps` cannot answer "is a sweep running": a sweep spends nearly
+   all its wall time between steps rather than on the CPU.
+
+2. **An in-place sweep launders any case that reads `CHECKER` directly.**
+   Three cases spawn the checker themselves instead of going through `run()`,
+   and they named the module-level constant -- the file on disk. Under an
+   in-place sweep that was accidentally correct, because the working tree WAS
+   the mutant, so those mutants scored as killed for the wrong reason. Moving
+   the mutation out of the tree exposed two guards whose own fixtures had never
+   exercised them. Hence `CURRENT_CHECKER`: a case that spawns the checker must
+   ask for the one under test, not the one on disk.
+
+The second lesson is the load-bearing one. A marker file would have fixed (1)
+and found nothing, because it does not change what the cases exercise.
+
 """
 
 import collections
 import difflib
 import importlib.util
 import itertools
+import json
 import os
 import re
 import shutil
@@ -30,6 +67,18 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHECKER = os.path.join(HERE, "check-doc-facts.py")
+
+# The checker currently under test. `CHECKER` is the file on disk; this is what
+# a case must actually exercise, and the two differ during `--mutate-sweep`,
+# which runs every mutant as a copy in a temp directory.
+#
+# Three cases spawn the checker themselves rather than going through `run()`,
+# and they used `CHECKER`. Under an in-place sweep that happened to be right --
+# the working tree WAS the mutant -- so the mutants scored as killed, for the
+# wrong reason. The out-of-tree sweep exposed it immediately: two guards with
+# fixtures named after them were being asserted against the pristine file, and
+# both mutants survived. A case that spawns the checker must ask for this one.
+CURRENT_CHECKER = CHECKER
 
 
 def backport_root(src, dst):
@@ -345,7 +394,7 @@ def build(tmp, registry=REGISTRY, glossary=GLOSSARY, simd=SIMD, extra=None,
     return tmp
 
 
-def patched_checker(dstdir, *subs):
+def patched_checker(dstdir, *subs, base=None):
     """A copy of the checker with literal text substitutions applied.
 
     Used to prove a decoupling claim: widen one constant and assert the other
@@ -353,7 +402,7 @@ def patched_checker(dstdir, *subs):
     weaker test -- they are identical today -- so the test widens one and looks
     at behaviour instead.
     """
-    text = open(CHECKER).read()
+    text = open(base or CHECKER).read()
     for old, new in subs:
         if old not in text:
             raise AssertionError("patch target not found: %r" % old)
@@ -1390,7 +1439,8 @@ def _(tmp):
     inner = os.path.join(tmp, "inner")
     os.makedirs(inner)
     build(inner, no_cpu_repo=True)
-    p = subprocess.run([sys.executable, CHECKER, "--root", inner, "--strict"],
+    p = subprocess.run([sys.executable, CURRENT_CHECKER, "--root", inner,
+                        "--strict"],
                        capture_output=True, text=True,
                        env=dict(os.environ, GITHUB_ACTIONS="1"))
     if p.returncode == 0:
@@ -1635,7 +1685,8 @@ def _(tmp):
     # leaking it into the remaining cases would silently re-point every one of
     # them at the decoy.
     poisoned = dict(os.environ, GIT_DIR=os.path.join(decoy, ".git"))
-    p = subprocess.run([sys.executable, CHECKER, "--root", inner, "--strict"],
+    p = subprocess.run([sys.executable, CURRENT_CHECKER, "--root", inner,
+                        "--strict"],
                        capture_output=True, text=True, env=poisoned)
     if p.returncode != 0:
         raise AssertionError(
@@ -1672,10 +1723,14 @@ def _(tmp):
 
 
 def load_checker_module():
-    """Import check-doc-facts.py as a module. Its top level is constants and
-    definitions behind an `if __name__ == "__main__"` guard, so importing runs
-    no checks."""
-    spec = importlib.util.spec_from_file_location("cdf", CHECKER)
+    """Import the checker UNDER TEST as a module. Its top level is constants
+    and definitions behind an `if __name__ == "__main__"` guard, so importing
+    runs no checks.
+
+    Under test, not on disk: `fake_repo` takes its git environment from here,
+    so loading the pristine file during a sweep would hand the harness a
+    working `git_env()` no matter what the mutant did."""
+    spec = importlib.util.spec_from_file_location("cdf", CURRENT_CHECKER)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -1773,12 +1828,91 @@ def tree_fingerprint():
     return "\n".join(parts)
 
 
+MUTATIONS = os.path.join(HERE, "mutations.json")
+
+
+def mutate_sweep(path, verbose=False):
+    """Run the whole suite once per mutation and report which survive.
+
+    **The working tree is never modified.** Every mutant is a copy in a temp
+    directory, run via `--checker`. That is not tidiness: three separate
+    interrupted sweeps during this task left a mutant sitting in
+    `check-doc-facts.py`, and a reviewer who found one -- checked `ps`, saw no
+    sweep, and reverted it -- silently turned a KILLED into a SURVIVED in a run
+    that was still in flight. An in-place sweep is indistinguishable, to anyone
+    else looking at the tree, from a real regression; and `ps` cannot tell you
+    a sweep is running, because a sweep spends nearly all its time between
+    steps rather than on the CPU.
+
+    A mutation whose target no longer appears exactly once is a FAILURE, not a
+    skip. Otherwise the sweep quietly shrinks as the checker changes and reports
+    a clean run over fewer and fewer guards -- the same fail-open shape this
+    whole file exists to remove."""
+    try:
+        with open(path) as fh:
+            spec = json.load(fh)
+    except (OSError, ValueError) as exc:
+        print("FAIL cannot read mutations from %s: %s" % (path, exc))
+        return 1
+    muts = spec.get("mutations")
+    if not muts:
+        print("FAIL %s lists no mutations; the sweep would pass vacuously"
+              % path)
+        return 1
+
+    source = open(CHECKER).read()
+    survived, moved = [], []
+    tmp = tempfile.mkdtemp(prefix="cdf-sweep-")
+    try:
+        for i, m in enumerate(muts):
+            name, old, new = m["name"], m["old"], m["new"]
+            hits = source.count(old)
+            if hits != 1:
+                moved.append(name)
+                print("%-52s TARGET MOVED (%d matches)" % (name, hits))
+                continue
+            dst = os.path.join(tmp, "mutant-%02d.py" % i)
+            with open(dst, "w") as fh:
+                fh.write(source.replace(old, new, 1))
+            p = subprocess.run(
+                [sys.executable, os.path.abspath(__file__), "--checker", dst],
+                capture_output=True, text=True)
+            killed = p.returncode != 0 or "Traceback" in (p.stdout + p.stderr)
+            if not killed:
+                survived.append(name)
+            print("%-52s %s" % (name, "killed" if killed else "SURVIVED"))
+            if verbose and not killed:
+                print(p.stdout[-2000:])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    print("\n%d mutation(s): %d killed, %d survived, %d with a moved target"
+          % (len(muts), len(muts) - len(survived) - len(moved),
+             len(survived), len(moved)))
+    for n in survived:
+        print("    SURVIVED: %s -- this guard is asserted by no case" % n)
+    for n in moved:
+        print("    MOVED:    %s -- update scripts/mutations.json" % n)
+    return 1 if (survived or moved) else 0
+
+
 def main():
     argv = sys.argv[1:]
+    if "--mutate-sweep" in argv:
+        i = argv.index("--mutate-sweep")
+        path = (argv[i + 1] if len(argv) > i + 1
+                and not argv[i + 1].startswith("-") else MUTATIONS)
+        return mutate_sweep(path, verbose="-v" in argv)
     verbose = "-v" in argv
     checker = CHECKER
+    allow_mutate = True
     shim_dir = None
+    if "--checker" in argv:
+        checker = argv[argv.index("--checker") + 1]
+        global CURRENT_CHECKER
+        CURRENT_CHECKER = checker
     if "--against" in argv:
+        allow_mutate = False
         old = argv[argv.index("--against") + 1]
         shim_dir = tempfile.mkdtemp(prefix="cdf-old-")
         checker = backport_root(old, os.path.join(shim_dir, "checker.py"))
@@ -1792,7 +1926,7 @@ def main():
         for name, expect_fail, fn, kw in CASES:
             tmp = tempfile.mkdtemp(prefix="cdf-")
             try:
-                if kw.get("mutate") and checker != CHECKER:
+                if kw.get("mutate") and not allow_mutate:
                     # The patch targets source that an older checker does not
                     # contain. Running the case unmutated would score it for a
                     # reason unrelated to what it tests, so say so instead.
@@ -1803,7 +1937,7 @@ def main():
                 fn(tmp)
                 this = checker
                 if kw.get("mutate"):
-                    this = patched_checker(tmp, *kw["mutate"])
+                    this = patched_checker(tmp, *kw["mutate"], base=checker)
                 rc, out = run(tmp, this, *kw.get("flags", ()))
                 crashed = "Traceback" in out
                 want = kw.get("expect_check")
