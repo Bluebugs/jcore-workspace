@@ -943,26 +943,34 @@ On ULX3S 85F (208 EBRs total), the L2 uses ~33–34% of available BRAM. Combined
 
 Unchanged from v1: time-multiplex within bank with a 1-cycle pipeline stage for arbitration. Snoop traffic gets a dedicated 1-cycle slot every 4 cycles guaranteed (round-robin among the bank's port consumers) to bound snoop latency.
 
-### 20.3 Power estimate `[ASIC]` — retracted as an FPGA claim
+### 20.3 Power estimate — retracted, no platform established
 
-> **B0b (platform-tag sweep), 2026-09-07 — retraction, not a re-tag.** This
-> subsection previously read: "T1 adds ~10–15 mW dynamic across the coherence
-> FSM and snoop driver. Total L2 power on ECP5-85F at 90 MHz: ~40–65 mW.
-> Still negligible at FPGA scale." That attributes a power figure directly to
-> the ECP5, and the project's own direction rules that out categorically, not
-> just for this figure:
-> [j4-remediation-plan.md](../j4-remediation-plan.md) guiding principle 1 says
-> energy is explicitly out of scope for Phase-1, and Track D0 says plainly "do
-> NOT try to measure energy on the ECP5" because it is not measurable there.
-> Unlike the stale-part figures marked in
-> [simd/hardware-impl.md §11](../simd/hardware-impl.md) (real numbers, wrong
-> Xilinx family), this was never a number this board could produce — see
-> [decisions/0004](../decisions/0004-platform-tag-convention.md). It is not
-> deleted (a claim is never silently dropped), only re-labelled as what it
-> actually is: an unsourced ASIC-style estimate, misattributed to the FPGA it
-> happens to sit next to in this document.
+> **B0b (platform-tag sweep), 2026-09-07 — retraction, not a re-tag, and not
+> an `[ASIC]` figure either.** This subsection previously read: "T1 adds
+> ~10–15 mW dynamic across the coherence FSM and snoop driver. Total L2 power
+> on ECP5-85F at 90 MHz: ~40–65 mW. Still negligible at FPGA scale." A first
+> pass of this retraction re-tagged the number `[ASIC]`, which was itself
+> wrong: the figure was estimated *for* an ECP5-85F at 90 MHz, never for any
+> ASIC process, and [decisions/0004](../decisions/0004-platform-tag-convention.md)
+> rule 4 requires an `[ASIC]` figure to name a node — this one cannot,
+> because it has none. Moving a number to a platform nothing produced it on
+> is the same defect this whole record exists to remove, just relocated.
+>
+> The sharper argument for retracting it outright, found on a second look:
+> the two copies of this number **disagreed with each other inside this one
+> document**. §20.3 called it "Total L2 power … at 90 MHz"; the Appendix B row
+> for the same figure called it "Static power adder". Total and static are
+> different quantities, and a number that changes what it means between two
+> places in one file was never produced by a tool run against anything — that
+> is what makes the retraction unarguable, independent of the platform
+> question above. Per [j4-remediation-plan.md](../j4-remediation-plan.md)
+> guiding principle 1 and Track D0, energy is out of scope for Phase-1 and
+> not measurable on the ECP5 in any case, so even a self-consistent version of
+> this figure would need retracting as an FPGA claim. It is not deleted (a
+> claim is never silently dropped), only reduced to what can honestly be said
+> about it.
 
-T1 adds an estimated ~10–15 mW of dynamic power across the coherence FSM and snoop driver — an `[ASIC]` figure. It is **UNSOURCED**: no gate-level power run backs it, on any process, and "mW dynamic" is not something this project derives by inspection for an FPGA target — FPGA power is dominated by the fabric and the vendor place-and-route result, not by an eyeballed count of the logic mapped onto it. **What would settle it:** a gate-level power estimate under the gf180 flow (Track D0), driven by real switching activity from a trace; if FPGA board-level power budgeting is ever wanted for its own sake, that is a separate question, answered by the vendor toolchain against an actual ULX3S bitstream, not by this estimate.
+**No power figure for this block exists on any target.** The ~10–15 mW / ~40–65 mW numbers above are an unsourced estimate (in the sense of [security/threat-model.md §9](../security/threat-model.md)'s provenance scale — no in-tree measurement backs it, on any process) whose platform was never established — not measured on the ECP5 (energy isn't measurable there, per principle 1), and not an ASIC figure either, since no process node was ever behind it. **What would settle it:** on the `[FPGA]` side, nothing — board power is a vendor place-and-route output, not something worth hand-estimating, and per project direction it isn't the goal there anyway. On the `[ASIC]` side, a gate-level power estimate under the gf180 flow (Track D0), driven by real switching activity from a trace, tagged `[ASIC]` with the node it actually used.
 
 ---
 
@@ -1142,7 +1150,7 @@ Wider project terms (FGMT, ASID, BMID, …) live in [glossary.md](../glossary.md
 | DSP slices       |            0 |             0% |
 | FFs (registers)  |       ~3,000 |            ~4% |
 | Engineering effort | ~12 weeks (v1 base + coherence + line-lock) | — |
-| Power adder | not an FPGA quantity — see §20.3 (retracted; the estimate that stood here was `[ASIC]`, unsourced, and misattributed) | — |
+| Power adder | retracted, no platform established — see §20.3 (the Total/Static naming disagreed with itself; not an FPGA figure, not an ASIC figure either) | — |
 
 ## Appendix C: Cross-document anchors
 
