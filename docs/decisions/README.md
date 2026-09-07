@@ -42,4 +42,5 @@ Each record carries, in this order:
 | [0001](0001-one-authority-per-fact.md) | One authority per fact; the glossary is an index, not an authority | Accepted 2026-08-25 |
 | [0002](0002-supersede-convention.md) | Supersede, RESOLVED and PENDING-MERGE headers | Accepted 2026-08-25 |
 | [0003](0003-canonical-encoding-database.md) | One encoding database: `jcore-cpu/docs/insns.json` | Accepted 2026-08-25 |
-| [0004](0004-platform-tag-convention.md) | Platform tags: `[FPGA]` / `[ASIC]`, and which numbers need one | Accepted 2026-09-07 |
+| [0004](0004-platform-tag-convention.md) | Platform tags: `[FPGA]` / `[ASIC]`, and which numbers need one | Accepted 2026-09-07; rules 3–4 and §Marking convention superseded by [0005](0005-unmeasured-figures-are-removed.md) |
+| [0005](0005-unmeasured-figures-are-removed.md) | An unmeasured figure is removed, not annotated | Accepted 2026-09-07 |

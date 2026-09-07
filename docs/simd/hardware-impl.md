@@ -10,7 +10,7 @@ This guide describes implementation tactics for the SIMD architecture. The archi
 
 ## 1. Scope and organisation
 
-- **Tier 0 / Tier 1 (§2–§5):** the VLEN-wide SIMD execution unit (256-bit on J32, 512-bit on J64; spec.md §1.2). Decode-stage shadow latch, VLEN/32-beat sequencing, coprocessor port sharing, J32-OOO dual-issue considerations, non-temporal memory handling, the additional ~4k-gate Tier 1 datapath (saturation, VABS, VPOPCNT, VUNPK4, VABSDIFF, VPACK, VMULSU).
+- **Tier 0 / Tier 1 (§2–§5):** the VLEN-wide SIMD execution unit (256-bit on J32, 512-bit on J64; spec.md §1.2). Decode-stage shadow latch, VLEN/32-beat sequencing, coprocessor port sharing, J32-OOO dual-issue considerations, non-temporal memory handling, the additional Tier 1 datapath (saturation, VABS, VPOPCNT, VUNPK4, VABSDIFF, VPACK, VMULSU).
 - **Tier 2 (§6–§12):** the GF(2) crypto unit (VCLMUL.D, VCRC32C.B). Three implementation tiers (A combinational, B Karatsuba pipelined, C iterative); reuse strategy for the existing widening multiplier; VCRC32C.B as decode-stage fusion onto VCLMUL.D; pipeline integration; verification; synthesis targets; timing; power; test/debug; bring-up.
 
 The Tier 3 (256-bit J64) wide-vector extension has no architectural specification yet and therefore no hardware implementation guidance.
@@ -86,16 +86,18 @@ The j-core coprocessor port (already used by the SH-4 FPU and the MMU in J3) is 
 - The integer ALU for integer governed instructions (the SIMD unit muxes lane width into the ALU's carry-break controls).
 - The integer widening multiplier for MULS.W / MULU.W governed instructions and (Tier 1) for VMULSU.
 
-The swizzle crossbar is a new structure attached to the V register file's read ports. Area cost:
+The swizzle crossbar is a new structure attached to the V register file's read ports.
 
-Lane count is VLEN/w; the table below is the **J32 (VLEN 256)** worst case (J64 doubles each lane count and roughly quadruples the crossbar):
+Lane count is VLEN/w; the table below is the **J32 (VLEN 256)** worst case (J64 doubles each lane count and roughly quadruples the crossbar). The sizes are structural — they follow from VLEN and the lane width, not from a synthesis run:
 
-| Lane width | Lanes = VLEN/w (J32) | Crossbar size | Approximate gate count |
-|---|---|---|---|
-| 32 | 8  | 8×8 of 32-bit buses   | ≈1000 gates |
-| 16 | 16 | 16×16 of 16-bit buses | ≈4000 gates |
-| 8  | 32 | 32×32 of 8-bit buses  | ≈8000 gates |
-| 64 | 4  | 4×4 of 64-bit buses   | ≈200 gates  |
+| Lane width | Lanes = VLEN/w (J32) | Crossbar size |
+|---|---|---|
+| 32 | 8  | 8×8 of 32-bit buses   |
+| 16 | 16 | 16×16 of 16-bit buses |
+| 8  | 32 | 32×32 of 8-bit buses  |
+| 64 | 4  | 4×4 of 64-bit buses   |
+
+Crossbar area: unknown at this stage — needs measurement. It has not been synthesized for either target.
 
 A single physical crossbar is sized for the worst case (32×32 at 8-bit width on J32; 64×64 on J64) and serves all widths.
 
@@ -125,24 +127,23 @@ On a dual-issue J32-OOO, two governed instructions may execute in parallel provi
 
 The dual-issue scheduler must respect the prefix's atomicity: an interrupt may not be taken between the two simultaneously-issued governed instructions of a block, only after the entire block retires. See [../ooo/j32ooo-spec.md](../ooo/j32ooo-spec.md) for the OoO machine's prefix-cracking strategy.
 
-### 5.3 Tier 1 area summary
+### 5.3 Tier 1 cost summary
 
-Cumulative Tier 1 cost atop a Tier 0 J32 implementation:
+Cumulative Tier 1 cost atop a Tier 0 J32 implementation. **Area, per feature and in total: unknown at this stage — needs measurement** — no Tier 1 datapath has been synthesized for either target, so the ordering below (which features are cheap and which is the expensive one) is design reasoning, not a measured ranking:
 
-| Feature | Gates (rough) | Critical path impact | Notes |
-|---|---|---|---|
-| Saturation in SIMDV (SIMDVS/SIMDVU) | ~500 | none | Saturation muxes parallel to ALU; reuses existing ADD/SUB datapath |
-| VABS | ~200 | none | Negate + select, lane-parallel |
-| VPOPCNT | ~3k–5k | adds one cycle on widest lanes if naive | Wallace-tree popcount per byte ~30 gates; VLEN/8 byte units (32 on J32, 64 on J64) = ~1k–2k gates; 32/64-bit per-lane trees dominate |
-| VUNPK4 | ~300 | none | AND-masks + sign-extend muxes |
-| VABSDIFF | ~600 | none | SUB result + per-lane two's-complement-and-select |
-| VPACK family | ~400 | none | Saturating clamp comparators per output lane |
-| VMULSU | ~0 | none | Existing MULS datapath; single sign-control mux on multiplier's second operand |
-| **Total Tier 1** | **≈ 5k gates** | conditional one extra cycle for VPOPCNT | Modest compared to Tier 0's V-register file (~4k flip-flops on J32 = 16 × 256; ~8k on J64) |
+| Feature | Critical path impact | Structure |
+|---|---|---|
+| Saturation in SIMDV (SIMDVS/SIMDVU) | none | Saturation muxes parallel to ALU; reuses existing ADD/SUB datapath |
+| VABS | none | Negate + select, lane-parallel |
+| VPOPCNT | adds one cycle on widest lanes if naive | Wallace-tree popcount per byte; VLEN/8 byte units (32 on J32, 64 on J64); 32/64-bit per-lane trees dominate. The one Tier 1 feature expected to dominate the group's area |
+| VUNPK4 | none | AND-masks + sign-extend muxes |
+| VABSDIFF | none | SUB result + per-lane two's-complement-and-select |
+| VPACK family | none | Saturating clamp comparators per output lane |
+| VMULSU | none | Existing MULS datapath; single sign-control mux on multiplier's second operand |
 
-Estimated 2–3% area increase over a Tier 0 J32 SIMD block.
+Structural, for scale: Tier 0's V register file is **16 × 256 = 4,096 flip-flops on J32** (8,192 on J64). That count follows from the register file's shape, not from synthesis.
 
-**Partial-Tier-1 deployments.** Per [spec.md §10](spec.md), an implementation may pick any subset of Tier 1 features. Suggested subsets: bitmap analytics / search / bioinformatics (VPOPCNT + saturating modes, ~3k gates); video / vision (VABSDIFF + VABS + sat, ~1.5k gates); DSP / audio (sat + VPACK + VABS, ~1.5k gates); LLM inference (VMULSU + VUNPK4 + VPACK + sat, ~1.5k gates); full Tier 1 (~4k gates).
+**Partial-Tier-1 deployments.** Per [spec.md §10](spec.md), an implementation may pick any subset of Tier 1 features. Suggested subsets: bitmap analytics / search / bioinformatics (VPOPCNT + saturating modes); video / vision (VABSDIFF + VABS + sat); DSP / audio (sat + VPACK + VABS); LLM inference (VMULSU + VUNPK4 + VPACK + sat); full Tier 1. Which subset fits a given area budget is unknown at this stage — needs measurement.
 
 ### 5.4 Pipeline-stage placement summary (Tier 0/1)
 
@@ -165,7 +166,7 @@ ID* updates shadow latches; ID** reads them. Memops use the existing MA stage an
 
 A 64-bit GF(2) polynomial multiply produces a 128-bit result. Logically it is a 64×64 AND array (4096 AND gates) followed by an XOR reduction tree of depth log2(64) = 6 levels (approximately 4030 two-input XOR gates).
 
-For comparison, a 64×64 → 128 integer multiplier of equivalent throughput requires the same AND array plus a carry-save adder tree plus a final carry-propagate adder — roughly 30–40% more gates. **The GF(2) multiplier is structurally a subset of the integer multiplier with the carry chain removed.** This subset relationship is the key reuse opportunity (§7).
+For comparison, a 64×64 → 128 integer multiplier of equivalent throughput requires the same AND array plus a carry-save adder tree plus a final carry-propagate adder — strictly more logic, by construction. **The GF(2) multiplier is structurally a subset of the integer multiplier with the carry chain removed.** This subset relationship is the key reuse opportunity (§7).
 
 Architectural prior art: Mastrovito (1991) bit-parallel GF(2^m) multiplier; Karatsuba & Ofman (1962) for the sub-divide-and-conquer decomposition; standard pre-2006 references in [spec.md Appendix C.3.1](spec.md).
 
@@ -185,20 +186,19 @@ Full 64×64 AND array + Wallace-tree XOR reduction in one cycle.
    Vm[63:0] ─────────┘                       └────────────┘
 ```
 
-**Resource estimate `[ASIC]`, 130 nm (J2 reference flow — not gf180, this
-project's ASIC methodology vehicle; no gf180 or ECP5 equivalent has been
-measured. See [decisions/0004](../decisions/0004-platform-tag-convention.md)):**
-- AND gates: 4096
-- XOR gates: ~4030
-- Total: ~25k equivalent gates
+**Structural cost** — fixed by the algorithm, the same counts §6.1 derives, and
+true of any implementation:
+- AND gates: 4096 (64 × 64)
+- XOR gates: ~4030, in a reduction tree of depth log2(64) = 6 levels
 - Latency: 1 cycle
 - Throughput: 1 CLMUL per cycle
-- Critical path `[ASIC]`, 130 nm: AND + 6 XORs ≈ 0.8 ns (1.25 GHz theoretical; 250–400 MHz practical)
 
-**When to use:** J64 performance tier, an `[ASIC]` target with a generous area
-budget, or an FPGA large enough to absorb it (Kintex / Virtex class — not this
-project's Phase-1 ULX3S/ECP5 target; see §11.1 for the `[FPGA]` figures and
-their status).
+**Area, and critical path / Fmax: unknown at this stage — needs measurement.**
+See §11.1 and §11.2.
+
+**When to use:** J64 performance tier, or an `[ASIC]` target with a generous area
+budget. Whether a Phase-1 ULX3S/ECP5 build has the fabric to absorb Tier A is
+unknown at this stage — needs measurement.
 
 ### 6.3 Implementation Tier B — pipelined Karatsuba (recommended baseline)
 
@@ -240,17 +240,22 @@ Pipeline:
    └──────────────────────────────────────────────────────────┘
 ```
 
-**Resource estimate `[ASIC]`, 130 nm (J2 reference flow — same node caveat as
-§6.2 above):**
-- 3× 32×32 GF(2) multipliers: ~12k gates
-- Combining logic: ~500 gates
-- Pipeline registers: ~600 flops
-- Total: ~16k equivalent gates
+**Structural cost** — fixed by the Karatsuba decomposition above, not by any
+target:
+- 3× 32×32 GF(2) multipliers, each a 1024-entry AND array (32 × 32) plus a
+  5-level XOR reduction tree
+- Combining logic: two 64-bit XOR layers (`middle`) plus the shifted-XOR merge
 - Latency: 3 cycles
 - Throughput: 1 CLMUL per cycle (fully pipelined)
-- Critical path per stage `[ASIC]`, 130 nm: ~0.5 ns; target 400–500 MHz
 
-**When to use:** J32-FM and J64 baseline (recommended default). ~35–40% area savings versus Tier A at the cost of 3-cycle latency.
+**Area, pipeline-register count, and critical path / Fmax: unknown at this stage — needs measurement.**
+Tier B's design *goal* is the project's `[ASIC]` frequency target of
+400–500 MHz ([j4-remediation-plan.md](../j4-remediation-plan.md) guiding
+principle 1); that is a goal, not an achieved result.
+
+**When to use:** J32-FM and J64 baseline (recommended default). Tier B is chosen
+for area over Tier A at the cost of 3-cycle latency; by how much it wins is
+unknown at this stage — needs measurement.
 
 ### 6.4 Implementation Tier C — iterative shift-XOR
 
@@ -274,35 +279,34 @@ Reuses the existing integer widening multiplier's shift register and partial-pro
    └─────────────────────────────────────────────────────┘
 ```
 
-**Resource estimate — untagged, listed in [decisions/0004](../decisions/0004-platform-tag-convention.md) as found but not swept.** The unit ("gates") matches §6.2/§6.3/§11.1's ASIC-flavoured counts, but unlike those this figure carries no process node and no platform claim at all in the original text, and this task did not resolve which it is:
-- Additional logic on top of widening multiplier: ~200 gates (XOR-vs-ADD mux on accumulator, carry-chain mask, mode-bit decode)
-- No new flops
+**Structural cost** — what the mode bit adds, by construction:
+- Additional logic on top of the widening multiplier: an XOR-vs-ADD mux on the
+  accumulator, a carry-chain mask, and mode-bit decode
+- No new flops (the existing shift register and accumulator are reused)
 - Latency: 64 cycles per CLMUL (one cycle per bit of operand B)
 - Throughput: 1 CLMUL per 64 cycles
 
-**When to use:** ultra-low-area J32 deployments where VCLMUL is needed for software correctness but not performance-critical. Embedded SoC variants targeting <100k gates total (platform unstated, same caveat as above).
+**Area: unknown at this stage — needs measurement.** It is the smallest of the three tiers
+by construction — it adds control, not a datapath — but no figure is claimed for it.
+
+**When to use:** ultra-low-area J32 deployments where VCLMUL is needed for software correctness but not performance-critical, including embedded SoC variants working to a total-area budget.
 
 ### 6.5 Tier selection by target
 
-| Target | Recommended Tier 2 tier | Rationale |
+These picks are **design intent**, not measured recommendations: no tier has
+been synthesized for either of this project's targets, so the fit each row
+assumes is unknown at this stage — needs measurement.
+
+| Target | Intended Tier 2 tier | Rationale |
 |---|---|---|
-| J32 minimal, Spartan-6 class¹ | Tier C | Reuse existing multiplier, minimal new logic |
-| J32-FM, Artix-7 / Kintex-7¹ | Tier B | Best area/performance balance |
+| J32 minimal (smallest area budget) | Tier C | Reuse existing multiplier, minimal new logic |
+| J32-FM, Phase-1 ULX3S / ECP5 | Tier B | Intended area/performance balance |
 | J64 baseline | Tier B | Standard target |
 | J64 performance / server class | Tier A | Single-cycle for higher clock rates |
-| `[ASIC]` 28 nm or smaller | Tier A | Area penalty negligible at small nodes; power dominates |
+| `[ASIC]`, small node | Tier A | Area penalty expected to be negligible at small nodes; power dominates |
 
-¹ **Marked, not retargeted** ([decisions/0004](../decisions/0004-platform-tag-convention.md)).
-These two rows name Xilinx parts (Spartan-6, Artix-7, Kintex-7) nobody is
-building this project on. The Phase-1 target is the **ULX3S board with a
-Lattice ECP5** (~40 MHz), a different vendor and a different LUT architecture
-(4-input vs these families' 6-input). The tier picks above were reasoned from
-Spartan/Artix area figures, not from ECP5 synthesis, and this project has
-measured evidence that scaling a LUT count across families is not trustworthy
-even *within* one family at one node (§11.1's noise-floor citation). Re-derive
-the ECP5 pick from an actual `yosys`/`nextpnr-ecp5` build targeting the ULX3S
-85F before relying on it; until then, treat "Tier C for the smallest FPGA
-target" as an unverified carry-forward, not a measured recommendation.
+Settle the Phase-1 pick with a `yosys` + `nextpnr-ecp5` build targeting the
+ULX3S 85F.
 
 ---
 
@@ -543,92 +547,82 @@ Three target kernels:
 
 ### 11.1 Synthesis targets
 
-**`[ASIC]`, 130 nm (J2 reference flow — not gf180, this project's ASIC
-methodology vehicle; no gf180 equivalent has been measured. See
-[decisions/0004](../decisions/0004-platform-tag-convention.md)):**
+No tier has been synthesized for either of this project's targets — the
+Phase-1 ULX3S / Lattice ECP5 board `[FPGA]`, or gf180, the ASIC methodology
+vehicle `[ASIC]`. Area and frequency are therefore stated as unknown, per
+[decisions/0005](../decisions/0005-unmeasured-figures-are-removed.md):
 
-| Tier | Estimated gates | Estimated area | Estimated max freq |
-|---|---|---|---|
-| Tier A (combinational) | 25,000 | 0.20 mm² | 300 MHz |
-| Tier B (Karatsuba pipelined) | 16,000 | 0.13 mm² | 500 MHz |
-| Tier C (iterative) | 200 (additional) | 0.002 mm² (additional) | No impact on freq |
-
-Reference J2 core size `[ASIC]`, 130 nm: ~30,000 gates / 0.25 mm². Tier B roughly doubles the SIMD execution unit area; the total core grows by perhaps 40–50%. (This ratio is dimensionless and likely survives a node/family change better than the absolute figures do, but it has not been checked against anything newer than the 130 nm baseline.)
-
-**`[ASIC]` 28/40 nm:** GF(2) multiplier area becomes a small fraction of the SoC; Tier A is usually justified for performance. Power, not area, dominates the design choice — Tier A with operand isolation when idle is typically the right call. No absolute figures are given at this node; the claim is qualitative.
-
-**FPGA targets — Spartan-7 / Artix-7 (Xilinx, 6-input LUT). Not this
-project's Phase-1 target.**
-
-> **Marked, not retargeted** ([decisions/0004](../decisions/0004-platform-tag-convention.md)).
-> Phase-1 for this project is the **ULX3S board with a Lattice ECP5**, a
-> 4-input-LUT (LUT4) fabric at ~40 MHz — a different vendor, a different LUT
-> architecture, and (see below) no DSP48 primitive at all. Converting the
-> LUT6 counts below into LUT4 counts by a fixed ratio is exactly the kind of
-> scaling this project has been burned by: two logically identical RTL trees
-> on this core, differing only in the operand order of one `or`, synthesized
-> **368 LUT4 apart** on the ECP5 — a same-family, same-node noise floor larger
-> than most of the deltas in the table below. A cross-vendor, cross-LUT-width
-> estimate is worth less than that, so none is given. **What would settle
-> it:** synthesize Tier A/B/C for the ECP5 with `yosys` + `nextpnr-ecp5`,
-> targeting the ULX3S 85F (the board and part this project's Phase-1
-> deliverable actually is).
-
-| Tier | LUTs (Spartan-7 / Artix-7, LUT6) | FFs | DSP48 slices | sysDSP slices, ECP5 (STRUCTURAL, not synthesis) |
+| Tier | Gate-equivalent area `[ASIC]` | Fmax `[ASIC]` | LUT4 `[FPGA]` | FFs `[FPGA]` |
 |---|---|---|---|---|
-| Tier A | 3,500 | 100 | 0 (LUT-only) | 0 |
-| Tier B | 2,200 | 600 | 0 | 0 |
-| Tier C | 50 (additional) | 10 (additional) | 0 | 0 |
+| Tier A (combinational) | unknown at this stage — needs measurement | unknown at this stage — needs measurement | unknown at this stage — needs measurement | unknown at this stage — needs measurement |
+| Tier B (Karatsuba pipelined) | unknown at this stage — needs measurement | unknown at this stage — needs measurement | unknown at this stage — needs measurement | unknown at this stage — needs measurement |
+| Tier C (iterative) | unknown at this stage — needs measurement | unknown at this stage — needs measurement | unknown at this stage — needs measurement | unknown at this stage — needs measurement |
 
-The last column *is* retargeted, not marked, unlike the LUT/FF columns to its
-left: GF(2) multiplication cannot use a hard multiply block on any family,
-because those blocks are built around a carry chain for integer arithmetic
-and this design has none (structural — true by construction from the
-algorithm, not from a synthesis run, and it is the same reason the DSP48
-column reads 0). The ECP5's DSP hard IP is Lattice's own sysDSP block
-(`MULT18X18D` and related primitives) rather than a DSP48, but "not usable
-for this" holds regardless of which vendor's block it is, so 0 transfers
-honestly where the LUT counts do not. Some FPGA vendors expose dedicated
-carryless-multiply modes on their hard blocks; family-specific, and
-unconfirmed for either family here.
+**Goal, not a result:** the `[ASIC]` frequency target for this project is
+~400 MHz+ ([j4-remediation-plan.md](../j4-remediation-plan.md) guiding
+principle 1); the Phase-1 `[FPGA]` goal is fit and correctness at ~40 MHz, with
+area (LUT4 / EBR) the budgeted quantity and energy out of scope.
 
-**Kintex-7 / Virtex Ultrascale (also not this project's target):** Tier A becomes the obvious choice there; LUT cost is negligible relative to total fabric. Whether the same holds on an ECP5-85F — a much smaller part — is unmeasured.
+**What would produce the numbers:** `yosys` + `nextpnr-ecp5` targeting the
+ULX3S 85F for the `[FPGA]` columns; a gf180 gate-level run (Track D0) for the
+`[ASIC]` columns.
 
-### 11.2 Timing analysis `[ASIC]`, 130 nm
+**Hard multiply blocks — structural, not synthesis.** GF(2) multiplication
+cannot use a hard multiply block on any family: those blocks are built around
+a carry chain for integer arithmetic, and this design has none. So every tier
+uses **0** sysDSP slices on the ECP5 (Lattice's `MULT18X18D` and related
+primitives) and would use 0 DSP48 slices on any family that has them. This
+holds by construction from the algorithm and is the one resource figure in this
+section that needs no measurement. Some FPGA vendors expose dedicated
+carryless-multiply modes on their hard blocks; that is family-specific and
+unconfirmed for the ECP5.
 
-Same node caveat as §11.1: J2 reference flow, not gf180; no gf180 or ECP5 equivalent measured.
+**Why no cross-family estimate is offered.** Two logically identical RTL trees
+on this core, differing only in the operand order of one `or`, synthesized
+**368 LUT4 apart** on the ECP5 — a same-family, same-node noise floor wider
+than most of the deltas anyone would want to read out of an estimate. A number
+carried across vendors, LUT widths or process nodes is worth less than that.
 
-**Tier A critical path:**
-```
-operand register → AND gate → XOR tree (6 levels) → result register
-≈ 0.05 ns + 0.10 ns + 6 × 0.10 ns + 0.05 ns = 0.80 ns @ 130 nm
-```
-Theoretical max 1.25 GHz; with margin, target 250–400 MHz at 130 nm.
+**`[ASIC]`, small nodes — qualitative only:** as the node shrinks, GF(2)
+multiplier area becomes a small fraction of the SoC and power, not area,
+dominates the tier choice; Tier A with operand isolation when idle is then the
+expected pick. No figures are given at any node.
 
-**Tier B critical path (per stage):**
-```
-Stage 2 (the three sub-multipliers): each is 32-bit AND + 5-level XOR tree
-≈ 0.05 + 0.10 + 5 × 0.10 + 0.05 = 0.70 ns @ 130 nm
-```
-Choose 400–500 MHz target.
+### 11.2 Timing analysis
+
+Structural, and true on any target: Tier A's critical path is one AND gate
+followed by a 6-level XOR tree, between operand and result registers. Tier B's
+longest stage is stage 2, where each sub-multiplier is a 32-bit AND followed by
+a 5-level XOR tree.
+
+**Path delay and achievable Fmax, on both targets: unknown at this stage — needs measurement.**
+Static timing analysis after a gf180 gate-level run `[ASIC]`, or after
+`nextpnr-ecp5` place-and-route on the ULX3S 85F `[FPGA]`, produces them. The
+400–500 MHz named for Tier B in §6.3 is the design target, not an achieved
+frequency.
 
 ### 11.3 Power and operand isolation — `[ASIC]` only
 
-> Energy and power are an `[ASIC]`-only concern for this project
-> ([decisions/0004](../decisions/0004-platform-tag-convention.md);
-> [j4-remediation-plan.md](../j4-remediation-plan.md) guiding principle 1 and
-> Track D0): Phase-1 goals on the ULX3S/ECP5 are correctness, area, and
-> boot-to-Linux, and energy is explicitly out of scope — it is not measurable
-> on the FPGA and must not be presented as if it were. Every figure in this
-> subsection is `[ASIC]`, and the ones with an absolute mW value are
-> additionally at the stale 130 nm node from §11.1/§11.2 — not gf180, not
-> measured there either.
+Energy and power are `[ASIC]`-only for this project
+([j4-remediation-plan.md](../j4-remediation-plan.md) guiding principle 1 and
+Track D0): energy is not measurable on the ECP5 and is out of scope for
+Phase-1.
 
-To minimise dynamic power, AND-mask the multiplier inputs when no CLMUL is being issued. 128 AND gates + one OR-of-valid-signals — negligible silicon, an estimated 30–50% dynamic-power savings `[ASIC]` on cores where CLMUL is not in the critical path.
+To minimise dynamic power, AND-mask the multiplier inputs when no CLMUL is
+being issued — 128 AND gates plus one OR-of-valid-signals at the operand
+registers (structural: one gate per input bit). Further mitigations: clock
+gating (gate the multiplier clock when no CLMUL is active in any pipeline
+stage), and a power-down mode for the entire GF unit when SIMD is disabled.
 
-Activity factor: GF(2) operations have high bit-toggle rates (every AND output is independent of its neighbours). Expect 30–40% activity in the multiplier core during sustained CLMUL throughput. Mitigations: operand isolation, clock gating (gate the multiplier clock when no CLMUL is active in any pipeline stage), power-down mode for the entire GF unit when SIMD is disabled.
+GF(2) operations have high bit-toggle rates — every AND output is independent
+of its neighbours — so the multiplier core is expected to be activity-dominated
+rather than leakage-dominated during sustained CLMUL throughput. That is a
+qualitative statement about the algorithm; the activity factor itself, the
+power drawn with and without operand isolation, and the saving isolation buys
+are all unknown at this stage — needs measurement.
 
-Estimated impact `[ASIC]`, 130 nm: Tier B at sustained 100% CLMUL throughput @ 500 MHz: 15–25 mW. With operand isolation and clock gating during typical mixed workloads (10–20% CLMUL): 3–5 mW average. Negligible relative to the core's total power budget — but, per the note above, this is a 130 nm ASIC estimate and says nothing about the ECP5, where no power figure is meaningful to give.
+**What would produce them:** a gf180 gate-level power run (Track D0) driven by
+switching activity from a real trace, reported `[ASIC]` with the node it used.
 
 ---
 

@@ -1738,14 +1738,15 @@ def _(tmp):
     build(tmp, extra={"foo.md": "An `[ASIC]` estimate for Zynq UltraScale+.\n"})
 
 
-@case("marking a foreign figure in prose, with no bracket tag, passes", False)
+@case("naming a foreign part in prose, with no bracket tag, passes", False)
 def _(tmp):
-    # The check must not fire on the correctly-marked form decisions/0004
-    # actually asks for: naming the platform, saying it is not the target,
-    # with no `[FPGA]`/`[ASIC]` bracket anywhere near it.
-    build(tmp, extra={"foo.md": "Marked, not retargeted: this figure was "
-                                "measured on Spartan-6, not this project's "
-                                "ECP5 target, and no ECP5 number is given.\n"})
+    # The check is about the TAG, not the family name: a sentence that names
+    # Spartan-6 while making no claim about this project's hardware must not
+    # trip it. (decisions/0005 removed the marked-figure form this case used to
+    # use, so the fixture no longer carries the retired wording -- which the
+    # 0005 arm below would now fail, for a different and correct reason.)
+    build(tmp, extra={"foo.md": "The J2 reference flow ran on Spartan-6; no "
+                                "figure from it is carried here.\n"})
 
 
 @case("[FPGA] tag with no foreign-family name on the line passes", False)
@@ -1766,6 +1767,75 @@ def _(tmp):
     # the manual sweep.
     build(tmp, extra={"foo.md": "This figure is `[FPGA]`.\n"
                                 "It was originally measured on Artix-7.\n"})
+
+
+# ------------------------------------ #20 unmeasured-figure-wording (0005)
+
+
+@case("'unknown at this stage' without its second half fails", True,
+      expect_check="unmeasured-figure-wording")
+def _(tmp):
+    # decisions/0005 rule 2: ONE wording, so the burn-down is one grep. Half a
+    # phrase is how the drift starts, and this tree already spells "TBD",
+    # "unmeasured" and "pending" for unrelated things.
+    build(tmp, extra={"foo.md": "| Tier A | unknown at this stage |\n"})
+
+
+@case("'needs measurement' without its first half fails", True,
+      expect_check="unmeasured-figure-wording")
+def _(tmp):
+    # The other half, asserted separately: a check that only looked for the
+    # first half would pass a cell reading just "needs measurement", which is
+    # the same drift from the other end.
+    build(tmp, extra={"foo.md": "| Tier A | needs measurement |\n"})
+
+
+@case("the canonical unknown phrase passes", False)
+def _(tmp):
+    # The form 0005 mandates, in the position it mandates it: a table cell.
+    build(tmp, extra={"foo.md": "| Tier A | unknown at this stage \u2014 "
+                                "needs measurement |\n"})
+
+
+@case("a hyphen instead of the em dash fails", True,
+      expect_check="unmeasured-figure-wording")
+def _(tmp):
+    # "em dash and all" is not decoration: `grep` for the canonical phrase must
+    # find every cell, and a hyphenated near-miss is invisible to it. This is
+    # the case that would have let the wording drift while the check stayed
+    # green, since both halves are present and only the join differs.
+    build(tmp, extra={"foo.md": "| Tier A | unknown at this stage - needs "
+                                "measurement |\n"})
+
+
+@case("the marking convention 0005 retired fails wherever it reappears", True,
+      expect_check="unmeasured-figure-wording")
+def _(tmp):
+    # 0005 rule 3 closing behind itself. Emphasis markers included, because
+    # that is how the tree's own occurrences were written -- a regex without
+    # them would have missed every real instance while passing this test if the
+    # fixture had been written plainly.
+    build(tmp, extra={"foo.md": "**Marked**, not retagged: the Spartan-7 "
+                                "figure is kept with a note.\n"})
+
+
+@case("a record quoting the retired wording on the same line passes", False)
+def _(tmp):
+    # A decision record must be able to say what it superseded. Per 0002's
+    # account of the shared-regex incident, the escape is 0005's own list and
+    # must sit on the SAME line as the thing it excuses.
+    build(tmp, extra={"foo.md": "Its retired wording: \"marked, not "
+                                "retagged\".\n"})
+
+
+@case("the escape does not reach the next line", True,
+      expect_check="unmeasured-figure-wording")
+def _(tmp):
+    # The same-line rule, asserted rather than assumed: an excuse one line
+    # above the thing it excuses is exactly the drift 0002 warns about, and a
+    # line-scoped check must not honour it.
+    build(tmp, extra={"foo.md": "The retired wording is quoted below.\n"
+                                "Marked, not retargeted: keep the figure.\n"})
 
 
 # ------------------------------------------- the check registry reconciles

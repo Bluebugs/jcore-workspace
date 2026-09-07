@@ -76,6 +76,10 @@ CHECKS = {
     "platform-tag-foreign-part": ("a `[FPGA]`/`[ASIC]` tag on a line naming a "
                                   "Xilinx-only part (Spartan/Artix/Kintex/"
                                   "Virtex/Zynq)", "0004"),
+    # 0005 -- unmeasured figures
+    "unmeasured-figure-wording": ("a half-written 'unknown at this stage' "
+                                  "cell, or the marking convention 0005 "
+                                  "retired", "0005"),
 }
 
 DECISION_DOC = {
@@ -83,6 +87,7 @@ DECISION_DOC = {
     "0002": "docs/decisions/0002-supersede-convention.md",
     "0003": "docs/decisions/0003-canonical-encoding-database.md",
     "0004": "docs/decisions/0004-platform-tag-convention.md",
+    "0005": "docs/decisions/0005-unmeasured-figures-are-removed.md",
     # The doc-vs-code checks are not decided by a record; they are defined by
     # the registry's own tables, which say what each drives and why.
     "B0c": "docs/fact-ownership.md",
@@ -110,6 +115,34 @@ VALUE_GUARD_MAX_LICENSED = 4
 FOREIGN_FPGA_PARTS_RE = re.compile(
     r"\b(Spartan|Artix|Kintex|Virtex|Zynq)\b", re.IGNORECASE)
 PLATFORM_TAG_RE = re.compile(r"`\[(?:FPGA|ASIC)\]`")
+
+# 0005 rule 2: a figure nobody measured is removed, and the cell where it stood
+# says so in ONE wording. Two half-phrases, and the canonical whole. A cell
+# that says the same thing five ways cannot be burned down with one grep, which
+# is what 0005 asks for, so each half without the other is a failure.
+UNKNOWN_HALVES = (
+    re.compile(r"unknown at this stage", re.IGNORECASE),
+    re.compile(r"needs measurement", re.IGNORECASE),
+)
+UNKNOWN_CANONICAL_RE = re.compile(
+    r"unknown at this stage \u2014 needs measurement", re.IGNORECASE)
+
+# 0005 rule 3 closing behind itself. The convention it supersedes -- keep the
+# foreign figure, explain it in prose -- must not come back from someone
+# reading 0004 without reading 0005. Emphasis markers are allowed inside
+# because the tree's own occurrences were written `**marked**, not retagged`.
+RETIRED_MARKING_RE = re.compile(
+    r"marked[*_]{0,2},?\s+not\s+[*_]{0,2}ret(?:arget|ag)", re.IGNORECASE)
+
+# The same-line escape, so a record can quote the wording it retired. Written
+# out here rather than shared with `STALE_CLAIM_PHRASES` or
+# `GLOSSARY_QUOTE_PHRASES`, per 0002's account of what sharing one cost: a
+# widening made for the glossary exempted 119 lines from `stale-claim` in the
+# same commit. Three lists, three deliberate decisions.
+UNMEASURED_QUOTE_PHRASES = (
+    "previously read", "previously said", "formerly read", "used to read",
+    "retired wording", "quoted verbatim",
+)
 
 # Per 0002 section 2. A change is "merged" only when it is on this branch.
 # Kept in sync with the table in 0002; that table is the human-readable copy
@@ -1402,6 +1435,51 @@ def check_platform_tags(cfg, report):
                             "target, which it does not.")
 
 
+def check_unmeasured_wording(cfg, report):
+    """decisions/0005, enforced. Registry-independent and scoped to docs/, for
+    the same reason `platform-tag-foreign-part` beside it is: a wording rule is
+    not a registry fact and must not go dark when the registry is broken.
+
+    Two arms, both fail-closed on literals:
+
+    1. Either half of 0005's canonical phrase used without the other. This is
+       the *one wording* half of rule 2 -- "TBD", "unmeasured" and "pending
+       synthesis" are already in this tree meaning other things, so the burn-down
+       grep 0005 names only works if the phrase never drifts.
+    2. The marking convention 0005 retired, reappearing anywhere under docs/.
+
+    What it cannot do, said here as well as in 0005 so a green run is not
+    over-read: it has no way to tell a measured figure from an unmeasured one.
+    That is a judgement about provenance, not a property of the text, and 0004
+    Enforcement's argument against a general "untagged number" regex applies
+    to it word for word."""
+    for path in cfg.markdown_files():
+        try:
+            body = read(path)
+        except (OSError, UnicodeDecodeError):
+            continue  # `readable` (run alongside this) already reports it
+        for n, line in enumerate(body.splitlines(), 1):
+            low = line.lower()
+            if any(q in low for q in UNMEASURED_QUOTE_PHRASES):
+                continue  # quoting a retired wording, per 0005 Enforcement
+            where = "%s:%d" % (cfg.rel(path), n)
+            canonical = len(UNKNOWN_CANONICAL_RE.findall(line))
+            for half in UNKNOWN_HALVES:
+                if len(half.findall(line)) > canonical:
+                    report.fail("unmeasured-figure-wording", where,
+                                "half of the unknown-figure phrase without the "
+                                "other half. Per decisions/0005 rule 2 the one "
+                                "wording is `unknown at this stage \u2014 needs "
+                                "measurement`, em dash and all, so that the "
+                                "burn-down is a single grep.")
+                    break
+            if RETIRED_MARKING_RE.search(line):
+                report.fail("unmeasured-figure-wording", where,
+                            "the marking convention decisions/0005 retired. An "
+                            "unmeasured figure is removed and its cell says it "
+                            "is unknown; it is not kept with prose beside it.")
+
+
 def check_facts(cfg, report, facts, waivers):
     corpus = {}
     for p in cfg.markdown_files():
@@ -2014,6 +2092,9 @@ def main():
         # and must not go dark just because the registry -- or --facts scoping
         # -- is involved.
         check_platform_tags(cfg, report)
+        # 0005, for the same reason again: the wording of a removed figure is
+        # not a registry fact.
+        check_unmeasured_wording(cfg, report)
         if facts:
             check_facts(cfg, report, facts, waivers)
     if run_super:
