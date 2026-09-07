@@ -1394,12 +1394,41 @@ PENDING_RE = re.compile(
 STALE_CLAIM_RE = re.compile(r"\bNOT[ _-]?MERGED\b", re.IGNORECASE)
 
 
+# Environment variables that redirect git AWAY from the repository named on the
+# command line. `git -C <path>` does NOT override GIT_DIR: with it set, every
+# command below operates on whatever repository GIT_DIR names, while still
+# looking, in the output and in the code, exactly as though it operated on
+# `repo`. Demonstrated on this checker: with GIT_DIR pointed elsewhere a bogus
+# RESOLVED marker PASSED while 42 correct ones FAILED -- the verdicts inverted
+# and nothing said so.
+#
+# This is reachable without anyone doing anything strange: `git rebase --exec`,
+# `git bisect run`, `git submodule foreach` and every hook run with GIT_DIR
+# already set, and all four are natural ways to wire a documentation gate.
+GIT_ENV_OVERRIDES = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+)
+
+
+def git_env(**extra):
+    """The inherited environment with every repository redirection removed."""
+    env = {k: v for k, v in os.environ.items() if k not in GIT_ENV_OVERRIDES}
+    env.update(extra)
+    return env
+
+
 def git(repo, *args):
     """Run git. Returns (returncode, stdout), or (None, None) if git could not
     be run at all -- the caller must distinguish those, because a non-zero exit
     is an answer and a failure to run is not."""
     try:
-        out = subprocess.run(["git", "-C", repo] + list(args),
+        out = subprocess.run(["git", "-C", repo] + list(args), env=git_env(),
                              capture_output=True, text=True, timeout=60,
                              # errors="replace" is load-bearing, not tidiness.
                              # Commit subjects are bytes, not text: the Linux
@@ -1453,7 +1482,15 @@ class Repos:
                                      "could not read %s origin/%s"
                                      % (repo_name, branch))
                 else:
-                    result = set(l.strip() for l in log.splitlines()
+                    # split("\n"), NOT splitlines(): the latter also breaks
+                    # on \v \f \x1c \x1d \x1e \x85 U+2028 U+2029, none of
+                    # which git emits as a record separator. A commit whose
+                    # subject contains one of them would be split into
+                    # fragments, and a marker citing only the prefix would
+                    # match a "subject" no commit has. Note the interaction
+                    # with errors="replace" above: \xc2\x85 decodes to U+0085,
+                    # which IS a splitlines() boundary.
+                    result = set(l.strip() for l in log.split("\n")
                                  if l.strip())
         self._subjects[key] = result
         return result
