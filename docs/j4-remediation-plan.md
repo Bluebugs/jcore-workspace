@@ -283,8 +283,11 @@ A worklist, each item = pick the true value, fix every other doc, add a CI check
   BRAM 104 vs 141 EBR) — supersede with one measured/estimated number (Track D).
 - **L2 write-through vs write-back / MSI-M** (`l2-spec` §2 vs §6-7-17) — this
   changes correctness, coherence, and the DMA story; resolve before any L2 work.
-- **VIPT vs PIPT L1** (`linux-spec` VIPT+coloring vs `security-review`/`design`
-  PIPT) — the synonym-channel security claim depends on it.
+- ~~**VIPT vs PIPT L1**~~ — **CLOSED: the answer is PIPT** ([mmu/hardware-spec.md §4.1a](mmu/hardware-spec.md)), established against
+  `core/cpu.vhd` rather than adjudicated between documents, with a code binding
+  on the relocation bound. `mmu/linux-spec.md` §2.3's VIPT contract and its 4 KB
+  page-colouring requirement are withdrawn; the synonym-channel claim in
+  `security-review` and `design-spec` holds.
 - **TSBBR = P1 VA vs PA**, **TSB_SIZE_LOG = entries vs sets**, **CPUINFO
   0x030 vs 0x02C**, **`rte` uop count**, **EXPEVT code assignments**, the
   MMU-doc "J4" naming the glossary deprecates — the long tail from the review.

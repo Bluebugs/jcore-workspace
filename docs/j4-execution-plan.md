@@ -94,7 +94,7 @@ Grouped by wave (see §5 for sequencing). "Repo" names the primary tree.
 | # | Task | Repo(s) | Model | Review |
 |---|---|---|---|---|
 | B4 | **Encoding sweep**: every documented instruction into `jcore-cpu/docs/insns.json` ([0003](decisions/0003-canonical-encoding-database.md)), `--emit check` green, `freespace` re-homes collisions (SIMD/FMOV/FSCA/SUBC set, `movi20s` notation, `rts/n` reserve), regen toolchain. | docs + jcore-cpu + binutils-gdb | **Sonnet** (entry/regen) + **Opus** (collision adjudication) | Opus spec + code |
-| B1 | Contradiction worklist — one canonical answer each + doc fixes + CI check. Split by difficulty: **Opus** for load-bearing (L2 write-through vs write-back/MSI, VIPT vs PIPT L1, TSBBR VA/PA, EXPEVT codes); **Sonnet** for mechanical (endianness, "J4" naming, CPUINFO addr, `rte` uop count). | docs | **Opus/Sonnet** per item | Opus design-review |
+| B1 | Contradiction worklist — one canonical answer each + doc fixes + CI check. Split by difficulty: **Opus** for load-bearing (L2 write-through vs write-back/MSI, VIPT vs PIPT L1 — closed as PIPT, [mmu/hardware-spec.md §4.1a](mmu/hardware-spec.md) — TSBBR VA/PA, EXPEVT codes); **Sonnet** for mechanical (endianness, "J4" naming, CPUINFO addr, `rte` uop count). | docs | **Opus/Sonnet** per item | Opus design-review |
 | B2 | SH-4-as-KVM-guest model + emulation-fidelity matrix (each review finding → emulated / native-must-decode / unsupported). | docs | **Opus** | Opus design-review |
 | B3 | Roadmap reframe (FPGA vs ASIC deliverables) + the OoO-vs-FGMT model over real traces (burden-of-proof on OoO). | docs + model | **Opus** | Opus design-review |
 

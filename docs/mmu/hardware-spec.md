@@ -146,8 +146,11 @@ Inherited from SH-4, extended with PageMask. Written via `LDC Rm, PTEL`; read vi
 ```
 [31:10]  PPN           Physical page number (22-bit PFN, 4 KB granularity).
                        NOTE: PPN[31:10] overlaps PageMask[11:8] bits 10-11;
-                       only PPN[27:13] drives relocation, so the overlap is
-                       harmless but real (tlb.vhd:194-195).
+                       only PPN[27:12] drives relocation, so the overlap is
+                       harmless but real. This line previously read
+                       PPN[27:13]; bit 12 was added with the PIPT work and
+                       it is the bit that makes the L1 caches physically
+                       indexed rather than virtually (see 4.1a).
 [11:8]   PageMask      log-size selector (see §2.1 PTEH VPN table).
 [7]      W             Writable
 [6]      X             Executable
@@ -817,6 +820,58 @@ sub-test D with its own result code rather than passing quietly.*
 | Replacement | NRU or random |
 
 A unified, fully-associative TLB simplifies the indexing problem when mixing page sizes. Set-associative TLBs require either multiple lookups, VPN-partitioning by size, or skewed associativity — all of which add gates and timing pressure. For 32-entry sizes, fully-associative CAM is reasonable in FPGA.
+
+### 4.1a L1 cache indexing: the caches are PIPT, by upstream relocation
+
+**The L1 instruction and data caches are physically-indexed, physically-tagged
+(PIPT).** Not virtually-indexed. This is a property of *where the translation
+sits*, not of the cache: on a translated access that hits the TLB, the core
+replaces the frame bits of the address **before** the cache sees it, so the
+cache is presented with a physical address and indexes and tags it as one.
+
+**Normative statement of the relocation.** On a translated hit, the core drives
+the external bus address as `PA[27:12]` = PPN bits where the PageMask says
+"frame", and the incoming VA bits where it says "in-page offset";
+`PA[11:0] = VA[11:0]` and `PA[31:28] = 0`. The lower bound of the relocated
+field — **bit 12** — is what makes the caches PIPT rather than VIPT, and it is
+the whole content of this section: `jcore-cpu`'s L1 index tops out at bit 12
+(`cache/cache_pkg.vhd`, `cache_index_bits = 8` over 32-byte lines gives
+`cache_index_msb = 12`), so relocating from bit 12 upward leaves **no** index
+bit virtual. Relocating from bit 13 upward instead — which is what an earlier
+revision of §2.2 still describes, see below — would leave `VA[12]` in the index
+and make the cache VIPT at 4 KB pages. `mmu.l1.pipt` in
+[fact-ownership.md](../fact-ownership.md) §Code bindings binds this bound to
+`jcore-cpu@master` `core/cpu.vhd` so it cannot move silently.
+
+**Consequences, both of which retire things this workspace still said:**
+
+- **There is no virtual-synonym channel and no page-colouring obligation.** Two
+  virtual aliases of one physical page resolve to the same physical address
+  before indexing, so they occupy the same line by construction. There is
+  nothing for software to arrange. [linux-spec.md §2.3](linux-spec.md) carried
+  a VIPT contract and a colouring requirement for 4 KB pages; both are
+  withdrawn there.
+- **`mmucolor`, the CPU-level page-colouring guard, is retired.**
+  `jcore-cpu@master` `.github` regression list, commit *"ci(mmu): retire
+  mmucolor (PIPT moots page-coloring); wire reloc guards into full-regression +
+  runner"* — replaced by `mmureloc` / `mmurelocif` / `mmurelocbp`, which assert
+  the relocation itself.
+
+**Status.**
+> **RESOLVED 2026-09-07 — jcore-cpu@master: "feat(mmu): PIPT relocation of translated D accesses (VA->PA) + PA[12] export + mmureloc guard".**
+> The I-side landed alongside it —
+> **RESOLVED 2026-09-07 — jcore-cpu@master: "feat(mmu): PIPT relocation of translated I-fetches (VA->PA) + mmurelocif guard"** —
+> and the last VIPT-era remnant in the cache was removed by
+> **RESOLVED 2026-09-07 — jcore-cpu@master: "refactor(cache): drop the vestigial VIPT-era PA-tag path".**
+> `cache/dcache_ccl.vhm` now states it in one line: *"PIPT: cpu.vhd relocates
+> the address upstream of the cache, so a.a is already a PA; index and tag are
+> both physical in every mode."*
+
+**Prior state, recorded because it explains the documents that disagree.** VIPT
+was a real intermediate state of this design, not a misreading: the cache tag
+RAM was widened to a physical tag and switched on `AT` first, and full
+relocation came later. Every VIPT statement elsewhere in this workspace dates
+from that window.
 
 ### 4.2 TLB entry layout
 
