@@ -832,16 +832,43 @@ sub-test D with its own result code rather than passing quietly.*
 
 ## 4. TLB Structure
 
-### 4.1 Recommended TLB organization (suggestion, not mandate)
+### 4.1 TLB organization — shipped geometry (normative) and the recommendation it replaced
 
-| Parameter | Value |
-|-----------|-------|
-| Number of entries | 32 (J3), 64 (J64) |
-| Associativity | Fully associative |
-| Split I/D | No (unified) on J3; implementer's choice on J64 |
-| Replacement | NRU or random |
+**This section is now normative for the shipped geometry.** It was titled
+"Recommended TLB organization (**suggestion, not mandate**)" and gave a unified
+32-entry TLB, which the RTL has never implemented; nothing else stated what the
+hardware does, and [fact-ownership.md](../fact-ownership.md) had no row for it.
+Flagged by [security/threat-model.md §11](../security/threat-model.md) and
+closed by Wave-2 **B1**.
 
-A unified, fully-associative TLB simplifies the indexing problem when mixing page sizes. Set-associative TLBs require either multiple lookups, VPN-partitioning by size, or skewed associativity — all of which add gates and timing pressure. For 32-entry sizes, fully-associative CAM is reasonable in FPGA.
+| Parameter | Shipped (J4) | Notes |
+|-----------|--------------|-------|
+| Split I/D | **Yes** — two independent instances | `core/cpu.vhd` instantiates `u_itlb` and `u_dtlb`, each `entity work.tlb` |
+| ITLB entries | **8** | |
+| DTLB entries | **16** | Twice the ITLB, on purpose: the D side reads every PC-relative literal pool that the I side fetches, *and* a guard (`mmudrain`) that needs more than 8 |
+| Associativity | Fully associative | one combinational lookup port per instance |
+| Replacement | NRU (invalid slot first) | |
+
+`mmu.tlb.itlb` and `mmu.tlb.dtlb` in
+[fact-ownership.md](../fact-ownership.md) bind both counts to the generic maps
+in `core/cpu.vhd`.
+
+**The geometry was measured, not chosen on paper** `[FPGA]`. `core/cpu.vhd`
+records a 6-seed `nextpnr` sweep taken 2026-08-13, representative-harness `Fmax`
+against a 32+32 control at mean 29.55 MHz: **8+16 mean 34.69** (shipped), 8+8
+mean 34.31, 16+16 mean 33.01, 8+32 mean 31.36. `Fmax` scales with **total
+comparator count**, and 8+16 is the point that buys the most clock without
+starving the D side. The 32-entry recommendation this section used to carry
+would have cost roughly 5 MHz on a core whose whole J4 budget is ~33 MHz
+([platform-baseline.md §3](../platform-baseline.md)).
+
+**Why the entry count is smaller than SH-4's 64 without being a reach
+regression:** at the 16 KB base page ([design-spec.md §3.3](design-spec.md)),
+8 ITLB + 16 DTLB entries cover the same address range a 32/64-entry 4 KB TLB
+covers — see [j4-remediation-plan.md](../j4-remediation-plan.md)'s note on
+exactly this trade.
+
+A fully-associative TLB simplifies the indexing problem when mixing page sizes. Set-associative TLBs require either multiple lookups, VPN-partitioning by size, or skewed associativity — all of which add gates and timing pressure. At these entry counts, fully-associative CAM is comfortable in FPGA.
 
 ### 4.1a L1 cache indexing: the caches are PIPT, by upstream relocation
 
@@ -914,7 +941,7 @@ Data fields:
   STALE         1 bit (software-only, preserved)
 ```
 
-Total ~91 bits per entry on J32, ~131 bits on J64. For 32 entries: ~3 Kib of state. The VMID field present in earlier drafts has been **removed** (see project-wide decision in [glossary §5](../glossary.md)); hypervisor isolation is achieved via ASID partitioning, not VMID tagging.
+Total ~91 bits per entry on J32, ~131 bits on J64. For the shipped 8 + 16 entries (§4.1): ~2.2 Kib of state — structural arithmetic, not a synthesis result. The VMID field present in earlier drafts has been **removed** (see project-wide decision in [glossary §5](../glossary.md)); hypervisor isolation is achieved via ASID partitioning, not VMID tagging.
 
 **PAE reuses the J64 PPN budget.** A J32-PAE core ([design-spec.md §3.8](design-spec.md)) carries a 40-bit physical frame: `PPN = PA[39:14] = 26 bits` at the 16 KB base page. That fits inside the `up to 36 bits` already reserved here for J64, so a PAE entry costs **no extra TLB storage** over a non-PAE J32 entry beyond the high `PPN` bits the field already allows — the entry width sits between the ~91-bit J32 and ~131-bit J64 figures. The only entry-adjacent hardware cost is widening the physical-output port (and the L1 cache tags, §8) from 32 to 40 bits.
 
@@ -975,8 +1002,23 @@ miss", but its handler is now the page-table walk, not a TSB probe.
 (§2.6), and P1 is untranslated by architecture, so the walker folds it
 (`PA = VA & 0x1FFFFFFF`) and its reads bypass translation entirely — no
 nesting, no recursion, no new exception class. The fold is how the property is
-realised, not an exception to it. A malformed `TSBBR` hangs the walk, exactly
-as it would hang the software handler's `mov.l`.
+realised, not an exception to it.
+
+**A malformed `TSBBR` does not hang the walk — the walker fails OPEN.**
+`core/tlb_walk.vhd` carries a liveness counter over *every* non-idle state
+(`timeout_cycles`, 255), and expiry "takes the same exit as a tag mismatch:
+`tried` set, state `st_idle`, busy low — the miss condition is still true, so
+`cpu.vhd` raises the exception on the next cycle." The RTL's own comment states
+the direction: it "gives up exactly as it does on a tag mismatch — it fails
+**OPEN**, to the software miss path, never closed into a stall." *(This
+paragraph previously ended "A malformed `TSBBR` hangs the walk, exactly as it
+would hang the software handler's `mov.l`", which is the opposite of what the
+hardware does and was flagged by
+[security/threat-model.md §11](../security/threat-model.md) as load-bearing,
+because §7.5 of that document argues from this sentence. Fail-open is the safer
+of the two readings and it is the true one — but note what it does **not**
+supply: there is still no `TSBBR` bounds check anywhere in `tlb_walk.vhd`, which
+is why that document's **L7** exists.)*
 
 **The walk must be self-terminating.** The miss condition is a *level* that
 stays true until the miss is resolved, so a walker that re-arms on that level

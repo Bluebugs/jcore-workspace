@@ -1116,16 +1116,24 @@ close one is scope expansion, not compliance.
 Recorded rather than fixed, with an owner, because fixing them here would exceed
 C0's remit and hide them in a large commit.
 
+**Five rows were closed by Wave-2 B1** (2026-09-07) and deleted from this table
+rather than struck through, since the burn-down is the point: the `ASID_TAG`
+generation-nibble restatement in `bus/fabric-spec.md` and the matching one in
+`ooo/j32lt-spec.md`; `TSB_SIZE_LOG`'s two ranges (see §7.1, corrected in place);
+the walker's failure direction, where **fail-open is the true reading** and
+[mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md) now says so — §7.5's
+argument was quoting the wrong half; and TLB geometry, which now has an owner
+([mmu/hardware-spec.md §4.1](../mmu/hardware-spec.md), 8 ITLB / 16 DTLB) and a
+code binding to the generic maps in `core/cpu.vhd`. **The `TSBBR` bounds check
+is still absent** from `tlb_walk.vhd` — fail-open does not supply one — so
+**L7** stands unchanged.
+
 | Defect | Owner |
 |---|---|
 | `jcore-cpu/docs/architecture/tlb.md §7` still claims the core is "strictly non-speculative" and that "the **software** TLB walk … removes … AnC". Both false; cross-repo, so not fixable in this commit | Wave-3 **C2b** (it touches `jcore-cpu` anyway) |
 | **J32-FM — the product — has no owning specification.** One glossary table cell is its entire definition, and the glossary is not authoritative | Wave-2 **B3** |
-| [bus/fabric-spec.md §4.6](../bus/fabric-spec.md) still describes `ASID_TAG` as "12 bits + 4-bit generation", with no supersede marker | Wave-2 **B1** |
-| [ooo/j32lt-spec.md](../ooo/j32lt-spec.md) carries the generation-nibble and no-VMID arguments with **no** supersede header, unlike its J32-OOO sibling | Wave-2 **B1** |
 | **The guest-`ASIDR` justification has expired.** [hypervisor/design-spec.md §5](../hypervisor/design-spec.md) permits the untrapped write because hardware "consults [`ASIDR`] **only** at `LDTLB` time". The walker consumes it on every TLB miss (`core/cpu.vhd`, `asidr => dp_mmu_regs.asidr(15 downto 0)`), as a tag *and* as an index input. The same §5 table also still prices the guest miss path as one `LDTLB` trap for an instruction retired from that path. See §1 | Wave-2 **B1** |
-| **The walker's failure direction is stated two ways.** `jcore-cpu/core/tlb_walk.vhd` says that on timeout the walker "gives up exactly as it does on a tag mismatch — it fails **OPEN**, to the software miss path, never closed into a stall"; [mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md) says a malformed `TSBBR` "hangs the walk". The RTL is the one to believe, and fail-open is the safer of the two — but §7.5's argument quotes the spec, so the contradiction is load-bearing enough to name. *(Neither reading supplies a `TSBBR` bounds check: there is none anywhere in `tlb_walk.vhd`, which is why **L7** exists.)* | Wave-2 **B1** |
 | **The L1 cache geometry is not established.** `jcore-cpu/cache/cache_pkg.vhd`'s `cache_index_bits` is defined and referenced nowhere in the RTL, and its comment names the i-cache while §7.1's bound needs the **D**-cache. §7.1 is written not to depend on the value; a doc-vs-code check should establish it | Wave-1 **B0c** |
-| **TLB geometry has no owner.** [mmu/hardware-spec.md §4.1](../mmu/hardware-spec.md) is titled "Recommended TLB organization (**suggestion, not mandate**)" and the RTL instantiates 8 ITLB / 16 DTLB entries (`jcore-cpu/core/cpu.vhd`). Nothing normative states the shipped geometry, and [fact-ownership.md](../fact-ownership.md) has no row for it. *(Checked during C0 specifically because it looked like a doc-vs-code contradiction and is not one — the spec declines to mandate.)* | Wave-2 **B1**, then **B0c** |
 | [ooo/j32ooo-spec.md §8.2a](../ooo/j32ooo-spec.md)'s completeness sentence needs scoping (§7.3) | Wave-3 **C2b** |
 | [cache/l2-spec.md §16.1](../cache/l2-spec.md)'s "closes the channel" needs scoping to occupancy (§7.6) | Wave-3 **C2e** |
 | Intra-guest AnC (§7.1) has no bar item and no owner | Wave-3, after C2b |

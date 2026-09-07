@@ -677,7 +677,7 @@ match = match && (entry.GLOBAL || entry.ASID_TAG == ASIDR[tid])
 
 The TLB itself remains shared and unpartitioned — entries are already `ASID_TAG`-tagged, so four contexts coexist correctly with no further change. Cost: 3 additional 16-bit registers and a 4:1 mux on the TLB compare input.
 
-Everything else in the MMU spec — `PTEH` VPN-only, generation-tagged `ASID_TAG`, `STALE` enforcement, the TSB miss path, `LDTLB.RN` — is unaffected.
+Everything else in the MMU spec — `PTEH` VPN-only, `ASID_TAG` ([../mmu/hardware-spec.md §2.1a](../mmu/hardware-spec.md); this line called it "generation-tagged", and the generation nibble was retired 2026-08-25), `STALE` enforcement, the TSB miss path, `LDTLB.RN` — is unaffected.
 
 > **Correction: `ASIDR` is not the only per-thread MMU register.** The
 > sentence above understates what FGMT requires. Four threads can have faults
@@ -891,7 +891,7 @@ What in-order issue *does* buy is narrower and real: the v4 speculative-store-by
 | **Cross-thread issue-bandwidth contention** | the ready-mask arbiter (§3.1) hands a stalled thread's barrel slots to the others, so one thread's stalls appear as another's speed-up | §16.3 — by policy; see §16.2a |
 | **Cross-tenant L2 contention** | one set of L2 arrays serves both cores ([cache/l2-spec.md §2](../cache/l2-spec.md)), so core-granular tenancy does not reach it | [cache/l2-spec.md §16.1](../cache/l2-spec.md) way-partitioning |
 | **Guest trains the hypervisor's indirect branches** (VMScape) | predictor shared across `SR.HPRIV` | §3.5, [j32ooo-spec §20.10](j32ooo-spec.md) |
-| **Guest trains another guest's branches** | no VMID; ASID partitioning is the only separator | `PDID` in `DOM` |
+| **Guest trains another guest's branches** | no VMID; ASID partitioning is the only separator ([../mmu/hardware-spec.md §4.2](../mmu/hardware-spec.md) — VMID was removed project-wide, and this is the argument that made it load-bearing) | `PDID` in `DOM` |
 | **Predictor update crosses a world switch** (Branch Privilege Injection) | update applied after the domain changes | §3.5 update policy, ROB-carried `DOM` |
 | **Speculative access to an emulated device or P4** | aperture comparator on a speculative PA; device reads have side effects | §7.4b |
 | **Guest folds P1 to host physical memory** | mode-dependent address path (hypervisor §4.4.1) | §6.6 rule 5 — *escape, not leak* |
