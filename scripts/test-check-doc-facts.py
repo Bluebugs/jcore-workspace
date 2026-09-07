@@ -1712,6 +1712,58 @@ def _(tmp):
     raise AssertionError("empty-files fake_repo escaped the sandbox")
 
 
+# --------------------------------------- #19 platform-tag-foreign-part
+
+
+@case("[FPGA] tag sharing a line with a foreign FPGA family fails", True,
+      expect_check="platform-tag-foreign-part")
+def _(tmp):
+    # decisions/0004 rule 3: a `[FPGA]`/`[ASIC]` tag asserts the figure
+    # describes THIS project's hardware. This is the exact mistake B0b's own
+    # first draft shipped -- four sites in simd/hardware-impl.md tagged a
+    # Spartan-6/Artix-7 row `[FPGA]` -- and design review caught it only by
+    # reading the diff by hand. This case is the regression test for that.
+    build(tmp, extra={"foo.md": "Some `[FPGA]` figure for Artix-7 class parts.\n"})
+
+
+@case("[ASIC] tag sharing a line with a foreign FPGA family also fails", True,
+      expect_check="platform-tag-foreign-part")
+def _(tmp):
+    # The rule covers both tag forms, not just `[FPGA]` -- a Spartan/Artix/
+    # Kintex/Virtex/Zynq figure is never this project's ASIC target either.
+    build(tmp, extra={"foo.md": "An `[ASIC]` estimate for Zynq UltraScale+.\n"})
+
+
+@case("marking a foreign figure in prose, with no bracket tag, passes", False)
+def _(tmp):
+    # The check must not fire on the correctly-marked form decisions/0004
+    # actually asks for: naming the platform, saying it is not the target,
+    # with no `[FPGA]`/`[ASIC]` bracket anywhere near it.
+    build(tmp, extra={"foo.md": "Marked, not retargeted: this figure was "
+                                "measured on Spartan-6, not this project's "
+                                "ECP5 target, and no ECP5 number is given.\n"})
+
+
+@case("[FPGA] tag with no foreign-family name on the line passes", False)
+def _(tmp):
+    # The correctly-tagged case: `[FPGA]` describing the actual ULX3S/ECP5
+    # target must not be flagged just because the word appears at all.
+    build(tmp, extra={"foo.md": "A `[FPGA]` figure for the ULX3S/ECP5 target "
+                                "at ~40 MHz.\n"})
+
+
+@case("a foreign family named on a DIFFERENT line from the tag passes", False)
+def _(tmp):
+    # Line-scoped by design (0004 says so): splitting the tag and the family
+    # name across lines -- as a wrapped sentence or a multi-line table cell
+    # note commonly does -- must not trip the check. This also documents the
+    # limitation: the check cannot see a tag/family pair separated like this,
+    # which is why it is described in 0004 as narrow, not as a substitute for
+    # the manual sweep.
+    build(tmp, extra={"foo.md": "This figure is `[FPGA]`.\n"
+                                "It was originally measured on Artix-7.\n"})
+
+
 # ------------------------------------------- the check registry reconciles
 #
 # Not a fixture case: this reads the checker's own source. Eighteen check-name
