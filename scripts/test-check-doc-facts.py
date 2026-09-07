@@ -1707,6 +1707,16 @@ def check_registry_is_complete():
     # names appeared in no document at all, which makes a failure message a
     # dead end -- you are told a rule was broken and given no way to read it.
     docs = os.path.join(os.path.dirname(HERE), "docs")
+    if not os.path.isdir(docs):
+        # This assertion is location-dependent: it reads docs/ relative to the
+        # suite. Run from a COPY of scripts/ it would otherwise report all 18
+        # checks as "named in no document" -- eighteen confident, wrong
+        # findings instead of one true one. A reviewer hit exactly this and had
+        # to discard a whole mutation sweep. Say what is actually wrong.
+        return ["cannot reconcile the check registry from this location: no "
+                "docs/ beside %s. This assertion reads the real tree, so run "
+                "the suite from the workspace rather than from a copy."
+                % os.path.dirname(HERE)]
     corpus = []
     for dirpath, dirnames, filenames in os.walk(docs):
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]
