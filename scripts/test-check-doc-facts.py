@@ -144,7 +144,7 @@ SIZES_VHD = """entity sizes is generic (image_bytes => 520); end entity;
 
 def fake_repo(root, name, branch, files, with_origin=False, shallow=False,
               raw_subject=None, dup_subject=None, base_branch=None,
-              origin_branches=()):
+              origin_branches=(), grafted=False):
     """A throwaway git repo standing in for a submodule.
 
     The checks read code from `origin/<branch>`, so the fixture must publish
@@ -207,6 +207,17 @@ def fake_repo(root, name, branch, files, with_origin=False, shallow=False,
         g("update-ref", "refs/remotes/origin/%s" % base_branch, "HEAD")
         g("commit", "-qm", "project commit", "--allow-empty")
         g("update-ref", "refs/remotes/origin/%s" % branch, "HEAD")
+    if grafted:
+        # `git replace --graft` truncates history exactly as effectively as a
+        # shallow clone, and `--is-shallow-repository` reports "false" for it.
+        # Untreated, a grafted repo takes the complete+absent row and FAILS a
+        # correct marker, offering `fetch --unshallow` as a remedy that would
+        # not help.
+        g("commit", "-qm", "grafted tip", "--allow-empty")
+        head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"],
+                              capture_output=True, text=True, env=env)
+        g("replace", "--graft", head.stdout.strip())
+        g("update-ref", "refs/remotes/origin/%s" % branch, head.stdout.strip())
     if dup_subject is not None:
         # Two commits sharing one subject: the citation then names no single
         # change. 19,683 subjects on linux's branch are in this state.
@@ -312,7 +323,7 @@ def write_in(tmp, path, text):
 def build(tmp, registry=REGISTRY, glossary=GLOSSARY, simd=SIMD, extra=None,
           p4_map=P4_MAP, cpu_files=None, no_cpu_repo=False, cpu_origin=False,
           cpu_shallow=False, cpu_raw_subject=None, cpu_dup=None,
-          cpu_base=None, cpu_origin_branches=()):
+          cpu_base=None, cpu_origin_branches=(), cpu_grafted=False):
     docs = os.path.join(tmp, "docs")
     os.makedirs(sandboxed(tmp, os.path.join(docs, "decisions")), exist_ok=True)
     write_in(tmp, os.path.join(docs, "fact-ownership.md"), registry)
@@ -327,7 +338,8 @@ def build(tmp, registry=REGISTRY, glossary=GLOSSARY, simd=SIMD, extra=None,
         fake_repo(tmp, "jcore-cpu", "master", files, with_origin=cpu_origin,
                   shallow=cpu_shallow, raw_subject=cpu_raw_subject,
                   dup_subject=cpu_dup, base_branch=cpu_base,
-                  origin_branches=cpu_origin_branches)
+                  origin_branches=cpu_origin_branches,
+                  grafted=cpu_grafted)
     for name, text in (extra or {}).items():
         write_in(tmp, os.path.join(docs, name), text)
     return tmp
@@ -1148,6 +1160,20 @@ def _(tmp):
                                 "([simd.md](simd.md)).\n"})
 
 
+@case("a BARE stale value in the owner does not license itself", True,
+      expect_check="no-stale-value",
+      expect_text="appears in no Registry `Constant` cell")
+def _(tmp):
+    # M1 narrowed but not eliminated: the retraction rule only removes values
+    # on retraction lines. A bare one -- no exempt phrase, so nothing skips it
+    # -- was still licensed tree-wide. The Registry's Constant cells are a
+    # second, independently maintained statement of the same value, so a stale
+    # one now has to be written into both before it licenses anything.
+    build(tmp,
+          simd=SIMD + "\nThe 272-byte SIMD image is what Tier 1 shipped.\n",
+          extra={"hyp.md": "# H\n\nsaves the 272-byte SIMD image.\n"})
+
+
 @case("a stale value on a retirement line IS excused", False)
 def _(tmp):
     build(tmp, extra={"hyp.md": "# H\n\nThis previously read 272-byte SIMD "
@@ -1156,7 +1182,14 @@ def _(tmp):
 
 @case("a value the owner also licenses (J64 form) does not fail", False)
 def _(tmp):
-    build(tmp, simd=SIMD + "\nOn J64 this is a 1036-byte SIMD image.\n",
+    # The Registry must state 1036 too. That is the cross-check added for M1
+    # working as intended: a value the owner states and the Registry does not
+    # is exactly the bare-stale-value shape, and this case is the proof it does
+    # not reject the legitimate J64 form once both agree.
+    build(tmp, registry=REGISTRY.replace(
+              "SIMD context image: **520 bytes**",
+              "SIMD context image: **520 bytes**, 1036 on J64"),
+          simd=SIMD + "\nOn J64 this is a 1036-byte SIMD image.\n",
           extra={"hyp.md": "# H\n\nships the 1036-byte SIMD image.\n"})
 
 
@@ -1336,6 +1369,38 @@ def _(tmp):
         '# S\n\n> **RESOLVED 2026-08-25 — jcore-cpu@master: "fixture".**\n'})
 
 
+@case("a GRAFTED history is treated as incomplete, not as complete", True,
+      expect_check="resolved-is-merged", flags=("--strict",),
+      expect_text="history is INCOMPLETE (shallow, or grafted")
+def _(tmp):
+    # `git replace --graft` truncates just as effectively as a shallow clone
+    # and reports `--is-shallow-repository` = false. Without this the repo
+    # takes the complete+absent row: a correct marker FAILS, with a remedy
+    # (`fetch --unshallow`) that would not help.
+    build(tmp, cpu_grafted=True, extra={"spec.md":
+        '# S\n\n> **RESOLVED 2026-08-25 \u2014 jcore-cpu@master: "fixture".**\n'})
+
+
+@case("a strict skip is annotated for the PR UI", False)
+def _(tmp):
+    # Under --strict a skip IS a failure, and it was the one failure class with
+    # no `::error::` line -- so exactly the failures meaning "nothing was
+    # verified" were invisible in the PR UI. Run directly, because the harness
+    # does not set GITHUB_ACTIONS.
+    inner = os.path.join(tmp, "inner")
+    os.makedirs(inner)
+    build(inner, no_cpu_repo=True)
+    p = subprocess.run([sys.executable, CHECKER, "--root", inner, "--strict"],
+                       capture_output=True, text=True,
+                       env=dict(os.environ, GITHUB_ACTIONS="1"))
+    if p.returncode == 0:
+        raise AssertionError("expected the strict skip to fail the run")
+    if "::error" not in p.stdout:
+        raise AssertionError(
+            "a --strict skip produced no ::error:: annotation:\n%s" % p.stdout)
+    build(tmp)
+
+
 @case("a shallow clone still PASSES a subject it can see", False,
       flags=("--strict",))
 def _(tmp):
@@ -1351,9 +1416,10 @@ def _(tmp):
 
 
 @case("undeterminable depth is treated as shallow, not as complete", False,
-      mutate=(("        result = None if (rc is None or rc != 0) else "
-               '(out.strip() == "true")',
-               "        result = None"),))
+      mutate=(("        result = out.strip() == \"true\"",
+               "        result = None\n        if True:\n"
+               "            self._shallow[repo_name] = None\n"
+               "            return None"),))
 def _(tmp):
     # The third state of `is_shallow`: not True/False but "could not find out".
     # It is nearly unreachable in practice -- if `git log` answered, `rev-parse`

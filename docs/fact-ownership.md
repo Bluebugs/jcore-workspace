@@ -179,7 +179,18 @@ Each row carries two regexes, **one capture group each, and no value**:
 
 - **Canonical** runs against the owner and *licenses* the values it finds there.
   Normally one; two where a fact has a J32 and a J64 form. More than four is a
-  failure — a pattern that loose has stopped being a guard.
+  failure — a pattern that loose has stopped being a guard. **Every licensed
+  value must also appear in some Registry `Constant` cell.** The retraction rule
+  below narrows the self-licensing hole but does not close it: a *bare* stale
+  value in the owner — a sentence that previously read "the 272-byte SIMD image
+  is what Tier 1 shipped", with no retraction phrase to exempt it — licensed 272
+  for the whole tree again. The
+  Constant cells are a second statement of the same values, maintained by a
+  different edit, so a stale value now has to be written into both before it
+  licenses anything. This is weaker than a per-fact comparison (any row's number
+  counts, not just this fact's) and is stated that way rather than implied; it is
+  strong enough for the case it exists to catch, because a retired value appears
+  in no cell at all — the row was corrected when the fact was.
 - **Scan** runs against every document under `docs/` except `decisions/` (whose
   records quote retired values deliberately). A capture the owner does not
   license is a failure **whether or not the line links the owner** — a linked
