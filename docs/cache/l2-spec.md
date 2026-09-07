@@ -918,7 +918,7 @@ Unchanged from v1 §16.3 (capacity-driven; coherence does not change capacity).
 
 ---
 
-## 20. BRAM Mapping for ECP5 `[T0/T1/T2]`
+## 20. BRAM Mapping for ECP5 `[FPGA]` `[T0/T1/T2]`
 
 ### 20.1 EBR allocation summary (T1 baseline)
 
@@ -943,9 +943,26 @@ On ULX3S 85F (208 EBRs total), the L2 uses ~33–34% of available BRAM. Combined
 
 Unchanged from v1: time-multiplex within bank with a 1-cycle pipeline stage for arbitration. Snoop traffic gets a dedicated 1-cycle slot every 4 cycles guaranteed (round-robin among the bank's port consumers) to bound snoop latency.
 
-### 20.3 Power estimate
+### 20.3 Power estimate `[ASIC]` — retracted as an FPGA claim
 
-T1 adds ~10–15 mW dynamic across the coherence FSM and snoop driver. Total L2 power on ECP5-85F at 90 MHz: ~40–65 mW. Still negligible at FPGA scale.
+> **B0b (platform-tag sweep), 2026-09-07 — retraction, not a re-tag.** This
+> subsection previously read: "T1 adds ~10–15 mW dynamic across the coherence
+> FSM and snoop driver. Total L2 power on ECP5-85F at 90 MHz: ~40–65 mW.
+> Still negligible at FPGA scale." That attributes a power figure directly to
+> the ECP5, and the project's own direction rules that out categorically, not
+> just for this figure:
+> [j4-remediation-plan.md](../j4-remediation-plan.md) guiding principle 1 says
+> energy is explicitly out of scope for Phase-1, and Track D0 says plainly "do
+> NOT try to measure energy on the ECP5" because it is not measurable there.
+> Unlike the stale-part figures marked in
+> [simd/hardware-impl.md §11](../simd/hardware-impl.md) (real numbers, wrong
+> Xilinx family), this was never a number this board could produce — see
+> [decisions/0004](../decisions/0004-platform-tag-convention.md). It is not
+> deleted (a claim is never silently dropped), only re-labelled as what it
+> actually is: an unsourced ASIC-style estimate, misattributed to the FPGA it
+> happens to sit next to in this document.
+
+T1 adds an estimated ~10–15 mW of dynamic power across the coherence FSM and snoop driver — an `[ASIC]` figure. It is **UNSOURCED**: no gate-level power run backs it, on any process, and "mW dynamic" is not something this project derives by inspection for an FPGA target — FPGA power is dominated by the fabric and the vendor place-and-route result, not by an eyeballed count of the logic mapped onto it. **What would settle it:** a gate-level power estimate under the gf180 flow (Track D0), driven by real switching activity from a trace; if FPGA board-level power budgeting is ever wanted for its own sake, that is a separate question, answered by the vendor toolchain against an actual ULX3S bitstream, not by this estimate.
 
 ---
 
@@ -1116,7 +1133,7 @@ Architecture is structured as `l2_bank` × `NUM_BANKS`, `mshr_pool`, `writeback_
 
 Wider project terms (FGMT, ASID, BMID, …) live in [glossary.md](../glossary.md).
 
-## Appendix B: Resource Cost Summary on ULX3S 85F `[T1 baseline]`
+## Appendix B: Resource Cost Summary on ULX3S 85F `[FPGA]` `[T1 baseline]`
 
 | Resource         | Count       | % of ULX3S 85F |
 | ---------------- | ----------: | -------------: |
@@ -1125,7 +1142,7 @@ Wider project terms (FGMT, ASID, BMID, …) live in [glossary.md](../glossary.md
 | DSP slices       |            0 |             0% |
 | FFs (registers)  |       ~3,000 |            ~4% |
 | Engineering effort | ~12 weeks (v1 base + coherence + line-lock) | — |
-| Static power adder | ~40–65 mW   |              — |
+| Power adder | not an FPGA quantity — see §20.3 (retracted; the estimate that stood here was `[ASIC]`, unsourced, and misattributed) | — |
 
 ## Appendix C: Cross-document anchors
 
