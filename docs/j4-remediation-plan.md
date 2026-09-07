@@ -224,6 +224,29 @@ high-leverage fix)
     re-home the colliding ones.
   - CI runs `insns2asm --emit check` and a `freespace`-based collision sweep, so
     a colliding or drifted encoding fails the build.
+> **B0b — DONE (2026-09-07), partially.** The rule is
+> [decisions/0004](decisions/0004-platform-tag-convention.md), enforced by
+> `check-doc-facts.py`'s `platform-tag-foreign-part` check (fail-closed,
+> narrow: catches a platform-tag bracket sharing a line with a
+> Spartan/Artix/Kintex/Virtex/Zynq mention, not a missing tag). Swept and
+> landed on `wave1/foundations`:
+> `simd/hardware-impl.md` (the SIMD/FPU FPGA figures named below), the two
+> `fpu/spec.md` BRAM figures, and `cache/l2-spec.md` (an L2 power estimate
+> attributed to the ECP5 — retracted outright, not merely tagged; it disagreed
+> with itself between "total" and "static" in the same document, which is
+> stronger evidence than the platform question alone).
+>
+> **Not done — recorded rather than implied.** Seventeen further specs contain
+> untagged LUT/gate/MHz/mm²/EBR figures (`ooo/j32ooo-spec.md` and
+> `ooo/j32lt-spec.md`'s energy-percentage claims, `mmu/hardware-spec.md`,
+> `jcore-ulx3s-service-plan.md`, `no-gpu-dual-ecp5-asic.md`,
+> `ulx3s-soc-component-inventory.md`, and others — the full list is in
+> [decisions/0004](decisions/0004-platform-tag-convention.md)'s "What this
+> sweep covered, and what it deliberately left"). `security/threat-model.md`
+> §9 explicitly defers its own number audit to B0b/B0c and remains
+> unaudited. **Do not read this line, or a green `check-doc-facts.py`, as
+> "the tree is platform-tagged."**
+
 - **Platform tags.** Introduce the `[FPGA]`/`[ASIC]` tag rule and sweep existing
   numbers. Retarget the SIMD/FPU FPGA figures (currently Spartan/Artix/130 nm)
   onto ECP5 LUT4/BRAM for Phase-1, and move all energy claims under `[ASIC]`.
