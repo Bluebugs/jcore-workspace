@@ -497,7 +497,7 @@ gate. General method, then the per-decision table.
 
 | Decision (current guess) | Measure how | Baseline | Gate / kill criterion |
 |---|---|---|---|
-| OoO worth it vs in-order FGMT *(prior: drop it — §E.1)* | Model both on real traces; FPGA-measure the in-order+FGMT point | 80 MHz in-order J32 wall-clock | Burden is on OoO: keep it **only if** it beats in-order+FGMT at equal area/effort AND holds Fmax ≥ 50 MHz. Else **drop OoO** (default) |
+| OoO worth it vs in-order FGMT *(prior: drop it — §E.1)* | Model both on real traces; FPGA-measure the in-order+FGMT point | measured in-order wall-clock at the J4 `Fmax` of [platform-baseline.md §3](platform-baseline.md) — this cell previously read "80 MHz in-order J32", a figure nothing produced | Burden is on OoO: keep it **only if** it beats in-order+FGMT at equal area/effort AND holds `Fmax` ≥ 50 MHz. Else **drop OoO** (default). Note that 50 MHz is above every measured variant today, J2 included |
 | "2–3× aggregate throughput" | Trace-driven model at ~200 MB/s memory | measured single-thread | Ship the *measured* multiplier; if < 1.5×, re-set expectations |
 | TLB size 8I/16D | FPGA miss-rate on real workloads at 16 KB pages | SH-4 64-entry | If miss-cost > a set % of runtime, grow TLB or lean on huge pages before shrinking further |
 | Hardware walker (serialized 3-6 reads) | Cosim/FPGA walk-latency; compare burst | software refill (22–23 cyc) | If serialized walk ≥ software path, add burst read or reconsider |

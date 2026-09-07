@@ -65,8 +65,59 @@ owned by [simd/spec.md §2.2](simd/spec.md).
 
 ## 3. Baseline clock frequency `[FPGA]`
 
-*(added by the same task; see §3 of this file's history in the commit that
-introduces it)*
+**The baseline is measured, and it is not one number — it is one number per
+core variant.** All figures below are post-place-and-route
+`nextpnr-ecp5 --85k --package CABGA381` results on the `cpu_timing_top`
+harness, produced by `jcore-cpu`'s `synth-cpu` workflow on every push to
+`master`. They are `[FPGA]` by construction; there is no `[ASIC]` counterpart
+(§1).
+
+| Core variant | Representative `Fmax` `[FPGA]` | CI regression floor |
+|---|---|---|
+| J1 | ~38–40 MHz | 33 MHz |
+| **J2** — the shipping baseline | **~42–43 MHz** | **40 MHz** (`ECP5_FMIN_MHZ`) |
+| **J4** — J2 + MMU + priv-arch, i.e. what this project is building | **~33 MHz** | 30 MHz |
+| J2 + caches, J4 + caches | lower, CDC-limited | 18 MHz |
+
+**Read the J4 row, not the J2 row, for anything this project is designing.**
+The MMU costs about a quarter of the clock: `jcore-cpu`'s workflow records the
+J4 representative `Fmax` moving *"37.66 -> 33.38 MHz because the MMU is now
+actually in the netlist"* when the J4 leg stopped building with the J2 decoder
+and `yosys` stopped pruning the TLB. That is a scope change, not erosion — but
+it is the number a J4 throughput estimate has to use.
+
+**Why the harness and not the bare core.** `jcore-cpu`'s `synth/README.md`
+explains it: the bare `cpu` exposes ~348 ports as pads, which on the sparse 85F
+scatters the core and inflates routing, so its reported `Fmax` is a measurement
+artifact — demonstrably so, since it is *flat* at ~42 MHz across 6%–23% device
+utilisation. `cpu_timing_top` registers the boundary down to 4 IO and gives the
+true register→core→register path. The bare-core number is reported by CI and
+deliberately not gated.
+
+**The goal, kept and labelled as one** per
+[decisions/0005](decisions/0005-unmeasured-figures-are-removed.md) rule 4:
+`ECP5_TARGET_MHZ` is **50 MHz**, and it is not met. `synth/README.md` says what
+it would take — the path is *"~6 ns logic + ~18 ns intrinsic routing through
+the regfile-read/MAC-accumulate datapath"*, so reaching 50 MHz needs
+microarchitectural work (pipelining), not tuning. The `[ASIC]` ambition of
+~400 MHz+ is a different target on different silicon and is not derived from
+any of this.
+
+**80 MHz was never measured and is gone.** The figure appeared in
+[jcore-ulx3s-service-plan.md](jcore-ulx3s-service-plan.md) as an in-order J32
+baseline and as the clock under a throughput table. No J32 RTL exists to
+synthesize, so nothing produced it; per
+[decisions/0005](decisions/0005-unmeasured-figures-are-removed.md) it is
+removed rather than annotated, and the estimates derived from it went with it.
+
+`platform.fmax.floor` and `platform.fmax.j4.floor` in
+[fact-ownership.md](fact-ownership.md) §Code bindings tie the two floors in
+this table to `jcore-cpu@master`'s `.github/workflows/synth-cpu.yml`, so a
+re-baseline in CI that is not reflected here is a red run rather than a silent
+divergence. The *representative* figures are ranges and are not bound; the
+floors are the exact integers, and they move whenever the representative
+figures do — that is what re-baselining means, and it is why binding the floor
+is not a weaker check than binding a range would have been.
 
 ---
 
