@@ -53,11 +53,14 @@ The value is bound to `linux@jcore`'s `arch/sh/configs/jcore_defconfig` by
 `platform.endianness` in [fact-ownership.md](fact-ownership.md) §Code bindings,
 so this section and the kernel configuration cannot drift apart silently.
 
-**What this does *not* say.** It says nothing about the byte order of a
-**guest**. Per [j4-remediation-plan.md §B2](j4-remediation-plan.md) an
-SH-4/Dreamcast image runs as a KVM guest under the hypervisor extension, and
-the byte order of that image is a property of the image and of the device model
-that serves it. Nor does it say anything about SIMD *lane* order, which is
+**What this does *not* say, and one thing it does.** It fixes the byte order of
+a **KVM guest** — a KVM guest executes on this fetch and load/store path, and
+there is no byte-order control for it to differ — so SH-4 guests on J4 are
+big-endian SH-4 guests and little-endian images run under full software
+emulation instead. That is
+[sh4-guest-model.md §3.1](sh4-guest-model.md), Decision B2-1; this section is
+the input to it, not the other way round. It says nothing about the byte order
+of a *software-emulated* guest, which is the emulator's own property. Nor does it say anything about SIMD *lane* order, which is
 little-endian within a vector register regardless of memory byte order and is
 owned by [simd/spec.md §2.2](simd/spec.md).
 

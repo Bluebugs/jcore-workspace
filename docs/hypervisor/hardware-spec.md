@@ -137,6 +137,18 @@ HEDR has 32 bits, each corresponding to an exception cause. The cause-to-bit map
 
 **Default after reset:** all bits 0 (all exceptions go to hyperprivileged). The hypervisor explicitly sets bits to delegate to the guest. A non-virtualized kernel never sets HPRIV, so HEDR is never consulted — backward compatibility is preserved.
 
+**Delegation is safe only for a guest that shares J-Core's cause vocabulary.** Delegating a cause
+sends the guest straight to its own `VBR` carrying J-Core's `EXPEVT` value. A J-Core-aware guest
+reads that correctly. A stock SH-4 guest does not, wherever the two assignments differ, and it
+cannot tell — the forbidden outcome of
+[../sh4-guest-model.md §1](../sh4-guest-model.md), arriving through the fast path. For a stock
+SH-4 guest the hypervisor keeps the affected causes undelegated and translates them on entry:
+[../sh4-guest-model.md §3.4](../sh4-guest-model.md), Decision B2-2. Which causes those are cannot
+be listed here yet, because this document's §2.3.1 table and
+[../mmu/hardware-spec.md §5](../mmu/hardware-spec.md) do not currently agree on J-Core's own
+assignment — see the *J-Core `EXPEVT` cause table* row in
+[../fact-ownership.md](../fact-ownership.md)'s `Unresolved` list.
+
 **Always-to-hypervisor causes** (§4.2): bits 0 (HCALL), 1 (guest LDTLB trap), 2 (hyperprivileged-register access from non-HS mode), and 25 (guest emulated-MMIO access, §4.5) are hard-wired to read-as-zero; software writes to these bits have no effect. These traps cannot be delegated to a guest because they exist solely to communicate with the hypervisor — bit 25 specifically exists only to reach the hypervisor's device model, and delegating it to a guest would be meaningless: there is no guest-side handler for a physical aperture the guest does not know exists.
 
 #### 2.3.1 EXPEVT-to-HEDR-bit mapping (normative)
@@ -779,6 +791,20 @@ binaries continue to work.
 **except** for accesses in the range `0xE0000000`-`0xE3FFFFFF`, which is the store-queue region
 per [../sq/spec.md §2](../sq/spec.md). Those do not trap; they are handled CPU-locally as ordinary
 store-queue operations.
+
+> **The carve-out is conditional on the store queue existing, and today it does not.**
+> `jcore-cpu` `origin/master` has no store queue and no decode of that range
+> ([../sq/spec.md §1](../sq/spec.md)). A carve-out over hardware that does not exist is not an
+> optimisation, it is a hole in a rule the rest of this section calls fail-closed: the guest's
+> access neither traps nor is absorbed. **This carve-out must not be enabled on any
+> implementation whose store queues are absent.** Recorded by
+> [../sh4-guest-model.md §3.3](../sh4-guest-model.md).
+
+**Trapping is what makes the host and guest P4 maps independent.** Because the guest's P4 access
+never reaches the host decoder, the emulated SH-4 register map the VMM presents is free to use
+stock SH-4 offsets where J-Core's own map does not — which it does for `CCR`, `QACR0` and
+`QACR1`. See [../sh4-guest-model.md §3.2](../sh4-guest-model.md) and
+[../soc/p4-mmio-map.md §5](../soc/p4-mmio-map.md) rule 8.
 
 **The carve-out is exactly the SQ-decoded range, and no wider.** It stops at `0xE3FFFFFF` because
 that is where [../sq/spec.md §2](../sq/spec.md)'s decode stops: `0xE4000000`-`0xEFFFFFFF` is

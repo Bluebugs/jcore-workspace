@@ -387,6 +387,34 @@ A worklist, each item = pick the true value, fix every other doc, add a CI check
 
 ### B2. Write down the SH-4 / Dreamcast compatibility model — as a *guest*, not bare metal
 
+> **Delivered: [sh4-guest-model.md](sh4-guest-model.md).** Five numbered
+> decisions, a three-way classification of every surface, and a findings map.
+> What changed relative to the framing below, since a plan item reversing under
+> evidence is a legitimate outcome:
+>
+> - **Dreamcast is not a KVM guest.** A KVM guest executes on the host's fetch
+>   and load/store path, J-Core has no byte-order control, and Dreamcast
+>   software is little-endian. SH-4 guests on J4 are therefore *big-endian* SH-4
+>   guests; little-endian images run under full software emulation, where none
+>   of the guest-trap architecture applies (Decision B2-1). The KVM path's real
+>   target is a big-endian SH-4 or J-Core-aware guest.
+> - **Guest FP is trapped, not native** (Decision B2-4). There is no FPU in
+>   `jcore-cpu` at all, and J4 already traps the whole `1111` plane as illegal.
+>   This closes one of the two conditions
+>   [decisions/0006](decisions/0006-endianness-is-big-endian.md) named for
+>   reopening little-endian, in the negative.
+> - **The decode-fidelity violation that matters is not the one this section
+>   names.** The SIMD collisions are on paper. `CLDS`/`CSTS` versus SH-4's
+>   `FLDS`/`FSTS` is in shipping RTL, is already recorded in the canonical
+>   encoding database's `collides` annotation, and is invisible to the collision
+>   sweep because its variant rule cannot express "an SH-4 guest on a J4 host"
+>   (Decision B2-5). That is new work for **B4**.
+> - **`soc/p4-mmio-map.md` rule 8 was factually wrong.** Its "a fourth case is
+>   deliberately absent" claim was false when written: three J-Core registers
+>   sit on stock SH-4 offsets. The rule now names them and says why the guest
+>   model licenses them.
+
+
 Per project direction, SH-4/Dreamcast is **not** a bare-metal target on any
 J-Core core. It runs as a **KVM guest under the J4 hypervisor via minimalistic
 emulation**. J4 = J2 + everything specified in this project (MMU, hypervisor,
