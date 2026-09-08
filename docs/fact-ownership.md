@@ -94,6 +94,8 @@ are the substitute for a check that cannot be written cleanly — see
 | `sh4guest.fplane` | Bare-metal J4 traps the `1111` opcode plane; RTL guard word `0xF000` | [sh4-guest-model.md §2](sh4-guest-model.md) | `\b0xF000\b` |
 | `sh4guest.clds` | SH-4 `flds` and J-Core `clds` are **one encoding** (canonical DB `collides`) | [sh4-guest-model.md §5.1](sh4-guest-model.md) | `flds FRm,FPUL` |
 | `sh4guest.csts` | SH-4 `fsts` and J-Core `csts` are **one encoding** (canonical DB `collides`) | [sh4-guest-model.md §5.1](sh4-guest-model.md) | `fsts FPUL,FRn` |
+| `sh4guest.ldsfpul` | SH-4 `lds Rm,FPUL` and J-Core `lds Rm,CPI_COM` are **one encoding** | [sh4-guest-model.md §5.1](sh4-guest-model.md) | `lds Rm,FPUL` |
+| `sh4guest.stsfpul` | SH-4 `sts FPUL,Rn` and J-Core `sts CPI_COM,Rn` are **one encoding** | [sh4-guest-model.md §5.1](sh4-guest-model.md) | `sts FPUL,Rn` |
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
@@ -177,6 +179,8 @@ formatting.
 | `sh4guest.fplane` | `the guard word is 0x([0-9A-F]+)` | `jcore-cpu:sim/tests/j4_illegal_trap.S` | `\.word\s+0x(F000)` | `eq-hex` |
 | `sh4guest.clds` | `annotation on flds FRm,FPUL names ([a-z]+)` | `jcore-cpu:docs/insns.json` | `"collides": \["(clds)\\tCPI_Rm,CPI_COM"\]` | `eq-text` |
 | `sh4guest.csts` | `annotation on fsts FPUL,FRn names ([a-z]+)` | `jcore-cpu:docs/insns.json` | `"collides": \["(csts)\\tCPI_COM,CPI_Rn"\]` | `eq-text` |
+| `sh4guest.ldsfpul` | `annotation on lds Rm,FPUL names ([a-z]+)` | `jcore-cpu:docs/insns.json` | `"collides": \["(lds)\\tRm,FPUL"\]` | `eq-text` |
+| `sh4guest.stsfpul` | `annotation on sts FPUL,Rn names ([a-z]+)` | `jcore-cpu:docs/insns.json` | `"collides": \["(sts)\\tFPUL,Rn"\]` | `eq-text` |
 
 Notes on what is deliberately **not** here, so the gaps are visible rather than
 inferred from silence:
@@ -227,6 +231,31 @@ inferred from silence:
   no true positives is worse than none. The comment defect was fixed by hand
   and the sweep was not shipped. The structured half — the map table versus the
   decode — is checked, and that is where the authority actually lives.
+- **The `sh4guest.*` bindings are asymmetric, and the weak side is the code
+  side.** All eight were perturbed on the **document** side and every one failed
+  with a value disagreement (`says X, but … says Y`), not with a pattern that
+  stopped matching — the doc captures are character classes, not literals. The
+  **code** captures are a different story and three shapes of them are literals
+  by necessity:
+  - `sh4guest.fplane`'s code pattern is `\.word\s+0x(F000)`. Widening it to
+    `0x([0-9A-F]+)` was tried and is not available: `j4_illegal_trap.S` contains
+    nine distinct `.word 0x…` values, so a widened capture trips
+    `_sole_capture`'s "captures N different values" arm and fails for the wrong
+    reason. The literal is the only workable form, and the cost is that a *code*
+    change fails as "pattern matches nothing" rather than as a disagreement.
+  - The four `collides` bindings assert only that a given mnemonic appears
+    inside a given annotation. The database has no field asserting that two
+    encodings coincide, so no single capture can check the thing the fact is
+    actually about. **They will go red when B4 re-homes those encodings** — as a
+    code-side pattern non-match — which is the intended reminder, not a
+    regression. [sh4-guest-model.md §5.1](sh4-guest-model.md) says so where a
+    reader hits it.
+
+  Stated because a green run should not be read as more than it is. A previous
+  version of this work claimed all these bindings fail on value disagreement
+  without distinguishing the two sides; the doc side does, the code side often
+  cannot.
+
 - **The `sh4guest.*` registry patterns are deliberately tight**, keying on the
   Linux symbol name (`SH_CCR`, `SQ_QACR0`, `SQ_QACR1`) rather than on the hex
   value. The values themselves are not usable as patterns here: `0xFF000038` is

@@ -344,10 +344,22 @@ Rules for adding new P4 allocations:
      free"* (`datapath.vhm`).
    - **squat** — a J-Core register at an offset stock SH-4 uses for something
      else. This is the case an SH-4-aware kernel cannot detect, and it is
-     licensed only by the guest model (below). Three today, all decoded in
-     RTL, each named with the SH-4 register it sits on:
-     `TSBPTR 0x01C` on SH-4's `CCR`, `ASIDR 0x038` on SH-4's `QACR0`, and
-     J-Core's own `QACR0 0x03C` on SH-4's `QACR1`.
+     licensed only by the guest model (below). Three today, each named with the
+     SH-4 register it sits on:
+     `TSBPTR 0x01C` on SH-4's `CCR` and `ASIDR 0x038` on SH-4's `QACR0`, both
+     **decoded in RTL**; and J-Core's own `QACR0 0x03C` on SH-4's `QACR1`,
+     which is an **allocation only — the RTL decodes nothing at `0x3C`**.
+     Case-insensitively, `qacr` occurs in `jcore-cpu` `origin/master` exactly
+     once outside documentation, in a `datapath.vhm` comment; the decode arms
+     in that file carry `x"38"` and `x"1C"` and no `x"3C"`.
+
+     *(This bullet said "Three today, **all decoded in RTL**" when it was first
+     written on 2026-09-07. That was false, and falsifiable from two rows of
+     §3.2 in this same file — `0x03C` is marked "allocated, NOT implemented" —
+     which is what makes it worth recording rather than quietly fixing: the
+     sentence that replaced a false rule-8 claim was itself false, in the same
+     way, one paragraph later. A squat is a **map-level** property; whether the
+     RTL decodes it is a second question and the two were run together.)*
 
    **The `squat` case was previously written as "a fourth case is deliberately
    absent … no allocation here does that", and that was false when written.**
