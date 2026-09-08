@@ -350,15 +350,26 @@ index bits, however large the TSB is. On the numbers available that is 8 —
 sets) — so the claim is exact for `TSB_SIZE_LOG ≤ 8` and was overstated by up to
 6 bits at the top of the 6–14 range §2.6 permits.
 
-**One caveat on that 8, found while checking it, and it cuts against relying on
-the number rather than the shape:** `cache_index_bits` is *defined and referenced
-nowhere* — `git grep` finds it only at its own declaration, and its comment block
-describes the i-cache. It is a statement of intent, not a live parameter, so it is
-evidence for the geometry and not proof of it. **The argument does not need the
-number.** It needs the bound to exist, which it does structurally, and it needs
-enough bits per observation to make a GF(2)-linear system at attacker-chosen VAs
-solvable — which 8 comfortably is. Establishing the real L1-D geometry is B0c's
-job (§11). `f` is linear over GF(2) in `HASH_MODE = 1`
+**A caveat on that 8 is withdrawn — 2026-09-08, Wave-2 B1.** This paragraph
+previously read that `cache_index_bits` is *"defined and referenced nowhere —
+`git grep` finds it only at its own declaration"*, and downgraded it to "a
+statement of intent, not a live parameter". That is false on
+`jcore-cpu@master`: it drives `cache_tag_width`, `cache_index_msb`,
+`cache_lines`, `cache_mem_words` and the address-field widths of
+`dcache_ram_o_t` / `icache_ram_o_t`. **The likely cause of the original finding
+is worth recording, because it will recur:** the declaration is lower-case
+`cache_index_bits` and every use is upper-case `CACHE_INDEX_BITS`, and VHDL is
+case-insensitive while `git grep` is not. A case-sensitive grep of a
+case-insensitive language reports a live constant as dead.
+
+So the 8 is a live parameter and the geometry *is* established: 8 index bits
+over 32-byte lines put the top index bit at 12, which is
+[mmu/hardware-spec.md §4.1a](../mmu/hardware-spec.md)'s subject and is now
+code-bound as `cache.l1.index`. **The argument still does not need the number** —
+it needs the bound to exist, which it does structurally, and enough bits per
+observation to make a GF(2)-linear system at attacker-chosen VAs solvable, which
+8 comfortably is. What changes is that the bound is now proven rather than
+assumed, and the §11 row asking B0c to establish it is closed. `f` is linear over GF(2) in `HASH_MODE = 1`
 (`VPN ⊕ (VPN >> HASH_SHIFT)`), so repeated observations at attacker-chosen VAs
 give a solvable system rather than independent guesses.
 
@@ -1116,7 +1127,7 @@ close one is scope expansion, not compliance.
 Recorded rather than fixed, with an owner, because fixing them here would exceed
 C0's remit and hide them in a large commit.
 
-**Five rows were closed by Wave-2 B1** (2026-09-07) and deleted from this table
+**Six rows were closed by Wave-2 B1** (2026-09-07/08) and deleted from this table
 rather than struck through, since the burn-down is the point: the `ASID_TAG`
 generation-nibble restatement in `bus/fabric-spec.md` and the matching one in
 `ooo/j32lt-spec.md`; `TSB_SIZE_LOG`'s two ranges (see §7.1, corrected in place);
@@ -1124,15 +1135,18 @@ the walker's failure direction, where **fail-open is the true reading** and
 [mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md) now says so — §7.5's
 argument was quoting the wrong half; and TLB geometry, which now has an owner
 ([mmu/hardware-spec.md §4.1](../mmu/hardware-spec.md), 8 ITLB / 16 DTLB) and a
-code binding to the generic maps in `core/cpu.vhd`. **The `TSBBR` bounds check
-is still absent** from `tlb_walk.vhd` — fail-open does not supply one — so
+code binding to the generic maps in `core/cpu.vhd`; and **L1 cache geometry**,
+whose row rested on a premise that turns out to be false — `cache_index_bits` is
+referenced throughout `cache_pkg.vhd`, and the row's "referenced nowhere" came
+from case-sensitively grepping a case-insensitive language (see §7.1). It is now
+bound as `cache.l1.index`. **The `TSBBR` bounds check is still absent** from `tlb_walk.vhd` — fail-open does not supply one — so
 **L7** stands unchanged.
 
 | Defect | Owner |
 |---|---|
 | `jcore-cpu/docs/architecture/tlb.md §7` still claims the core is "strictly non-speculative" and that "the **software** TLB walk … removes … AnC". Both false; cross-repo, so not fixable in this commit | Wave-3 **C2b** (it touches `jcore-cpu` anyway) |
 | **J32-FM — the product — has no owning specification.** One glossary table cell is its entire definition, and the glossary is not authoritative | Wave-2 **B3** |
-| **The guest-`ASIDR` justification has expired** — *the contradiction is corrected, the security question is not.* [hypervisor/design-spec.md §5](../hypervisor/design-spec.md) now records that `ASIDR` is the TLB **match** input on every translation (`core/cpu.vhd`, `asid => dp_mmu_regs.asidr(...)` into both TLB instances) and a TSB index input on every miss, so the "write-only staging state consulted only at `LDTLB` time" argument for leaving a guest write untrapped is void; the stale one-`LDTLB`-trap costing beside it is likewise marked. **Whether the write must now be trapped is a hypervisor-design decision B1 did not make.** | Wave-2 **B1** (doc) → **Wave-3** (decide) || **The L1 cache geometry is not established.** `jcore-cpu/cache/cache_pkg.vhd`'s `cache_index_bits` is defined and referenced nowhere in the RTL, and its comment names the i-cache while §7.1's bound needs the **D**-cache. §7.1 is written not to depend on the value; a doc-vs-code check should establish it | Wave-1 **B0c** |
+| **The guest-`ASIDR` justification has expired** — *the contradiction is corrected, the security question is not.* [hypervisor/design-spec.md §5](../hypervisor/design-spec.md) now records that `ASIDR` is the TLB **match** input on every translation (`core/cpu.vhd`, `asid => dp_mmu_regs.asidr(...)` into both TLB instances) and a TSB index input on every miss, so the "write-only staging state consulted only at `LDTLB` time" argument for leaving a guest write untrapped is void; the stale one-`LDTLB`-trap costing beside it is likewise marked. **Whether the write must now be trapped is a hypervisor-design decision B1 did not make.** | Wave-2 **B1** (doc) → **Wave-3** (decide) |
 | [ooo/j32ooo-spec.md §8.2a](../ooo/j32ooo-spec.md)'s completeness sentence needs scoping (§7.3) | Wave-3 **C2b** |
 | [cache/l2-spec.md §16.1](../cache/l2-spec.md)'s "closes the channel" needs scoping to occupancy (§7.6) | Wave-3 **C2e** |
 | Intra-guest AnC (§7.1) has no bar item and no owner | Wave-3, after C2b |

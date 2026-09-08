@@ -79,18 +79,26 @@ are the substitute for a check that cannot be written cleanly — see
 | `mmu.l1.pipt` | L1 I/D are **PIPT**; relocation covers `PA[27:12]`, so no index bit is virtual | [mmu/hardware-spec.md §4.1a](mmu/hardware-spec.md) | `PIPT` |
 | `cache.l1d.write` | L1-D writes: **write-through** at T0, **write-back** under MSI at T1/T2 | [cache/l2-spec.md §17.1](cache/l2-spec.md) | `write-through at .?\[T0\]` |
 | `mmu.p4.segment` | CPU P4 segment test: `VA[31:24] == 0xFF` — the whole 16 MB | [soc/p4-mmio-map.md §3.2a](soc/p4-mmio-map.md) | `va\(31 downto 24\) = x"FF"` |
-| `mmu.p4.window` | CPU P4 register decode compares **8** address bits, `ma_ad[7:0]` | [soc/p4-mmio-map.md §3.2a](soc/p4-mmio-map.md) | `ma_ad\(7 downto 0\)` |
+| `mmu.p4.page` | CPU P4 page selector: `case ma_ad[23:12]` — 4 KB pages, PMU at `x"001"` | [soc/p4-mmio-map.md §3.2a](soc/p4-mmio-map.md) | `case ma_ad\(23 downto 12\)` |
+| `mmu.p4.window` | The MMU page arm compares **8** address bits, `ma_ad[7:0]` | [soc/p4-mmio-map.md §3.2a](soc/p4-mmio-map.md) | `ma_ad\(7 downto 0\)` |
 | `mmu.tsbbr.p1` | `TSBBR` holds a **P1 kernel virtual** address; the walker folds `100` → `000` | [mmu/hardware-spec.md §2.6](mmu/hardware-spec.md) | `P1 kernel virtual address` |
 | `mmu.tlb.itlb` | ITLB: **8** fully-associative entries | [mmu/hardware-spec.md §4.1](mmu/hardware-spec.md) | `ITLB entries\s*[\|]\s*\*\*8\*\*` |
 | `mmu.tlb.dtlb` | DTLB: **16** fully-associative entries | [mmu/hardware-spec.md §4.1](mmu/hardware-spec.md) | `DTLB entries\s*[\|]\s*\*\*16\*\*` |
+| `cache.l2.ebr` | L2 EBR count, T1 baseline: **69** (60 data + 8 tag + 1 MSHR) | [cache/l2-spec.md §20.1](cache/l2-spec.md) | `L2 EBR = 69` |
+| `ooo.gates.core` | OoO core + caches: **256,850** gate equivalents — an estimate, not a measurement | [ooo/j32ooo-spec.md §15](ooo/j32ooo-spec.md) | `256,850` |
+| `cache.l1.index` | L1 index: **8** bits over 32-byte lines, so the top index bit is 12 | [mmu/hardware-spec.md §4.1a](mmu/hardware-spec.md) | `cache_index_bits = 8` |
+| `platform.j4` | **J4** is the `jcore-cpu` build variant with `PRIV_ARCH = true`, not a product point | [glossary.md §7](glossary.md) | `PRIV_ARCH = true` |
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
 B1 added `ooo.uops.rte`, `platform.endianness`, `platform.fmax.floor`,
-`platform.fmax.j4.floor`, `mmu.l1.pipt`, `cache.l1d.write`, `mmu.p4.segment`,
-`mmu.p4.window`, `mmu.tsbbr.p1`, `mmu.tlb.itlb` and `mmu.tlb.dtlb`. All but two
-carry a code binding: `ooo.uops.rte` has a value guard instead (the uop count is
-not a constant in any tree), and `cache.l1d.write` has neither — see
+`platform.fmax.j4.floor`, `platform.j4`, `mmu.l1.pipt`, `cache.l1d.write`,
+`cache.l1.index`, `cache.l2.ebr`, `ooo.gates.core`, `mmu.p4.segment`,
+`mmu.p4.page`, `mmu.p4.window`, `mmu.tsbbr.p1`, `mmu.tlb.itlb` and
+`mmu.tlb.dtlb`. All but three carry a code binding. `ooo.uops.rte`,
+`cache.l2.ebr` and `ooo.gates.core` have **value guards** instead — each is a
+figure that exists only in documents, so the thing to police is that no second
+document states a different one. `cache.l1d.write` has neither; see
 [decisions/0007 §Enforcement](decisions/0007-l1d-write-policy-under-msi.md) for
 why, which is that the T0 property is the *absence* of a dirty bit and T1/T2 has
 no RTL at all.
@@ -148,10 +156,15 @@ formatting.
 | `mmu.l1.pipt` | `bound of the relocated\s+field — \*\*bit (\d+)\*\*` | `jcore-cpu:core/cpu.vhd` | `db_o\.a\(27 downto (\d+)\) <= \(ppn_lo` | `eq` |
 | `mmu.l1.pipt` | `bound of the relocated\s+field — \*\*bit (\d+)\*\*` | `jcore-cpu:core/cpu.vhd` | `inst_o\.a\(27 downto (\d+)\) <= \(ppn_lo` | `eq` |
 | `mmu.p4.segment` | `` `va\(31 downto 24\) = x"([0-9A-F]+)"` `` | `jcore-cpu:core/datapath_pkg.vhd` | `va\(31 downto 24\) = x"([0-9A-F]+)"` | `eq-hex` |
-| `mmu.p4.window` | `only .ma_ad\((\d+) downto 0\)` | `jcore-cpu:core/datapath.vhm` | `ma_ad\((\d+) downto 0\) = x"00"` | `eq` |
+| `mmu.p4.page` | `case ma_ad\(23 downto (\d+)\)` | `jcore-cpu:core/datapath.vhm` | `case ma_ad\(23 downto (\d+)\) is` | `eq` |
+| `mmu.p4.window` | `compares only `ma_ad\((\d+) downto 0\)`` | `jcore-cpu:core/datapath.vhm` | `ma_ad\((\d+) downto 0\) = x"00"` | `eq` |
 | `mmu.tsbbr.p1` | `top three address bits `\*\*([01]+)\*\*` to` | `jcore-cpu:core/cpu.vhd` | `walk_bus_a\(31 downto 29\) = "([01]+)"` | `eq-text` |
 | `mmu.tlb.itlb` | `ITLB entries\s*[\|]\s*\*\*(\d+)\*\*` | `jcore-cpu:core/cpu.vhd` | `entries   => (\d+),\n        side_is_i => true` | `eq` |
 | `mmu.tlb.dtlb` | `DTLB entries\s*[\|]\s*\*\*(\d+)\*\*` | `jcore-cpu:core/cpu.vhd` | `entries   => (\d+),\n        side_is_i => false` | `eq` |
+| `cache.l1.index` | `` `cache_index_bits = (\d+)` `` | `jcore-cpu:cache/cache_pkg.vhd` | `cache_index_bits : natural := (\d+);` | `eq` |
+| `platform.j4` | `` `(PRIV_ARCH) = true` `` | `jcore-cpu:variants.toml` | `\[j4\]\ngenerics    = \{ (PRIV_ARCH) = "true" \}` | `eq-text` |
+| `platform.fmax.floor` | `[\|] J1 [\|] ~38–40 MHz [\|] (\d+) MHz [\|]` | `jcore-cpu:.github/workflows/synth-cpu.yml` | `j1\)  floor=(\d+)` | `eq` |
+| `platform.fmax.floor` | `CDC-limited [\|] (\d+) MHz [\|]` | `jcore-cpu:.github/workflows/synth-cpu.yml` | `j2c\) floor=(\d+)` | `eq` |
 
 Notes on what is deliberately **not** here, so the gaps are visible rather than
 inferred from silence:
@@ -278,6 +291,8 @@ Two escapes, and they are different things:
 | `fpu.context.t2` | `(\d+)[-\s]byte\s+FPU\s+(?:[\w/-]+\s+)*image` | `(\d+)[-\s]byte\s+FPU\s+(?:[\w/-]+\s+)*image` |
 | `simd.context.j32` | `(\d+)[-\s]byte\s+SIMD\s+(?:[\w/-]+\s+)*image` | `(\d+)[-\s]byte\s+(?:SIMD\|context-switch)\s+(?:[\w/-]+\s+)*image` |
 | `ooo.uops.rte` | `(?i)\brte\b.?\s*[\|→]\s*(?:\*\*)?(\d+)\b` | `(?i)\brte\b.?\s*[\|→]\s*(?:\*\*)?(\d+)\b` |
+| `cache.l2.ebr` | `L2 EBR = (\d+)` | `(?:the )?(?:128 KB )?L2 (?:unified [^\n]{0,20})?at\s*~?(\d+) EBRs` |
+| `ooo.gates.core` | `core \+ caches\*\*\s*[\|]\s*\*\*([\d,]+)\*\*` | `(?:OoO budget\|core \+ caches)[^\n]{0,60}?([\d,]+)k? gates` |
 
 ## Image layouts
 
@@ -304,7 +319,7 @@ new file.
 | Fact | State | Owned by (task) |
 |---|---|---|
 | **P4 SH-4 compatibility of QACR0/QACR1/CCR** | The *placement* rule is settled: [soc/p4-mmio-map.md §5](soc/p4-mmio-map.md) rule 8 classifies every MMU-block offset as alias / J-Core addition / deliberate divergence, and every offset the RTL decodes now matches the map. What is not settled is **behaviour**: QACR0/QACR1 are allocated and undecoded, and `CCR` is allocated nowhere. Both need the emulated-SH-4 surface. | Wave-2 **B2** (SH-4-as-guest model) |
-| **CPU P4 decode width vs the P4 block allocation** | Contradictory, and this one is hardware. [soc/p4-mmio-map.md §3.2a](soc/p4-mmio-map.md): `datapath.vhm` gates on `VA[31:24] == 0xFF` and compares only `ma_ad[7:0]`, so on a `PRIV_ARCH` build it consumes all 16 MB of P4 and no block outside its 18 registers is reachable — while §3 of the same map allocates seven such blocks. Both widths are code-bound so neither can move quietly. | **RTL / SoC integration**, not a doc task; found by Wave-2 **B1** |
+| **CPU P4 decode width vs the P4 block allocation** | Contradictory, and this one is hardware. [soc/p4-mmio-map.md §3.2a](soc/p4-mmio-map.md): `datapath.vhm` gates on `VA[31:24] == 0xFF` and compares only `ma_ad[7:0]`, so on a `PRIV_ARCH` build no P4 access reaches the fabric: a block is implemented as an arm of the `ma_ad[23:12]` page selector or not at all. One of §3's seven blocks (the PMU) has such an arm; six do not and read as zero. The MMU page's byte-wide compare additionally aliases every 256 bytes, which the RTL preserves deliberately. All three widths are code-bound so none can move quietly. | **RTL / SoC integration**, not a doc task; found by Wave-2 **B1** |
 | **Instruction encodings** | Not a registry fact by design, and **no longer unresolved as to which file**: [decisions/0003](decisions/0003-canonical-encoding-database.md) makes `jcore-cpu/docs/insns.json` canonical and deletes this repo's copy. Checked by `insns2asm --emit check` and `cpugen insns -check`; prose specs cite it and must not restate bit patterns. | Wave-2 **B4** (the sweep itself) |
 
 ## Waivers

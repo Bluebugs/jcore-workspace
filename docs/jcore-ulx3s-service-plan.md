@@ -333,17 +333,21 @@ The corrected comparison: one J32-LT core serves **one** tenant with 4 vCPUs; tw
 
 ### BRAM budget — corrected
 
-**"104 EBR vs 141 EBR" was never a disagreement.** The two count different
-machines: [ooo/j32ooo-spec.md §11.5](ooo/j32ooo-spec.md)'s ~104 is **one**
-core's L1-I + L1-D + the L2; [cache/l2-spec.md §20.1](cache/l2-spec.md)'s 141
-is **two** cores' L1s + the L2. The difference is one extra L1 pair, 36 EBRs,
-and 104 + 36 = 140. Both are capacity arithmetic — array size ÷ the 18 Kb EBR —
-and `l2-spec.md` §20.1 labels itself as such in so many words. Neither is a
-synthesis result and neither needed to be: an EBR count for an array of known
-size is structural, per
-[decisions/0005](decisions/0005-unmeasured-figures-are-removed.md) rule 5. What
-was wrong was two documents stating scope-different totals without either
-saying which machine it counted.
+**"104 EBR vs 141 EBR" was mostly a scope mismatch, and partly a real
+disagreement.** The two count different machines:
+[ooo/j32ooo-spec.md §11.5](ooo/j32ooo-spec.md) is **one** core's L1-I + L1-D +
+the L2; [cache/l2-spec.md §20.1](cache/l2-spec.md)'s 141 is **two** cores' L1s +
+the same L2. The difference should therefore be exactly one L1 pair, 36 EBRs —
+and against the old figures it was **37**, because the two documents booked the
+*same* L2 at 68 and at 69. `l2-spec.md` §20.1's own allocation table sums to 69
+(60 data + 8 tag + 1 MSHR) and now owns the figure as `cache.l2.ebr`; the one-core
+total is **105**, and 105 + 36 = 141 exactly. *(This paragraph previously wrote
+"104 + 36 = 140" and then quoted 141 nine lines later without reconciling the
+two.)* Both are capacity arithmetic — array size ÷ the 18 Kb EBR — and
+`l2-spec.md` §20.1 labels itself as such in so many words. Neither is a synthesis
+result and neither needed to be: an EBR count for an array of known size is
+structural, per
+[decisions/0005](decisions/0005-unmeasured-figures-are-removed.md) rule 5.
 
 Per [cache/l2-spec.md §20.1](cache/l2-spec.md), for the **dual-core**
 configuration: two cores × (32 KB I + 32 KB D) = 72 EBRs, plus the 128 KB L2 at

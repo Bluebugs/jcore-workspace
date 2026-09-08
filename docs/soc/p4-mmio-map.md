@@ -202,56 +202,77 @@ fabric at all.** Found while reconciling this map against the RTL for Wave-2
 **B1**; recorded here because it is the map's problem to state and somebody
 else's to fix.
 
-Two facts, both read at `jcore-cpu@master`:
+Three facts, all read at `jcore-cpu@master`:
 
 1. **The segment test is one byte wide.** `core/datapath_pkg.vhd`'s
    `seg_decode` returns `SEG_P4` for `va(31 downto 24) = x"FF"` — the whole
    16 MB from `0xFF000000` to `0xFFFFFFFF`, not the 4 KB this map's §3.2
    sub-allocates.
-2. **The register test is one byte wide too.** The `p4_sel_v` chain compares
-   only `ma_ad(7 downto 0)`. Nothing looks at `ma_ad(23 downto 8)`.
+2. **Inside that, there is a 4 KB page selector**: `case ma_ad(23 downto 12)`.
+   It has two arms today — `when x"001"` for the PMU page at `0xFF001xxx`, and
+   `when others` for the MMU page.
+3. **The MMU arm's register test is one byte wide.** Its `p4_sel_v` chain
+   compares only `ma_ad(7 downto 0)`. The PMU arm, by contrast, compares all
+   twelve bits, `ma_ad(11 downto 0)`.
 
-Two consequences follow, and the second is the serious one.
+**Aliasing — real, and known to the RTL.** Because the MMU arm is the `others`
+arm and matches on the low byte alone, each of the **18** offsets it decodes
+answers at *every* 256-byte stride across the P4 window, excepting the PMU's own
+page. *(18 is the count of `ma_ad(7 downto 0) = x"NN" then p4_sel_v := P4_…`
+arms, which is also what `p4-offsets-match-rtl` parses and what §3.2's table
+lists. Do not derive it from `p4_sel_t` in `core/datapath_pkg.vhd`: that type has
+**23** enumerators — these 18, plus four for the PMU page, plus the `p4_none`
+sentinel — so counting the enum gives a different and wrong answer for this
+sentence.)* `0xFF000010`, `0xFF000110`, `0xFF104010` and `0xFFFFFF10` all select
+`P4_MMUCR`. The RTL says this is deliberate preservation, not oversight: the MMU
+page is `others` rather than `when x"000"` *"ON PURPOSE… it keeps the
+pre-existing behaviour that the MMU registers answer across the rest of the P4
+window byte-for-byte. That aliasing is old, undocumented and out of scope to
+change here."* It is documented here now, which is the half of this that was
+missing.
 
-**Aliasing.** Each of the 18 decoded registers answers at *every* 256-byte
-stride across the whole 16 MB. `0xFF000010`, `0xFF000110`, `0xFF104010` and
-`0xFFFFFF10` all select `P4_MMUCR`.
+**A block outside the MMU page needs its own page arm, and gets one.** In
+`datapath.vhm` the external bus assignment `this.data_o := to_data_o(...)` sits
+in the `else` arm of the privilege/serve gate, so on a `PRIV_ARCH` build every
+supervisor access to `0xFF......` is consumed inside the datapath and **none of
+it reaches the fabric**. A P4 block therefore cannot be implemented as a fabric
+slave on such a build; it is implemented as a page arm in this `case`. The PMU is
+exactly that, and the RTL states the rule for the next one: *"ADDING A THIRD
+BLOCK: add a `when x"00N" =>` arm here. Do NOT append to the MMU chain in the
+`others` arm."*
 
-**Everything else in P4 is swallowed.** In `datapath.vhm` the external bus
-assignment `this.data_o := to_data_o(...)` sits in the `else` arm of the
-privilege/serve gate — i.e. it runs only for a **non-P4** access. So on a
-`PRIV_ARCH` build *every* supervisor access to `0xFF......` is consumed inside
-the datapath: matching low bytes hit a CSR, and non-matching ones hit
-`when others`, which discards the write and returns zero. **No P4 address
-outside `datapath.vhm`'s 18 is reachable at all.** That includes, by this map's
-own §3 table: the SoC-wide **SMP release** register at `0xFF00FF00`, the **PMU**
-at `0xFF001000`, the **hypervisor** block at `0xFF002000`, the **IOMMU** at
-`0xFF010000`, **AIC2** at `0xFF020000`, the **L2 CSRs** at `0xFF040000`, and
-every peripheral bank at `0xFF100000+`. On a non-`PRIV_ARCH` (J2) build the gate
-does not exist and P4 reaches the bus normally, which is why this has not bitten
-yet — no shipped J4 SoC uses those blocks.
+**What this means for §3's table.** Of the seven blocks §3 allocates in the
+`0xFF` segment, one — the PMU at `0xFF001000` — has its page arm and works. The
+others do not exist in `datapath.vhm`, so today they read as zero and discard
+writes: the SoC-wide **SMP release** register at `0xFF00FF00`, the **hypervisor**
+block at `0xFF002000`, the **IOMMU** at `0xFF010000`, **AIC2** at `0xFF020000`,
+the **L2 CSRs** at `0xFF040000`, and every peripheral bank at `0xFF100000+`.
+That is an unimplemented-block problem with a known implementation route, not the
+architectural dead end it looks like from the segment test alone. On a
+non-`PRIV_ARCH` (J2) build the gate does not exist and P4 reaches the bus
+normally.
 
-**This map already knew half of it and allocated against it anyway.** §3.2's
-blockquote says "P4 accesses never reach `cpu.vhd`'s *return path*, because
-`datapath.vhm` consumes them first — which is why genuinely debug-only windows
-once sat at P2 `0xABCD0F00` instead." That is this same mechanism, described as
-a curiosity in a note about register placement, three sections away from a table
-that assigns seven blocks to addresses the mechanism eats.
+**Correcting this section's own first revision, since it is the kind of error it
+exists to catch.** It was written on facts 1 and 3 without fact 2, and concluded
+that "no P4 address outside `datapath.vhm`'s 18 is reachable at all", listing the
+PMU among the casualties. The PMU is decoded, with a full 12-bit compare chosen
+precisely so it does not alias. The remedy it proposed — an RTL "window check" —
+is also wrong: the structure already exists and the correct move is a page arm.
+What survives is the aliasing (fact 3, confirmed by the RTL's own comment) and
+the observation that a `PRIV_ARCH` build routes no P4 to the fabric.
 
-**What this does not decide.** Which side is wrong. The RTL could grow a
-window check (`ma_ad(23 downto 12) = 0` for the MMU block, and a pass-through
-for the rest of P4), or this map could move the non-MMU blocks out of the
-`0xFF` segment. That is an RTL and SoC-integration decision with a privilege
-dimension — the gate that swallows these accesses is also the gate that stops a
-user-mode store to `0xFF000014` repointing the TSB walker (`mmup4priv`), so
-narrowing it needs care rather than a smaller mask. **It is not B1's to make**,
-and B1 does not make it.
+**What is still open.** Whether the six unimplemented blocks get page arms here
+or move out of the `0xFF` segment, and whether the MMU page's byte-wide compare
+should be narrowed at all — narrowing it touches the gate that stops a user-mode
+store to `0xFF000014` repointing the TSB walker (`mmup4priv`), so it needs care
+rather than a smaller mask. **Not B1's to decide**, and B1 does not decide it.
 
-**What is enforced now.** `mmu.p4.segment` and `mmu.p4.window` in
-[fact-ownership.md](../fact-ownership.md) §Code bindings pin both widths — the
-`0xFF` segment test and the 8-bit offset compare — against `datapath_pkg.vhd`
-and `datapath.vhm`. Neither can narrow or widen without this section going red,
-which is the least a doc-side task can do about a hardware question.
+**What is enforced now.** `mmu.p4.segment`, `mmu.p4.page` and `mmu.p4.window`
+in [fact-ownership.md](../fact-ownership.md) §Code bindings pin all three widths
+— the `0xFF` segment test, the `ma_ad(23 downto 12)` page selector and the MMU
+arm's 8-bit offset compare — against `datapath_pkg.vhd` and `datapath.vhm`. None
+can move without this section going red. The page-selector binding is the one
+this section's first revision most needed and did not have.
 
 ### 3.3 SoC-wide control (`0xFF00F000`–`0xFF00FFFF`)
 

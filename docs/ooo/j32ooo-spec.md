@@ -643,10 +643,10 @@ Prior art: Chen & Baer 1995 reference prediction tables; Jouppi 1990 stream buff
 | ---------------------------------- | ------: | -----: |
 | L1-I cache (32 KB / 4-way)         |      18 |  4,000 |
 | L1-D cache (32 KB / 4-way)         |      18 |  5,000 |
-| L2 unified (128 KB / 8-way)        |      68 |  6,000 |
+| L2 unified (128 KB / 8-way)        |      69 |  6,000 |
 | Stride prefetcher (×2 threads)     |       0 |  3,000 |
 | Next-line prefetcher (L1-I)        |       0 |    500 |
-| **Total cache subsystem, ONE core** | **~104** | **~18,500** |
+| **Total cache subsystem, ONE core** | **~105** | **~18,500** |
 
 The EBR column is **capacity arithmetic** — array size ÷ the 18 Kb EBR — not a
 synthesis result, and needs no measurement for that reason
@@ -655,12 +655,21 @@ The LUT column is a **budget** and is not measured; there is no L1, L2 or
 prefetcher RTL of this shape in `jcore-cpu@master` to synthesize.
 
 **This total counts ONE core's L1 pair.** [cache/l2-spec.md §20.1](../cache/l2-spec.md)'s
-~141 EBRs counts **two**, plus the same L2, and the ~37 difference is the second
-L1-I/L1-D pair. The two were reported for years as a "104 vs 141" contradiction;
-they are the same arithmetic over different machines, and the fix is that each
-now says which. On the 85F's 208 EBRs, one core's hierarchy is ~50%; the
-dual-core configuration this spec targets at Phase 6.5 is ~68%, and that is the
-number to plan against.
+~141 EBRs counts **two**, plus the same L2, and the difference is exactly the
+second L1-I/L1-D pair: 18 + 18 = **36**, and 105 + 36 = 141. The two were
+reported for years as a "104 vs 141" contradiction; they are the same arithmetic
+over different machines, and the fix is that each now says which.
+
+*The L2 row above read **68** and this total **104** until 2026-09-08, which left
+a residual 1 EBR that the scope explanation did not account for — 141 − 104 = 37,
+while an L1 pair is 36. The L2 is **69**: that is the sum of
+[cache/l2-spec.md §20.1](../cache/l2-spec.md)'s own allocation table (60 data + 8
+tag + 1 MSHR), which owns the figure. Declaring the scope mismatch resolved while
+leaving a one-EBR discrepancy standing is the same defect one order of magnitude
+down, and it was caught in review rather than here.*
+
+On the 85F's 208 EBRs, one core's hierarchy is ~50%; the dual-core configuration
+this spec targets at Phase 6.5 is ~68%, and that is the number to plan against.
 
 ---
 
@@ -846,11 +855,17 @@ block estimates in **gate equivalents**, not LUT4, and no FGMT RTL exists in
 `jcore-cpu@master` to measure. [jcore-ulx3s-service-plan.md §5](../jcore-ulx3s-service-plan.md)
 budgets FGMT at **+1,500–2,500 LUT4** per core, and the two were catalogued as
 a contradiction ("+1.5–2.5k vs ~13.45k") on the strength of the numerals alone.
-At this document's own assumed ~5–7 gates/LUT4 (§15.1), 13,450 gates is roughly
-1.9–2.7k LUT4 — the service plan's range. There is nothing to reconcile except
-the missing unit, and the unit is now on both. Neither figure is measured, so
-neither confirms the other; what this removes is a contradiction that was never
-there.
+Gates and LUT4 are different units, so the figures were never comparable and
+there is nothing to reconcile except the missing unit — which is now on both.
+
+*No conversion is offered here, deliberately.* An earlier version of this
+paragraph divided 13,450 by §15.1's assumed 5–7 gates/LUT4 to get "1.9–2.7k LUT4
+— the service plan's range", which was wrong twice: 1,921–2,690 is not
+1,500–2,500, and §15.1 says that ratio is unvalidated while §15 removed a LUT4
+figure for being exactly this arithmetic. Converting here would have been the
+same operation §15 refuses, sixty lines away, and
+[decisions/0005](../decisions/0005-unmeasured-figures-are-removed.md) rule 6
+forbids it. Neither figure is measured; neither confirms the other.
 
 Plus the PMU's per-thread shadowing (already counted in §12.4). Net saving vs v0.2 SMT cost (~14,850): ~1,400 gates from the simpler arbiter and no IQ reservation.
 
@@ -917,7 +932,7 @@ On ULX3S 85F:
   **budget** it was serving is kept and lives in
   [jcore-ulx3s-service-plan.md §5](../jcore-ulx3s-service-plan.md), labelled as
   a budget.
-- **EBRs: ~104 for one core's L1 pair plus the L2** (§11.5), or ~141 for the
+- **EBRs: ~105 for one core's L1 pair plus the L2** (§11.5), or ~141 for the
   dual-core configuration ([cache/l2-spec.md §20.1](../cache/l2-spec.md)).
   Structural, not measured. This bullet previously called the 104 "stale" and
   asked for it to be reconciled with the 141; nothing was stale — see §11.5.

@@ -969,13 +969,25 @@ Approximately identical EBR count to v1 (the directory and lock bits fit inside 
 
 T2 grows tag array by +8 bits/line → +~2 EBRs total → **~71 EBRs**.
 
-On ULX3S 85F (208 EBRs total), the L2 uses ~33–34% of available BRAM. Combined with two cores' worth of L1-I and L1-D (4 × ~18 EBRs = 72 EBRs), the full **dual-core coherent** cache hierarchy uses **~68% of ULX3S BRAMs** (141 of 208, from 72 + the ~69 above). Within budget for J32-FM on ULX3S 85F.
+**This section owns the L2's EBR count: `L2 EBR = 69` at T1** (the Subtotal
+above, 60 data + 8 tag + 1 MSHR), 71 at T2. It is registered as `cache.l2.ebr`
+in [fact-ownership.md](../fact-ownership.md) with a value guard, so no other
+document may state a different number for the same array.
+
+On ULX3S 85F (208 EBRs total), the L2 uses ~33% of available BRAM. Combined with two cores' worth of L1-I and L1-D (4 × ~18 EBRs = 72 EBRs), the full **dual-core coherent** cache hierarchy uses **~68% of ULX3S BRAMs** — 72 + 69 = **141** of 208. Within budget for J32-FM on ULX3S 85F.
 
 **Read the scope, not just the number.** This 141 counts **two** cores' L1 pairs
-plus one L2. [ooo/j32ooo-spec.md §11.5](../ooo/j32ooo-spec.md)'s ~104 counts
-**one** core's L1 pair plus the same L2, and the ~37 difference is the second
-pair. The two were tracked as a "104 vs 141" contradiction; they are the same
-capacity arithmetic over different machines, and both now say which machine.
+plus one L2. [ooo/j32ooo-spec.md §11.5](../ooo/j32ooo-spec.md)'s ~105 counts
+**one** core's L1 pair plus the same L2, so the difference is exactly one L1 pair:
+18 + 18 = 36, and 105 + 36 = 141. The two were tracked as a "104 vs 141"
+contradiction; they are the same capacity arithmetic over different machines.
+
+*Until 2026-09-08 the other document booked this same L2 at 68, so its one-core
+total was 104 and the difference came to 37 against an L1 pair of 36. The
+scope explanation above was written while that 1-EBR residual was still there and
+did not account for it — a resolution that left a smaller instance of the thing it
+resolved. The subtotal in this section's own table is the arithmetic that settles
+it, which is why the fact is owned here.*
 
 ### 20.2 Synthesis considerations
 
@@ -1013,7 +1025,9 @@ used.
 | **L1-D snoop-port upgrade (per core × 2)**      |       — |          600 |   +600 | Extends `dcache_snoop_io_t` v2              |
 | **L1-D MSI state bits (per core × 2)**          |       — |          200 |   +200 | 2 extra tag bits and update logic           |
 
-Total system delta v1 → v2 at T1: **+5,400 LUT4 equivalents** in cache subsystem. Combined with the existing OoO budget ([j32ooo-spec.md §15](../ooo/j32ooo-spec.md): 248k gates ≈ 35–45k LUT4), the v2 coherent L2 adds ~12% to the cache LUT count and ~3% to the full core-plus-cache LUT count.
+Total system delta v1 → v2 at T1: **+5,400 LUT4 equivalents** in the cache subsystem — a budget, like every other figure in this table.
+
+**What the v2 L2 costs as a *fraction* of the core is unknown at this stage — needs measurement.** This sentence previously read that it "adds ~12% to the cache LUT count and ~3% to the full core-plus-cache LUT count", both derived from a citation of [j32ooo-spec.md §15](../ooo/j32ooo-spec.md) reading "248k gates ≈ 35–45k LUT4". Every part of that citation is now wrong: §15's gate total is **256,850**, not 248k, and its LUT4 conversion was **removed** under [decisions/0005](../decisions/0005-unmeasured-figures-are-removed.md) because it was arithmetic on an estimate at an unvalidated gates-per-LUT4 ratio. A percentage whose denominator has been retracted is not a smaller claim than the denominator — it is the same claim with the retraction hidden, which is why the percentages go rather than being re-based. `ooo.gates.core` in [fact-ownership.md](../fact-ownership.md) now guards the numerator so this cannot recur silently.
 
 **The whole of this section is a budget, not a measurement.** It says what the
 design is allowed to cost, and the ~50% LUT / ~70% BRAM ECP5-85F utilisation it

@@ -1088,6 +1088,41 @@ def _(tmp):
           cpu_files={"core/sizes.vhd": "CONFIG_CPU_LITTLE_ENDIAN=y\n"})
 
 
+# A thousands-separated Constant cell, as a SECOND fact beside `simd.context`
+# rather than by rewriting it: the shared SIMD fixture also feeds
+# `owner-has-fact`, the code binding and `context-image-sums`, and an earlier
+# draft of these two cases replaced it wholesale -- which broke those three and
+# made the fail-case pass on their failures instead of on the one it names.
+# Before `registry_values` learned the `\d[\d,]*` form, "256,850" was split
+# into "256" and "850", so the owner's own capture was `stray` and a CORRECT row
+# failed -- the guard was unusable for any fact written with separators, which
+# is how gate counts are written in this tree.
+SEP_REGISTRY = (REGISTRY
+                .replace("\n## Code bindings",
+                         "| `ooo.gates` | Core: **256,850** gates |"
+                         " [simd.md](simd.md) | `256,850` |\n\n## Code bindings")
+                .replace("\n## Image layouts",
+                         "| `ooo.gates` | `([\\d,]+) gates` |"
+                         " `([\\d,]+) gates` |\n\n## Image layouts"))
+SEP_SIMD = SIMD + "\nThe core is 256,850 gates.\n"
+
+
+@case("a thousands-separated value licenses itself", False)
+def _(tmp):
+    build(tmp, registry=SEP_REGISTRY, simd=SEP_SIMD,
+          extra={"other.md":
+                 "Elsewhere: 256,850 gates ([simd.md](simd.md)).\n"})
+
+
+@case("a thousands-separated value still catches a stale restatement", True,
+      expect_check="no-stale-value")
+def _(tmp):
+    # The real defect this closed: a document citing the owner for "248k gates"
+    # while the owner says 256,850.
+    build(tmp, registry=SEP_REGISTRY, simd=SEP_SIMD,
+          extra={"other.md": "Elsewhere: 248 gates.\n"})
+
+
 @case("eq-text does not silently accept a non-numeric capture under `eq`",
       True, expect_check="doc-matches-code")
 def _(tmp):
