@@ -323,7 +323,7 @@ A worklist, each item = pick the true value, fix every other doc, add a CI check
   ([platform-baseline.md §3](platform-baseline.md)). 42 is measured and gated in
   `jcore-cpu` CI; 80 was never measured and is removed with everything derived
   from it. The figure that matters here is neither: **J4-with-MMU measures ~33
-  MHz**. Two CI floors are code-bound to the workflow.
+  MHz**. All four CI floors in that table are code-bound to the workflow.
 - ~~**Area/BRAM budgets**~~ — **CLOSED, and two of the three were not
   contradictions.** FGMT was a unit mismatch (gates vs LUT4); BRAM was a scope
   mismatch (one core vs two) *plus* a genuine 1-EBR disagreement about the same

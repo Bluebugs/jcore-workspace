@@ -111,8 +111,10 @@ synthesize, so nothing produced it; per
 removed rather than annotated, and the estimates derived from it went with it.
 
 `platform.fmax.floor` and `platform.fmax.j4.floor` in
-[fact-ownership.md](fact-ownership.md) §Code bindings tie the two floors in
-this table to `jcore-cpu@master`'s `.github/workflows/synth-cpu.yml`, so a
+[fact-ownership.md](fact-ownership.md) §Code bindings tie **all four** floors
+in this table to `jcore-cpu@master`'s `.github/workflows/synth-cpu.yml` — two
+owned facts carrying four bindings, because J1 and the cache leg ride on
+`platform.fmax.floor` rather than owning rows of their own — so a
 re-baseline in CI that is not reflected here is a red run rather than a silent
 divergence. The *representative* figures are ranges and are not bound; the
 floors are the exact integers, and they move whenever the representative
