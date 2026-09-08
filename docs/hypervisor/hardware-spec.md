@@ -174,8 +174,8 @@ The mapping is dense from the low bits up so a typical hypervisor configuration 
 |    7     | `0x0C0`    | TLB protection violation (write)                         | yes          | `+0x400` |
 |    8     | `0x0E0`    | Address error (read)                                     | yes          | `+0x100` |
 |    9     | `0x100`    | Address error (write)                                    | yes          | `+0x100` |
-|   10     | `0x800`    | FPU exception (non-disable; arithmetic IEEE-754 trap)    | yes          | `+0x100` |
-|   11     | `0x820`    | FPU slot exception (in branch-delay slot)                | yes          | `+0x100` |
+|   10     | `0x800`    | FPU **disable**, general (SH-4-inherited) — see note      | yes          | `+0x100` |
+|   11     | `0x820`    | FPU **disable**, in branch-delay slot (SH-4-inherited)    | yes          | `+0x100` |
 |   12     | `0x180`    | General illegal instruction (SH-4 meaning, sole user)    | yes          | `+0x100` |
 |   13     | `0x1A0`    | Slot illegal instruction (SH-4 meaning, sole user)       | yes          | `+0x100` |
 |   14     | `0x160`    | Unconditional TRAPA                                      | yes          | `+0x100` |
@@ -622,6 +622,23 @@ Offset  Cause(s) delivered here                              EXPEVT / INTEVT
 ```
 
 **The four Phase-3 extension causes form a contiguous block: `+0x180`, `+0x190`, `+0x200`, `+0x300`.** Each has a dedicated vector *and* a dedicated EXPEVT (`0x1D0`, `0x190`, `0x1E0`, `0x1F0`), none of which collides with any SH-4-inherited code point. Every other cause reaches HS mode through the mirror rule and is demultiplexed by `EXPEVT`/`INTEVT`.
+
+**Note on `0x800` / `0x820` — corrected 2026-09-08.** These rows previously read
+"FPU exception (non-disable; arithmetic IEEE-754 trap)", contradicting
+[../fpu/spec.md §6.3](../fpu/spec.md), which assigns them to the FPU-**disable**
+exception. The FPU spec is right, and this is settled from the kernel rather than argued:
+`linux@jcore` `arch/sh/kernel/traps_32.c` wires both codes to
+`fpu_state_restore_trap_handler` under `CONFIG_SH_FPU` — the lazy-FPU *restore* path, which is
+what an FPU-disable trap drives — and to `do_reserved_inst` / `do_illegal_slot_inst` on an SH-4
+without an FPU. Stock SH-4's *arithmetic* FPU error is a different code entirely, `0x120`
+(`arch/sh/kernel/cpu/sh3/ex.S`, `fpu_error_trap_handler`). Bit positions, EXPEVT values and
+delegatability are unchanged; only the labels were wrong. Raised by Wave-2 **B2**, which needed one
+answer to specify guest cause translation ([../sh4-guest-model.md §3.4](../sh4-guest-model.md)).
+
+**`0x120` has no HEDR bit, and this note does not mint one.** J-Core has no FPU, so it raises no
+arithmetic FP exception and needs no bit today; a Tier-1 FPU
+([../fpu/spec.md §6](../fpu/spec.md)) would need one, and would have to take a reserved bit from
+§2.3.1's `26–31` range. Flagged, not decided.
 
 **Note on the TLB `EXPEVT` values above.** The TLB rows quote the codes of
 [../mmu/hardware-spec.md §5](../mmu/hardware-spec.md), which is the authority on TLB fault delivery:

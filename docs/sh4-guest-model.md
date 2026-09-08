@@ -169,7 +169,7 @@ what the guest sees; the hardware behind it need not resemble SH-4.
 |---|---|---|
 | `PTEH`, `PTEL`, `TTB`, `TEA`, `MMUCR` | stock SH-4 offsets in the guest's P4 | Maintain shadow state per [hypervisor/linux-spec.md §3](hypervisor/linux-spec.md); the guest's `MMUCR` is a shadow value, never the host register. |
 | `PTEA` | stock SH-4 `0xFF000034` | Accept and ignore, or model, per the guest's CPU subtype. J-Core allocates nothing there — [soc/p4-mmio-map.md §3.2](soc/p4-mmio-map.md) holds it for the proposed `PTEU`. |
-| **`CCR`** (cache control) | stock SH-4 offset **`0xFF00001C`** | **Emulated only. There is no host register.** Reads must return a value describing J-Core's actual caches; writes are advisory and must not be silently dropped where the guest can tell (cache-invalidate requests in particular). |
+| **`CCR`** (cache control) | stock SH-4 offset **`0xFF00001C`** | **Emulated only. There is no host register.** Reads must return a value describing J-Core's actual caches. **What a write must do is an open item, not a requirement this document can state** — see §8. |
 | **`QACR0`** (store-queue area 0) | stock SH-4 offset **`0xFF000038`** | Trap, validate, and program the *host* `QACR0`, which is at a different offset ([soc/p4-mmio-map.md §3.2](soc/p4-mmio-map.md)). Per [sq/spec.md §6.1](sq/spec.md) the value is loaded verbatim — the burst target is translated, so no arithmetic is done on it. |
 | **`QACR1`** (store-queue area 1) | stock SH-4 offset **`0xFF00003C`** | As `QACR0`. |
 | `TRA`, `EXPEVT`, `INTEVT` | stock SH-4 offsets, which J-Core also uses | Virtualized. The offsets agreeing is a convenience for the VMM, not a licence to let the guest read the host register. |
@@ -217,15 +217,34 @@ Both mechanisms below let a guest be entered *without* the hypervisor
 translating anything. Both are correct for a paravirtualized, J-Core-aware
 guest, and both are silently wrong for a stock SH-4 guest.
 
-**Exception cause codes.** J-Core's `EXPEVT` assignment for the data-side TLB
-causes is its own, not SH-4's — [mmu/hardware-spec.md §5](mmu/hardware-spec.md)
-defines it, and it is the table `jcore-cpu`'s
-`decode/gen-go/spec/sh4/exceptions.toml` implements. Stock SH-4 has a cause that
-table has no entry for at all (the *initial page write* exception; Linux still
-carries its handler, at `arch/sh/kernel/cpu/sh3/entry.S`), and J-Core has no
-FPU-disable cause, because it has no FPU
-([fpu/spec.md §6.3](fpu/spec.md) names the SH-4 codes and the RTL implements
-neither).
+**Exception cause codes — and this is a collision, not a gap.** J-Core's
+`EXPEVT` assignment is its own: [mmu/hardware-spec.md §5](mmu/hardware-spec.md)
+defines it and `jcore-cpu`'s `decode/gen-go/spec/sh4/exceptions.toml` implements
+it. Stock SH-4's assignment is the exception table in `linux@jcore`
+`arch/sh/kernel/cpu/sh3/ex.S`, read out at `origin/jcore` rather than recalled.
+Line them up and **every data-side code means something different in each
+direction**:
+
+| `EXPEVT` | J-Core means | Stock SH-4 means |
+|---|---|---|
+| `0x040` | instruction-fetch TLB miss | TLB miss, **load** |
+| `0x060` | data **load** TLB miss | TLB miss, **store** |
+| `0x080` | data **store** TLB miss | **initial page write** |
+| `0x0A0` | instruction-fetch protection violation | protection violation, **load** |
+| `0x0C0` | data protection violation, either direction | protection violation, **store** |
+
+This is the worked example Decision B2-2 exists for. Not one of these codes is
+*unassigned* on the other side, so a stock SH-4 guest handed a J-Core `EXPEVT`
+does not fault, does not log, and does not notice: it dispatches to a real
+handler for the wrong cause. `0x080` is the sharpest — a guest told "data store
+TLB miss" runs its **initial page write** handler, which is the dirty-bit path.
+
+J-Core additionally raises no FPU-disable cause at all, because it has no FPU;
+[fpu/spec.md §6.3](fpu/spec.md) names the SH-4 codes for it and the RTL
+implements neither. *(An earlier revision of this paragraph called the SH-4
+initial-page-write cause one "J-Core's table has no entry for", which mistook a
+collision for a gap — the more dangerous of the two — and cited `entry.S` where
+the table is in `ex.S`.)*
 
 **A translation table cannot be written today**, because the workspace states
 J-Core's own assignment twice and the two disagree — see the *J-Core `EXPEVT`
@@ -594,6 +613,17 @@ always carries the §5 obligation.
 - **The store-queue carve-out is enabled against hardware that does not exist**
   (§3.3). Owner: RTL / SoC integration, jointly with
   [sq/spec.md](sq/spec.md).
+- **What an emulated `CCR` *write* must do is undecided.** An earlier revision
+  of §3.2 required that writes "must not be silently dropped where the guest can
+  tell (cache-invalidate requests in particular)" — a requirement asserted
+  without checking it can be met. It cannot, today: there is no host `CCR`, and
+  no software cache-invalidate register in the P4 map or in `jcore-cpu`'s RTL
+  for the VMM to forward a request to. (`cache/tests/` drives a J-Core cache
+  control register at a legacy P2 address, which is a different register, is not
+  in the P4 map, and is not SH-4-shaped.) Until the cache subsystem exposes an
+  invalidate path, the honest options are to make guest `CCR` writes
+  architecturally inert and say so, or to refuse them. Owner: the VMM work,
+  jointly with [cache/l2-spec.md](cache/l2-spec.md).
 - **The guest device model itself is unspecified.** This document classifies
   surfaces; it does not specify a single device. Owner: the VMM work
   ([hypervisor/linux-spec.md](hypervisor/linux-spec.md)).
