@@ -392,12 +392,18 @@ A worklist, each item = pick the true value, fix every other doc, add a CI check
 > What changed relative to the framing below, since a plan item reversing under
 > evidence is a legitimate outcome:
 >
-> - **Dreamcast is not a KVM guest.** A KVM guest executes on the host's fetch
->   and load/store path, J-Core has no byte-order control, and Dreamcast
->   software is little-endian. SH-4 guests on J4 are therefore *big-endian* SH-4
->   guests; little-endian images run under full software emulation, where none
->   of the guest-trap architecture applies (Decision B2-1). The KVM path's real
->   target is a big-endian SH-4 or J-Core-aware guest.
+> - **Little-endian data becomes a per-guest mode; the fetch path does not**
+>   (Decision B2-1, revised 2026-09-08 on project direction). Two functions in
+>   `core/datapath.vhm` — the store lane/byte-enable map and the load lane mux —
+>   become mode-dependent under a hypervisor-owned, per-guest, non-guest-writable
+>   control. Nothing of this exists today. **A stock little-endian SH-4 binary,
+>   Dreamcast images included, still needs software emulation**, because its
+>   instruction layout is little-endian and the fetch path stays big-endian —
+>   the same conclusion this task first reached, but from the fetch path rather
+>   than from a blanket exclusion of little-endian, which was wrong. This
+>   re-scopes [decisions/0006](decisions/0006-endianness-is-big-endian.md) and
+>   re-arms `fpu/spec.md` §6.2's double-`FMOV` half-pair analysis as a live
+>   requirement on any Tier-1 FPU.
 > - **Guest FP is trapped, not native** (Decision B2-4). There is no FPU in
 >   `jcore-cpu` at all, and J4 already traps the whole `1111` plane as illegal.
 >   This closes one of the two conditions

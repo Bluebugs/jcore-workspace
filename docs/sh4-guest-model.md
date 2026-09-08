@@ -93,35 +93,62 @@ silently wrong. §7 marks which findings survive that test.
 
 ### 3.1 Three things the hardware decides before the VMM gets a vote
 
-**Guest byte order is the host's byte order, and there is no knob.** A KVM
-guest's instructions execute on the host's fetch, load and store path. J-Core
-has no byte-order mode bit anywhere: not in `SR`, not as a generic, not in the
-RTL's instruction-halfword selection — see
-[platform-baseline.md §2](platform-baseline.md) and
-[decisions/0006](decisions/0006-endianness-is-big-endian.md). Therefore:
+**Guest byte order is a mode the hypervisor owns — and the mode does not exist
+yet.** A KVM guest's instructions execute on the host's fetch, load and store
+path, so guest byte order is whatever that path does. Today that path is
+big-endian throughout and there is no control over it: `jcore-cpu`
+`origin/master` has no byte-order generic, no `SR` bit, and no alternative arm
+in either the load/store lane logic or the instruction-halfword splice. Project
+direction is to change half of that.
 
-> **Decision B2-1. SH-4 guests on J4 are big-endian SH-4 guests.
-> Little-endian SH-4 images are not supported on the KVM path.**
+> **Decision B2-1 (revised 2026-09-08). J-Core will support little-endian
+> *data* accesses as a per-guest mode the hypervisor owns. Instruction fetch
+> stays big-endian. Neither the mode nor its control exists today.**
+>
+> The SH architecture historically supported both byte orders, and J-Core is to
+> follow it on the data path. J32 and J64 will run big-endian; the byte order is
+> a **software configuration**, not a property of the product point.
 
-This is the consequential one, and it narrows a claim this project has been
-making loosely. **Dreamcast retail software is little-endian**
-([decisions/0006](decisions/0006-endianness-is-big-endian.md) records that as
-the engineering argument once offered for migrating J-Core to little-endian).
-It therefore does **not** run on the KVM path at all. It runs, if it runs, under
-full software emulation — a TCG-style interpreter or JIT in which byte order is
-the emulator's business and J4 is merely a fast host CPU with an MMU. Nothing
-in this document, in [hypervisor/hardware-spec.md](hypervisor/hardware-spec.md)
-or in [sq/spec.md](sq/spec.md) applies to that path: a software emulator does
-not use the guest-trap architecture, does not use the store-queue carve-out, and
-does not care what the host decodes.
+**What is in scope, precisely.** Two functions in `core/datapath.vhm` become
+mode-dependent:
 
-The KVM path's real target is a **big-endian SH-4 guest** — an SH-4 Linux, an
-SH-4 RTOS, or a J-Core-aware guest — which is also the multi-tenant workload the
-hypervisor exists for. The Dreamcast case motivates the *device model* work and
-the store queue; it does not, by itself, justify a byte-order change. Reopening
-that would require both conditions
-[decisions/0006](decisions/0006-endianness-is-big-endian.md) names, and §4 below
-answers one of them "no".
+- `to_data_o` — the store path's `we` byte-enable and data-lane mapping. Today
+  a `BYTE` store to address `…00` drives `we = "1000"`; little-endian drives
+  `"0001"`.
+- `align_read_data` — the load path's lane mux. Today a `BYTE` load from `…00`
+  takes `d(31 downto 24)`; little-endian takes `d(7 downto 0)`.
+
+**What is out of scope, and the consequence, stated plainly rather than
+glossed.** The instruction-fetch splice — the big-endian 16-bit halfword
+selection named in `cache/icache_cacheable_mux.vhd` — stays hardwired. So this
+buys **little-endian data for big-endian-compiled software**. It does not make a
+stock little-endian SH-4 binary runnable: that binary's *instruction* layout is
+little-endian too, and the fetch path will not be. **Dreamcast retail images are
+therefore still a software-emulation workload**, not a KVM one — the same
+conclusion this document reached before, but reached now from the fetch path
+rather than from a blanket exclusion of little-endian, which was wrong.
+
+**Who owns the mode bit.** It is **hypervisor-owned and per-guest**,
+`HEDR`-adjacent, saved and restored as part of guest context, and **not
+guest-writable**. That matches real SH-4, where byte order is a reset strap
+rather than software-visible state: a guest that could flip its own byte order
+mid-execution could desynchronise the host's view of its memory, and no SH-4
+guest expects to be able to. `hypervisor/hardware-spec.md` §2.9's per-vCPU
+register set and `mmu/hardware-spec.md`'s per-context register list are both
+incomplete until this bit is in them (§8).
+
+**Cost: `unknown at this stage — needs measurement`.** `align_read_data` sits in
+the load path, and no measurement of a mode-dependent variant exists. No
+estimate is offered here, by anyone.
+
+**A design option, recorded as an option and not as a decision.** The lane
+convention is already non-uniform on-chip: `cache/dcache_check_tb.vhd` notes
+that the CPU's `we`/data lanes and the DDR lanes differ by endianness and models
+only the big-endian case, deferring the rest. A lane-remapping boundary
+therefore already exists, and it may be the right place for the mode control
+rather than scattered conditionals in the two functions above — one swap applied
+to both replies keeps the I and D sides consistent by construction. The
+implementing task should evaluate this; this document does not choose.
 
 **Guest P4 traps wholesale, with one carve-out.** Per
 [hypervisor/hardware-spec.md §4.4.3](hypervisor/hardware-spec.md), every guest
@@ -234,8 +261,12 @@ Interrupt / NMI vector"). The per-vector stride is a J-Core convention.
 Stated so the list is enumerable rather than inferred from silence. Each must
 fail loudly.
 
-- **Little-endian SH-4 guests**, including all Dreamcast retail software, on the
-  KVM path (Decision B2-1).
+- **Little-endian *instruction streams*** — which is what stock little-endian
+  SH-4 binaries and all Dreamcast retail images are — on the KVM path. The
+  little-endian *data* mode of Decision B2-1 does not reach them: the fetch path
+  stays big-endian, so their instruction layout is wrong before any load or store
+  happens. Those images are a software-emulation workload. A guest whose code is
+  big-endian and whose data is little-endian is supported once the mode exists.
 - **Guest use of the SH-4 FPU at native speed** (Decision B2-4, §4).
 - **The SH-4 user-mode store-queue path.** [sq/spec.md §5](sq/spec.md) keeps
   SH-4's `SQMD` reserved and unimplemented, so there is no user-mode SQ access
@@ -269,9 +300,15 @@ Four reasons, in descending order of how hard they are to argue with.
    records that the OoO and LT cores have no SH-4 FPU until Phase 7, and
    [fpu/spec.md §6.1](fpu/spec.md) makes Tier 1 a requirement of product points,
    not of the shipping core.
-4. **Native guest FP buys the motivating workload nothing.** The workload that
-   wants fast FP is a Dreamcast title, and Decision B2-1 puts Dreamcast images on
-   the emulation path, where the host FPU is not what executes them.
+4. **Native guest FP buys the motivating workload nothing** — but this reason
+   is now the weakest of the four and B2-4 does not need it. The workload that
+   wants fast FP is a Dreamcast title, and a Dreamcast image is still on the
+   software-emulation path, because its *instruction* stream is little-endian and
+   the fetch path stays big-endian (§3.1). It reached the same place through
+   Decision B2-1's old blanket exclusion of little-endian, which was wrong; on
+   the corrected premise the conclusion holds but rests on one design choice
+   about the fetch path rather than on an architectural impossibility. Reasons
+   1–3 carry this decision on their own.
 
 **What this decision costs, stated plainly.** FP-heavy big-endian SH-4 guests
 run their floating point through a trap per instruction. That is expensive, and
@@ -289,21 +326,27 @@ revisit — with a measurement, not an argument.
 
 ### 4.1 Consequences for `decisions/0006` (endianness)
 
-[decisions/0006](decisions/0006-endianness-is-big-endian.md) rejects a
-little-endian J-Core and names two conditions that would together reopen it:
-that B2 decides guest SH-4 FP runs *natively*, **and** a measurement showing the
-byte-swap emulation cost is material.
+`0006` was **mis-scoped, not wrong**, and B2 re-scopes it rather than reversing
+it. What it got right and keeps: the kernel is configured big-endian and that
+binding stands, the toolchain target is big-endian, SH-2A has no little-endian
+form so the density extension cannot move, and the glossary had no authority to
+say otherwise. What it stated too broadly: that there is no per-product-point
+byte order **and no migration**, and that making the hardware little-endian is
+"not a configuration change". Decision B2-1 makes the *data* path exactly a
+configuration — a per-guest one — so that exclusion does not survive.
 
-**Decision B2-4 answers the first condition "no."** The rejected alternative is
-therefore not merely still rejected — it is rejected on a ground that has been
-settled rather than deferred. `0006` is updated to say so, and to narrow one
-sentence of its argument that this task found to be over-broad: 0006 says a
-guest's byte order is a property of the guest image and its device model "not of
-the host's fetch path". That is true of an *emulated* guest and false of a *KVM*
-guest, which by construction uses the host's fetch path. The conclusion 0006
-draws survives — big-endian is right — but by the stronger route of Decision
-B2-1: a KVM guest **must** share the host's byte order, so a little-endian host
-would exclude big-endian SH-4 Linux guests rather than admitting Dreamcast ones.
+Two of `0006`'s objections to a wholesale little-endian J-Core are untouched by
+this and are now the only load-bearing ones left: **SH-2A has no little-endian
+encoding form**, and **a wholesale switch is a flag day across four repositories
+with no measurement saying what it buys**. Neither is an argument against a
+per-guest data mode, and neither is repealed by one. They are cost, not
+exclusion.
+
+`0006` also carried a sentence saying a guest's byte order is a property of the
+guest image and its device model, "not of the host's fetch path". That is true
+of a software-emulated guest and false of a KVM guest, which uses the host's
+path by construction — which is precisely why the mode bit of §3.1 has to exist
+in hardware rather than being arranged in software.
 
 ### 4.2 Consequences for the SIMD encoding collisions
 
@@ -426,9 +469,11 @@ none of which is "drop it":
   point of use. Owner: [fpu/spec.md §1.3](fpu/spec.md) for the FPU surface, and
   the VMM work for the register surface.
 - **Its scope is the CPU, not the platform.** `target/sh4` models an SH-4 core.
-  It is not an oracle for any Dreamcast platform device, and under Decision B2-1
-  that surface is off the KVM path entirely. No oracle is named for it, and none
-  is needed until somebody specifies the device model.
+  It is not an oracle for any platform device — Dreamcast's or anyone else's —
+  and no oracle is named for that surface anywhere in this workspace. That gap
+  does not depend on which guests are supported: the moment any device model is
+  specified, it needs a reference, and naming one is part of specifying it.
+  Owner: the VMM work.
 
 ---
 
@@ -447,7 +492,7 @@ always carries the §5 obligation.
 | SH-4 MMU register interface | **Emulated** | §3.2. |
 | `EXPEVT` code semantics | **Emulated**, by translation | Decision B2-2, §3.4. |
 | AIC2 vectoring | **Emulated** | Decision B2-3, §3.4. |
-| Little-endian paired-`FMOV` divergence | **Not supported**, and moot | Decisions B2-1 and B2-4: there is no little-endian guest and no native guest FP. [fpu/spec.md §6.2](fpu/spec.md)'s analysis stays as analysis. |
+| Little-endian paired-`FMOV` divergence | **Deferred, and re-armed** | Inert while B2-4 traps all guest FP, so nothing observes it today. But a double-`FMOV`'s half-pair order is a *data*-path property, so Decision B2-1 puts it back in scope: [fpu/spec.md §6.2](fpu/spec.md)'s analysis becomes a live requirement the day a Tier-1 FPU lands, and it is no longer "withdrawn". |
 | SIMD-vs-scalar encoding collisions | **Native — must decode as SH-4 or trap** | Decision B2-5, §5.2. Re-homing is B4. |
 | `CLDS`/`CSTS` vs `FLDS`/`FSTS` | **Native — violation in shipping RTL** | §5.1. New in this task; the review did not have it. |
 | Guest SH-4 FP native or trapped | **Trapped** | Decision B2-4, §4. |
@@ -457,6 +502,24 @@ always carries the §5 obligation.
 
 ## 8. Open items, with owners
 
+- **Build the little-endian data mode** of Decision B2-1: mode-dependent
+  `to_data_o` and `align_read_data` in `core/datapath.vhm`, a hypervisor-owned
+  per-guest control that is not guest-writable, and that control added to the
+  per-vCPU / per-thread-context state lists in
+  [hypervisor/hardware-spec.md §2.9](hypervisor/hardware-spec.md) and
+  [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md), both of which are
+  incomplete without it.
+  Timing cost is **unknown at this stage — needs measurement**;
+  `align_read_data` is in the load path and no measurement of a mode-dependent
+  variant exists. Owner: **RTL / SoC integration**, jointly with
+  [hypervisor/hardware-spec.md](hypervisor/hardware-spec.md) for the control's
+  placement and save/restore.
+- **The store queue inherits the byte-order requirement** (§3.3): queue data
+  stores and the `QACRn`-formed burst are a data path, they are *native* under
+  the guest P4 carve-out, and a little-endian guest writing through big-endian
+  lanes is exactly what Decision B2-5 outlaws — on the one guest path that is
+  deliberately untrapped. Owner: [sq/spec.md](sq/spec.md), jointly with the mode
+  work above.
 - **Teach the collision sweep about guest-hosting.** The SH4 and J4 variant
   columns are co-resident under virtualization and the sweep's variant rule
   cannot say so (§5.1). Owner: **B4**.

@@ -763,10 +763,22 @@ Beyond the new instructions, Tier 1 brings into scope:
   but did not formally require the SH-4 reset value of). §6.4.
 - The vector / matrix register-file readout patterns. §4.1, §4.2.
 
-### 6.2 Endianness migration (BE → LE) — WITHDRAWN. [T0 → T1]
+### 6.2 Endianness — the wholesale migration is withdrawn; the half-pair rule is live. [T1]
 
-> **HISTORICAL 2026-09-07.** This section specified a big-endian to
-> little-endian migration at Tier 1. That migration is **not happening**:
+**Normative, and re-armed 2026-09-08.** J-Core is to gain a **per-guest
+little-endian data mode** with instruction fetch staying big-endian
+([../sh4-guest-model.md §3.1](../sh4-guest-model.md), Decision B2-1;
+[../decisions/0006](../decisions/0006-endianness-is-big-endian.md) §Re-scope).
+A double-`FMOV`'s half-pair order is a **data**-path property. So points 1 and 2
+below are not an archived what-if: **a Tier-1 FPU on an implementation that has
+the little-endian data mode must implement the half-pair order those points
+describe, selected by the same mode.** Neither the mode nor a Tier-1 FPU exists
+yet, and whichever lands second inherits this requirement. What remains
+withdrawn is only the claim that the *product* migrates to little-endian.
+
+> **HISTORICAL 2026-09-07.** The text below specified a wholesale big-endian to
+> little-endian migration at Tier 1. *That* migration is not happening — read it
+> alongside the normative paragraph above, which re-arms its technical content:
 > J-Core is big-endian at every product point ([platform-baseline.md §2](../platform-baseline.md)),
 > argued in [decisions/0006](../decisions/0006-endianness-is-big-endian.md). Nothing
 > below is normative any more.
@@ -779,14 +791,14 @@ Beyond the new instructions, Tier 1 brings into scope:
 > names the conditions — this is the work that would otherwise have to be
 > redone. Read it as an analysis, not as a requirement.
 >
-> **One of 0006's two reopening conditions is now closed.** 0006 said it would
-> reopen only if B2 decided guest SH-4 FP runs natively *and* a measurement
-> showed the byte-swap cost material. B2 decided the opposite:
-> [sh4-guest-model.md §4](../sh4-guest-model.md) traps and emulates guest FP,
-> because `jcore-cpu` has no FPU and J4 already raises a general illegal
-> instruction across the whole `1111` opcode plane. Points 1 and 2 below are
-> therefore analysis with no live path back to normativity unless that decision
-> is reversed first.
+> **This block previously said points 1 and 2 had "no live path back to
+> normativity".** That was written on 2026-09-07 against
+> [0006](../decisions/0006-endianness-is-big-endian.md) as it then stood, and it
+> is superseded one day later by the normative paragraph above: the path back
+> was not the one 0006 anticipated. Guest FP is still trapped
+> ([../sh4-guest-model.md §4](../sh4-guest-model.md)), which is why nothing
+> observes the half-pair order *today*; the requirement is on the Tier-1 FPU
+> when it lands, not on the trap.
 
 **Statement, as it stood.** Tier 0 implementations may ship big-endian to
 match existing J2 silicon; Tier 1 implementations are little-endian. The

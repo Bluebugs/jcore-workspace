@@ -90,6 +90,18 @@ access traps and the VMM presents the stock pair
 ([../sh4-guest-model.md §3.2](../sh4-guest-model.md)). What survives is a rule for whoever ports
 software: SH-4 store-queue code needs its two register addresses changed and nothing else.
 
+**The queue is a data path, so it inherits the guest byte-order mode (normative).** Per
+[../sh4-guest-model.md §3.1](../sh4-guest-model.md), Decision B2-1, J-Core is to gain a per-guest
+little-endian *data* mode. Queue-data stores and the `QACRn`-formed burst are data accesses, so
+they must honour that mode: the byte lanes a guest store lands in, and the byte order of the
+32-byte burst, follow the guest's setting and not the host's. This is not optional politeness. The
+SQ region is carved out of the guest P4 trap ([../hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spec.md))
+precisely so these stores run **untrapped** — so a little-endian guest writing through big-endian
+lanes would be silently wrong on the one guest path nothing inspects, which is exactly the outcome
+[../sh4-guest-model.md §5](../sh4-guest-model.md) Decision B2-5 outlaws. Neither the mode nor the
+queues exist yet; both must arrive with this property already in them, because there is no later
+point at which a guest would notice it was missing.
+
 Note that PA here is a guest physical address when a guest is running — §6 covers what happens
 next.
 
@@ -144,9 +156,10 @@ Consequences, stated as rules:
 For the motivating workload (a title streaming vertex data to a tile accelerator, megabytes per
 frame) that would be the single dominant cost in the system. *(The workload was originally written
 as a Dreamcast title running as a guest. Per [../sh4-guest-model.md §3.1](../sh4-guest-model.md) a
-Dreamcast image is little-endian and does not run on the KVM path at all, so it is not the guest
-this section serves. The shape of the workload — bulk streaming to a device from a guest — is what
-the rationale rests on, and that is unchanged.)* Making the common
+stock Dreamcast image's instruction stream is little-endian and the fetch path stays big-endian, so
+such an image is a software-emulation workload rather than a KVM guest. The shape of the workload —
+bulk streaming to a device from a guest — is what the rationale rests on, and that is unchanged;
+a big-endian-compiled guest driving a tile accelerator is the same access pattern.)* Making the common
 case a plain memory write lets a hypervisor map the guest's submission window to an ordinary
 ring buffer in host memory and drain it asynchronously.
 

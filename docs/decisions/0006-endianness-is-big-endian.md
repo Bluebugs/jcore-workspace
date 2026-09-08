@@ -1,10 +1,42 @@
-# 0006 — J-Core is big-endian, at every product point
+# 0006 — Big-endian instruction fetch; the data path gains a per-guest little-endian mode
 
-**Status:** Accepted 2026-09-07. Wave-2 task B1, from
-[j4-remediation-plan.md §B1](../j4-remediation-plan.md). Closes the
+**Status:** Accepted 2026-09-07 (Wave-2 **B1**); **re-scoped 2026-09-08 by
+Wave-2 B2 on project direction** — see *Re-scope* below. Closes the
 `Endianness of the J-Core product line` row that
 [fact-ownership.md](../fact-ownership.md) §Unresolved opened as the first
 deliberate hole in that registry.
+
+*The filename still reads `…-is-big-endian`. It is kept: a dozen documents link
+it and [0002](0002-supersede-convention.md) cites records by subject rather than
+by identifier, so renaming the file would break links to buy nothing. The title
+above is the current one.*
+
+---
+
+## Re-scope, 2026-09-08
+
+This record was **mis-scoped, not wrong.** It read a true fact — the RTL has one
+byte order and no mode bit — as an architectural exclusion, when it is unbuilt
+work the project intends to build. The SH architecture historically supported
+both byte orders, and J-Core is to follow it on the data path.
+
+**What survives unchanged:** the Context table; the reading of
+`CONFIG_BIG_ENDIAN` in `jcore_defconfig` and the code binding built from it; the
+toolchain target; the SH-2A density point; the finding that the glossary's
+product table had no authority to state a byte order; and the whole *Enforcement*
+section.
+
+**What does not survive as written:** the Decision clause's "no per-product-point
+byte order and **no migration**"; the sentence below concluding that making the
+hardware little-endian "is not a configuration change", *read as a settled
+exclusion*; the "withdrawn" verdict on [fpu/spec.md](../fpu/spec.md)'s migration
+analysis; and the *What would reopen this* list, whose triggering event has now
+occurred by direction rather than by evidence.
+
+**What replaces them** is [sh4-guest-model.md §3.1](../sh4-guest-model.md),
+Decision B2-1: a per-guest, hypervisor-owned **little-endian data mode**, with
+instruction fetch staying big-endian. Its cost is
+**unknown at this stage — needs measurement**.
 
 ---
 
@@ -63,17 +95,32 @@ recalled:
    need SH big-endian byte-lane modeling in this TB (CPU we/data lane vs DDR
    lane differ by endianness)".
 
-Making the hardware little-endian is therefore not a configuration change. It is
-an RTL change to the fetch path, a toolchain retarget, a kernel reconfiguration
-and a rebuild of every userspace artifact — against a design whose only shipping
-member is big-endian and whose density extension targets an ISA variant that has
-no little-endian form at all.
+Making the **whole machine** little-endian is therefore not a configuration
+change. It is an RTL change to the fetch path, a toolchain retarget, a kernel
+reconfiguration and a rebuild of every userspace artifact — against a design
+whose only shipping member is big-endian and whose density extension targets an
+ISA variant that has no little-endian form at all.
+
+**That sentence is about a wholesale switch and must not be read wider.** It is
+not evidence that the *data* path cannot be made mode-dependent, and the
+re-scope above says it is to be. Two functions in `jcore-cpu@master`
+`core/datapath.vhm` — `to_data_o`'s byte-enable and lane mapping, and
+`align_read_data`'s load lane mux — are where that lands; neither is the fetch
+path, neither is a toolchain artifact, and changing them retargets nothing.
 
 ## Decision
 
-**J-Core is big-endian at every product point: J2, J2-MT2x2, J3, J32, J32-OOO,
-J32-LT, J32-FM and J64.** There is no per-product-point byte order and no
-migration.
+**Instruction fetch is big-endian, and every J-Core product point ships
+big-endian: J2, J2-MT2x2, J3, J32, J32-OOO, J32-LT, J32-FM and J64.** There is
+no per-product-point byte order — the byte order is not a property that
+distinguishes one product point from another.
+
+**The data path is a different question and is answered elsewhere.** Per the
+re-scope above it gains a little-endian mode, selected per guest by the
+hypervisor and not writable by the guest, owned by
+[sh4-guest-model.md §3.1](../sh4-guest-model.md). That is a *software
+configuration*, which is why it does not reopen the product-point statement
+above: J32 and J64 still ship big-endian.
 
 1. The `Endianness` column is **removed** from
    [glossary.md §3](../glossary.md)'s product table. Per
@@ -88,12 +135,13 @@ migration.
    FPU or the bus, and every document that stated it was restating somebody
    else's guess.
 
-3. [fpu/spec.md](../fpu/spec.md)'s BE→LE migration (§2.3, §6.2, and the tier
-   bullets that quote them) is **withdrawn**. The sections are kept and marked
-   per [0002](0002-supersede-convention.md), because the *content* — what
-   changes about double-`FMOV` register pairing between the two byte orders —
-   is correct and is exactly what a reader needs if this is ever reopened. What
-   is withdrawn is the claim that J-Core will make that change.
+3. [fpu/spec.md](../fpu/spec.md)'s claim that **J-Core migrates wholesale to
+   little-endian from Tier 1** is withdrawn; its *analysis* of what changes is
+   not. The distinction matters more after the re-scope than before it: a
+   double-`FMOV`'s half-pair order is a **data**-path property, so the moment
+   the little-endian data mode exists, §6.2's points 1 and 2 stop being an
+   archived what-if and become a requirement on any Tier-1 FPU. They are
+   re-armed rather than withdrawn, and §6.2 is marked accordingly.
 
 ## Why the FPU spec's argument does not survive
 
@@ -115,28 +163,19 @@ authority to state it and was wrong when it did — which is the failure mode
 0001 is about, observed a second time in a second file.
 
 The *engineering* argument sometimes offered alongside it — that SH-4 and
-Dreamcast binaries are little-endian, so J-Core should be too — does not reach
-the conclusion either, and B2 is why. Per
-[sh4-guest-model.md](../sh4-guest-model.md), SH-4/Dreamcast is **not a
-bare-metal target on any J-Core core**; it runs as a guest.
+Dreamcast binaries are little-endian, so J-Core should be too — is the one that
+survives in part, and the re-scope above is what it bought. It does not reach
+*this* record's conclusion, because a wholesale product-line switch is not what
+little-endian guest data requires: a per-guest data mode gets the guests without
+retargeting the toolchain or moving the fetch path.
 
 **This record originally continued: "a guest's byte order is a property of the
 guest's own image and of the device model that serves it, not of the host's
-fetch path." That sentence is true of an emulated guest and false of a KVM
-guest, and B2 corrected it.** A KVM guest executes its own instructions on the
-host's fetch, load and store path by definition, so its byte order *is* the
-host's — there is no J-Core byte-order mode bit for it to be anything else.
-[sh4-guest-model.md §3.1](../sh4-guest-model.md) draws the consequence:
-SH-4 guests on J4 are big-endian SH-4 guests, and little-endian images —
-which is what Dreamcast retail software is — run under full software emulation,
-where byte order really is the emulator's business.
-
-The conclusion is unchanged and the corrected route is stronger. Under the old
-argument, host byte order was simply irrelevant to guests. Under the true one it
-is decisive in the opposite direction: a little-endian host would *exclude*
-big-endian SH-4 Linux guests — the multi-tenant workload the hypervisor exists
-for — in exchange for admitting Dreamcast images to a path they cannot use
-anyway, because a Dreamcast image needs a device model that no J-Core RTL has.
+fetch path." That is true of a software-emulated guest and false of a KVM
+guest**, which executes its own instructions on the host's path by definition.
+That is exactly why Decision B2-1 puts the mode in **hardware**, per guest,
+rather than leaving it to a device model: for a KVM guest there is no software
+layer in the path to do the swapping.
 
 ## Rejected alternative — little-endian from J32 onward, per `fpu/spec.md` §6.2
 
@@ -161,31 +200,33 @@ natively.
    targets SH-2A encodings. Choosing little-endian would put the density work
    and the byte order in direct conflict.
 
-3. **The benefit accrues to a target that cannot use it.** See above: the SH-4
-   surface is emulated, and the little-endian images the alternative exists to
-   serve are on the software-emulation path
-   ([sh4-guest-model.md §3.1](../sh4-guest-model.md)), where the emulator
-   supplies byte order and the host's is irrelevant. Switching the host to
-   little-endian would buy those images nothing and would cost the KVM path its
-   big-endian guests.
+3. **~~The benefit accrues to a target that cannot use it.~~ Withdrawn by the
+   re-scope.** The benefit is real and the project now intends to have it — but
+   a per-guest data mode delivers it, so it is not an argument for flipping the
+   product line. This objection is struck rather than restated, because
+   objections 2 and 4 are the ones that actually carry this rejection and it is
+   better to have two live reasons than four of mixed standing.
 
 4. **The cost is a flag day across four repositories** with no measurement
    saying what is bought. The project's standing rule for that shape of claim
    is [0005](0005-unmeasured-figures-are-removed.md): do not act on a number
    nobody produced.
 
-**What would reopen it — the first half is now answered "no."** The conditions
-were: a decision that SH-4/Dreamcast guests run *natively* rather than
-trapped-and-emulated for the FP paths, **and** a measurement showing the
-emulation cost of byte-swapping is material. Both, not either.
+**What would reopen it.** Objections **2** and **4** are what stand: SH-2A has
+no little-endian encoding form, and a wholesale switch is a flag day across four
+repositories with no measurement saying what it buys. Both are *cost*, not
+exclusion, and reopening this alternative means answering them — a little-endian
+form for the density extension's target encodings, and a measurement. The
+per-guest data mode of Decision B2-1 deliberately avoids both by not being a
+wholesale switch: it changes no encoding and retargets nothing.
 
-B2 has since decided the first: **guest SH-4 floating point is trapped and
-emulated** ([sh4-guest-model.md §4](../sh4-guest-model.md), Decision B2-4), on
-the ground that no FPU exists in `jcore-cpu` at all and the whole `1111` opcode
-plane already traps as illegal on J4. So this alternative is not merely still
-rejected pending a decision; the decision was taken and it went the other way.
-Reopening now needs B2-4 itself reopened first, and §4 of that document lists
-the three conditions for that.
+The old triggers are gone rather than pending. This record previously said the
+alternative would reopen if B2 decided guest SH-4 FP runs natively *and* a
+measurement showed byte-swap cost material. B2 decided FP is trapped
+([sh4-guest-model.md §4](../sh4-guest-model.md), Decision B2-4) — but the
+byte-order question was reopened anyway, by direction, and answered in a way
+neither trigger anticipated. Two-condition triggers written against a guess
+about *how* a question will come back are worth less than they look.
 
 ## Enforcement
 
@@ -222,10 +263,17 @@ would have to change first in any real migration.
   user is a relation; three would be a pattern, and the pattern to look at then
   is whether the binding table wants a general "these two strings must agree"
   rule rather than a per-fact relation name.
-- **B2-4 is reopened and reversed** — i.e. guest SH-4 FP comes to run natively
-  after all, per the rejected alternative above. As of
-  [sh4-guest-model.md §4](../sh4-guest-model.md) it is decided the other way,
-  and that section lists what would have to change first.
+- **The little-endian *data* mode's scope grows to the fetch path.** Decision
+  B2-1 deliberately stops at the data path, which is what keeps this record's
+  product-point statement true. Extending it to instruction fetch would make a
+  guest's *code* byte order configurable, and at that point "J-Core ships
+  big-endian" is a default rather than a fact about the machine. That is the
+  event that reopens this record, and the last time this question moved it moved
+  by direction rather than by any trigger written here — so read this list as
+  the events worth watching, not as the only ones that can occur.
+- **Objection 2 or 4 of the rejected alternative is answered** (above): a
+  little-endian encoding form for the SH-2A-targeted density instructions, or a
+  measurement of what a wholesale switch buys.
 - **A little-endian J-Core target appears in a toolchain or kernel tree** — an
   `sh2el`/`sh4le` defconfig on an integration branch would make the binding red,
   which is the point of having it.

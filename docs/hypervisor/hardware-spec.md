@@ -385,6 +385,14 @@ disclosure and corruption on the hot path the carve-out exists to accelerate. Se
 [../ooo/j32lt-spec.md §16.12](../ooo/j32lt-spec.md) for the cost, which at four contexts is the
 largest single security line item in that design.
 
+**This list is incomplete as of 2026-09-08, and the missing entry is known.**
+[../sh4-guest-model.md §3.1](../sh4-guest-model.md) (Decision B2-1) adds a per-guest
+**data byte-order mode**, hypervisor-owned and not guest-writable. It is per-vCPU state by the same
+argument as everything above, and per thread context by the same argument again. Neither the mode
+nor its control register exists yet; when it does, it belongs in this list and in the save/restore
+contract, and a guest resumed under the wrong byte order sees silently wrong data — the outcome
+[../sh4-guest-model.md §1](../sh4-guest-model.md) outlaws.
+
 This mirrors [../mmu/hardware-spec.md](../mmu/hardware-spec.md)'s per-context requirement for
 `ASIDR`, `PTEH`, `TEA`, `MMUFSR` and `TSBPTR`, already recorded in
 [../ooo/j32lt-spec.md §11](../ooo/j32lt-spec.md). The reasoning and the failure mode are identical:
