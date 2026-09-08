@@ -36,6 +36,7 @@
     {"name": "graft/replace-ref detection dropped",
      "old": "            if refs.strip():\n                result = True",
      "new": "            if False:\n                result = True"},
+    {"name": "registry value scan reverts to \\d+, splitting thousands separators", "old": "        for raw in re.findall(r\"\\d[\\d,]*\", f.value):", "new": "        for raw in re.findall(r\"\\d+\", f.value):"},
     {"name": "M1 registry cross-check dropped",
      "old": "        stray = [v for v in licensed if v not in registry_values]",
      "new": "        stray = []"},
