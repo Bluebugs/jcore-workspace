@@ -763,50 +763,33 @@ Beyond the new instructions, Tier 1 brings into scope:
   but did not formally require the SH-4 reset value of). §6.4.
 - The vector / matrix register-file readout patterns. §4.1, §4.2.
 
-### 6.2 Endianness — the wholesale migration is withdrawn; the half-pair rule is live. [T1]
+### 6.2 Endianness — the migration is withdrawn; the half-pair rule is normative. [T1]
 
-**Normative, and re-armed 2026-09-08.** J-Core is to gain a **per-guest
-little-endian data mode** with instruction fetch staying big-endian
-([../sh4-guest-model.md §3.1](../sh4-guest-model.md), Decision B2-1;
-[../decisions/0006](../decisions/0006-endianness-is-big-endian.md) §Re-scope).
-A double-`FMOV`'s half-pair order is a **data**-path property. So points 1 and 2
-below are not an archived what-if: **a Tier-1 FPU on an implementation that has
-the little-endian data mode must implement the half-pair order those points
-describe, selected by the same mode.** Neither the mode nor a Tier-1 FPU exists
-yet, and whichever lands second inherits this requirement. What remains
-withdrawn is only the claim that the *product* migrates to little-endian.
+**The wholesale BE→LE product migration this section once specified is
+withdrawn** ([decisions/0006](../decisions/0006-endianness-is-big-endian.md));
+§6.2.2 keeps its statement for the record. **What this section says about
+double-`FMOV` half-pair order is normative**, and §6.2.1 is where it now lives,
+outside any historical marker, because a reader must not have to decide which
+half of a superseded section still binds them.
 
-> **HISTORICAL 2026-09-07.** The text below specified a wholesale big-endian to
-> little-endian migration at Tier 1. *That* migration is not happening — read it
-> alongside the normative paragraph above, which re-arms its technical content:
-> J-Core is big-endian at every product point ([platform-baseline.md §2](../platform-baseline.md)),
-> argued in [decisions/0006](../decisions/0006-endianness-is-big-endian.md). Nothing
-> below is normative any more.
->
-> It is kept, rather than deleted, for one reason that is worth more than the
-> section's original purpose: points 1 and 2 are the only place in this
-> workspace that writes down **what actually differs** between the two byte
-> orders for double-`FMOV` register pairing, and the SH-4 / SH-4A anomaly
-> around it. If 0006 is ever reopened — its own "what would reopen this"
-> names the conditions — this is the work that would otherwise have to be
-> redone. Read it as an analysis, not as a requirement.
->
-> **This block previously said points 1 and 2 had "no live path back to
-> normativity".** That was written on 2026-09-07 against
-> [0006](../decisions/0006-endianness-is-big-endian.md) as it then stood, and it
-> is superseded one day later by the normative paragraph above: the path back
-> was not the one 0006 anticipated. Guest FP is still trapped
-> ([../sh4-guest-model.md §4](../sh4-guest-model.md)), which is why nothing
-> observes the half-pair order *today*; the requirement is on the Tier-1 FPU
-> when it lands, not on the trap.
+#### 6.2.1 Half-pair order and endian-neutrality (normative). [T1]
 
-**Statement, as it stood.** Tier 0 implementations may ship big-endian to
-match existing J2 silicon; Tier 1 implementations are little-endian. The
-justification given was the glossary's product table, which is exactly the
-citation [decisions/0006](../decisions/0006-endianness-is-big-endian.md)
-rejects.
+J-Core is to gain a **per-guest little-endian data mode**, with instruction
+fetch staying big-endian ([../sh4-guest-model.md §3.1](../sh4-guest-model.md),
+Decision B2-1; [../decisions/0006](../decisions/0006-endianness-is-big-endian.md)
+§Re-scope). A double-`FMOV`'s half-pair order is a **data**-path property, so it
+follows that mode.
 
-**What would change from BE to LE, if it ever did.**
+**Requirement.** A Tier-1 FPU on an implementation that has the little-endian
+data mode **must** implement the half-pair order described in points 1 and 2
+below, selected by that same mode. Neither the mode nor a Tier-1 FPU exists
+today, and whichever lands second inherits this requirement. Nothing observes it
+in the meantime, because guest FP is trapped and emulated
+([../sh4-guest-model.md §4](../sh4-guest-model.md)) — that is a reason it is not
+urgent, not a reason it is optional.
+
+Points 3–5 are statements of fact about where byte order does *not* reach, and
+hold at every tier and in either mode.
 
 1. **Double-FMOV halves swap.** For `FMOV @Rm, DRn` with FPSCR.SZ=1:
    - In **big-endian** (Tier 0 legacy): the word at `Rm` is loaded
@@ -845,11 +828,31 @@ rejects.
    endian-neutral. The FVn / XMTRX layout is defined as a sequence
    of FR/XF indices, not as a memory byte order.
 
-**Implementation note.** A tier-parameterised FPU may share its
-regfile RTL between Tier 0 (BE) and Tier 1 (LE) builds by
-parameterising only the FMOV-double half-pair ordering with a single
-`ENDIAN` generic. All arithmetic blocks and the FIPR / FTRV / FSCA /
-FSRRA datapaths are endian-neutral.
+**Implementation note.** An FPU may share its regfile RTL between the two byte
+orders by parameterising only the `FMOV`-double half-pair ordering. All
+arithmetic blocks and the FIPR / FTRV / FSCA / FSRRA datapaths are
+endian-neutral, per points 3–5. *(This note previously described the parameter
+as selecting between a Tier-0 big-endian and a Tier-1 little-endian **build**.
+That framing went with the withdrawn migration: the selector is the per-guest
+data mode of Decision B2-1, not the tier, and it must therefore be switchable at
+run time rather than fixed at elaboration.)*
+
+#### 6.2.2 The withdrawn migration statement. [T0 → T1]
+
+> **HISTORICAL 2026-09-07.** This subsection records the BE→LE *product*
+> migration this section used to specify, and nothing in this subsection is
+> normative. It is scoped deliberately: §6.2.1 above carries the part that
+> still binds, so that no reader has to reconcile a normative requirement with a
+> blanket "not normative any more" disclaimer in the same section. Earlier
+> revisions did exactly that — first by saying "nothing below is normative",
+> then by keeping that sentence while adding a normative paragraph above it.
+
+**Statement, as it stood.** Tier 0 implementations may ship big-endian to
+match existing J2 silicon; Tier 1 implementations are little-endian. The
+justification given was the glossary's product table, which is exactly the
+citation [decisions/0006](../decisions/0006-endianness-is-big-endian.md)
+rejects. What replaced it is not the opposite claim but a narrower one: the
+product ships big-endian and the *data path* gains a per-guest mode.
 
 ### 6.3 SR.FD trap semantics. [T1]
 
@@ -1463,11 +1466,17 @@ which currently allocates:
 when SR.HPRIV=0 and the FPU-disabled exception fires:
 
 - If `HEDR[EXC_FPU_DISABLED bit] == 1`: the trap is **delegated to
-  the guest's supervisor** (SR.MD=1 handler in the guest at
-  VBR + 0x800 or 0x820 per the guest's own SH-4 vector layout). The
-  guest sees a normal SH-4 FPU-disable trap and handles it however
-  it wants (e.g. its own lazy-FPU model for guest user-space
-  threads).
+  the guest's supervisor** — the guest's SR.MD=1 handler at the
+  general-exception vector, with `EXPEVT` set to the FPU-disable
+  cause (`0x800` general, `0x820` in a delay slot; §6.3). The guest
+  sees a normal SH-4 FPU-disable trap and handles it however it
+  wants (e.g. its own lazy-FPU model for guest user-space threads).
+  *(This bullet read "at VBR + 0x800 or 0x820", which treated the
+  two `EXPEVT` cause codes as vector offsets. SH-4 delivers both at
+  the general-exception vector and discriminates with `EXPEVT` —
+  [../hypervisor/hardware-spec.md §2.3.1](../hypervisor/hardware-spec.md)
+  gives the vector for both rows as `+0x100`. Pre-existing; corrected
+  while §6.3 was settling what these two codes mean.)*
 - If `HEDR[EXC_FPU_DISABLED bit] == 0` (default): the trap goes to
   the **hypervisor** at VBR_HYP + offset(0x1B0). This is the case
   the lazy-FPU-context-switch ABI of §7.3 relies on.

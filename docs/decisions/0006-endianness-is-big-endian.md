@@ -6,10 +6,10 @@ Wave-2 B2 on project direction** — see *Re-scope* below. Closes the
 [fact-ownership.md](../fact-ownership.md) §Unresolved opened as the first
 deliberate hole in that registry.
 
-*The filename still reads `…-is-big-endian`. It is kept: a dozen documents link
-it and [0002](0002-supersede-convention.md) cites records by subject rather than
-by identifier, so renaming the file would break links to buy nothing. The title
-above is the current one.*
+*The filename still reads `…-is-big-endian`. It is kept: seven documents link
+it, sixteen times over, and [0002](0002-supersede-convention.md) cites records by
+subject rather than by identifier — so renaming the file would break links to buy
+nothing. The title above is the current one.*
 
 ---
 
@@ -21,7 +21,7 @@ work the project intends to build. The SH architecture historically supported
 both byte orders, and J-Core is to follow it on the data path.
 
 **What survives unchanged:** the Context table; the reading of
-`CONFIG_BIG_ENDIAN` in `jcore_defconfig` and the code binding built from it; the
+`CONFIG_CPU_BIG_ENDIAN` in `jcore_defconfig` and the code binding built from it; the
 toolchain target; the SH-2A density point; the finding that the glossary's
 product table had no authority to state a byte order; and the whole *Enforcement*
 section.

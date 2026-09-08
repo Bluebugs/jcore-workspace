@@ -90,20 +90,9 @@ access traps and the VMM presents the stock pair
 ([../sh4-guest-model.md §3.2](../sh4-guest-model.md)). What survives is a rule for whoever ports
 software: SH-4 store-queue code needs its two register addresses changed and nothing else.
 
-**The queue is a data path, so it inherits the guest byte-order mode (normative).** Per
-[../sh4-guest-model.md §3.1](../sh4-guest-model.md), Decision B2-1, J-Core is to gain a per-guest
-little-endian *data* mode. Queue-data stores and the `QACRn`-formed burst are data accesses, so
-they must honour that mode: the byte lanes a guest store lands in, and the byte order of the
-32-byte burst, follow the guest's setting and not the host's. This is not optional politeness. The
-SQ region is carved out of the guest P4 trap ([../hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spec.md))
-precisely so these stores run **untrapped** — so a little-endian guest writing through big-endian
-lanes would be silently wrong on the one guest path nothing inspects, which is exactly the outcome
-[../sh4-guest-model.md §5](../sh4-guest-model.md) Decision B2-5 outlaws. Neither the mode nor the
-queues exist yet; both must arrive with this property already in them, because there is no later
-point at which a guest would notice it was missing.
-
 Note that PA here is a guest physical address when a guest is running — §6 covers what happens
-next.
+next, including §6.4's normative rule that the burst's byte order follows the guest's byte-order
+mode rather than the host's.
 
 ## 4. Burst Semantics
 
@@ -208,6 +197,40 @@ The "trapped burst" row agrees with
 hardware performs no writeback and does not clear `HSQCR.VALID`/`DIRTY` for the affected queue on
 trap entry. The hypervisor alone decides, after inspecting the buffer via §6.2, whether the burst
 is considered consumed and clears `HSQCR` accordingly before resuming the guest.
+
+### 6.4 The queue inherits the guest's byte order (normative)
+
+**Decision:** queue-data stores and the `QACRn`-formed burst are **data**
+accesses, so they follow the guest's byte-order mode — the byte lanes a guest
+store lands in, and the byte order of the 32-byte burst, follow the guest's
+setting and not the host's.
+
+Per [../sh4-guest-model.md §3.1](../sh4-guest-model.md), Decision B2-1, J-Core is
+to gain a per-guest little-endian *data* mode, owned by the hypervisor and not
+guest-writable. This section is in §6 and not in §3 deliberately: §1 declares
+§1–§5 to be the non-virtualized baseline, and this requirement is per-guest and
+hypervisor-owned, so it belongs with the rest of the hypervisor interaction. It
+governs both halves of §3–§4's subject — the lanes a store lands in, and the
+order of the burst §4 issues — and both are restated above rather than
+cross-referenced, because a reader of §4 alone must not be able to build the
+burst path without meeting this.
+
+**Rationale, and why it is not optional politeness.** §4.4.3 of
+[../hypervisor/hardware-spec.md](../hypervisor/hardware-spec.md) carves the SQ
+region out of the guest P4 trap precisely so these stores run **untrapped**. A
+little-endian guest writing through big-endian lanes would therefore be silently
+wrong on the one guest path nothing inspects — exactly the outcome
+[../sh4-guest-model.md §5](../sh4-guest-model.md), Decision B2-5, outlaws.
+Neither the mode nor the queues exist yet; both must arrive with this property
+already in them, because there is no later point at which a guest would notice
+it was missing.
+
+**Interaction with §7.** The mode is per-vCPU context like everything else in
+§7, and like `HSQCR` it must be restored before the guest resumes: a vCPU
+resumed under the wrong byte order bursts a buffer whose bytes were laid down
+under the other one. See
+[../hypervisor/hardware-spec.md §2.9](../hypervisor/hardware-spec.md), whose
+per-vCPU register list records the same gap.
 
 ## 7. Context Switch
 
