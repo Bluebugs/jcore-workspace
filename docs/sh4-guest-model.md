@@ -68,8 +68,14 @@ is no FP file, because there is no FP:
 - **No FPU exists in `jcore-cpu@origin/master`** — no RTL source, no decoder
   entry for any `F`-mnemonic, and no FPU generic in `variants.toml`. What
   exists is a generic 5-bit coprocessor port (`cop_o_t`/`cop_i_t` in
-  `cpu2j0_pkg.vhd`), which carries no floating-point semantics and has nothing
-  attached to it in any testbench.
+  `cpu2j0_pkg.vhd`), which carries no floating-point semantics. **It is not
+  idle, though**: `sim/cpusim_miniaic2.vhd` is a coprocessor model attached to
+  it on `cpa => copro_o, cpy => copro_i` in `sim/cpu_tb.vhd`,
+  `sim/cpu_cache_tb.vhd` and `sim/cpu_pure_tb.vhd`, and is in `sim/Makefile`'s
+  source list. (An earlier revision of this bullet said the port had "nothing
+  attached to it in any testbench", which was false and, worse, made §5.1 sound
+  more speculative than it is — the colliding encodings do not merely decode,
+  they drive a coprocessor model three CPU testbenches exercise.)
 - **The whole `1111` opcode plane traps on J4** as a general illegal
   instruction, and there is a test that says so:
   `sim/tests/j4_illegal_trap.S` calls it "the FPU space, which J4
@@ -120,7 +126,14 @@ mode-dependent:
 
 **What is out of scope, and the consequence, stated plainly rather than
 glossed.** The instruction-fetch splice — the big-endian 16-bit halfword
-selection named in `cache/icache_cacheable_mux.vhd` — stays hardwired. So this
+selection in `splice_instr_data_bus`, defined in `jcore-soc@origin/master`'s
+`targets/data_bus_pkg.vhd`, which `jcore-cpu`'s `synth/cpu_synth.sh` pulls into
+synthesis — stays hardwired. *(Follow that pointer and not
+`cache/icache_cacheable_mux.vhd`, which only calls the procedure and describes
+it, nor `jcore-cpu`'s own `sim/data_bus_pkg.vhd`, which is the simulation copy.
+[decisions/0006](decisions/0006-endianness-is-big-endian.md) §2 has this right;
+an earlier revision of this section did not, and an implementer following it
+would have edited a file synthesis does not elaborate.)* So this
 buys **little-endian data for big-endian-compiled software**. It does not make a
 stock little-endian SH-4 binary runnable: that binary's *instruction* layout is
 little-endian too, and the fetch path will not be. **Dreamcast retail images are
@@ -141,14 +154,28 @@ incomplete until this bit is in them (§8).
 the load path, and no measurement of a mode-dependent variant exists. No
 estimate is offered here, by anyone.
 
-**A design option, recorded as an option and not as a decision.** The lane
-convention is already non-uniform on-chip: `cache/dcache_check_tb.vhd` notes
-that the CPU's `we`/data lanes and the DDR lanes differ by endianness and models
-only the big-endian case, deferring the rest. A lane-remapping boundary
-therefore already exists, and it may be the right place for the mode control
-rather than scattered conditionals in the two functions above — one swap applied
-to both replies keeps the I and D sides consistent by construction. The
-implementing task should evaluate this; this document does not choose.
+**No lane-remapping boundary exists to hang the mode on.** An earlier revision
+of this paragraph suggested one, on the strength of `cache/dcache_check_tb.vhd`
+noting that the CPU's `we`/data lanes and the DDR lanes differ by endianness.
+That note says the opposite of what was claimed: the byte-lane modelling is
+what the testbench **defers** — *"all stores here are full-word (`we=1111`)"* —
+so it models no sub-word lane case at all, big-endian included. And a testbench
+TODO is not a mechanism. The store path maps `we(i)` positionally onto
+`d(8i+7 downto 8i)` with no swap, in that same testbench and in `jcore-soc`'s
+`components/memory/bootram_infer.vhd`; a case-insensitive sweep of
+`jcore-cpu@origin/master` for `swiz`, `byte_swap`, `lane_map`, `bswap` and
+`remap` returns only `bank_remap`, which is SH-4 register banking and unrelated.
+The implementing task starts from the two functions above, not from an existing
+boundary.
+
+**And one shape of the idea is out of scope by construction.** "One swap applied
+to both the instruction and the data reply, keeping the I and D sides consistent"
+is attractive precisely because it is symmetric — but the instruction reply is
+the fetch path, which Decision B2-1 excludes. Adopting it would make a guest's
+*code* byte order configurable, which is the exact event
+[decisions/0006](decisions/0006-endianness-is-big-endian.md)'s *What would
+reopen this* names as its trigger. An implementer may still judge it the better
+engineering; if so, it reopens `0006` first and is not covered by B2-1.
 
 **Guest P4 traps wholesale, with one carve-out.** Per
 [hypervisor/hardware-spec.md §4.4.3](hypervisor/hardware-spec.md), every guest
@@ -466,6 +493,18 @@ false of *a J4 hosting an SH-4 guest*. **Virtualization makes the J and SH
 variant columns co-resident, and the variant rule has no way to express that.**
 Teaching the sweep about the guest-hosting pair is work for **B4**.
 
+**Where the boundary of "four" is, so it is not re-derived.** Four is the
+complete set under Decision B2-5 *as scoped*: identical encodings live on J4 and
+on SH-4 or SH-4A. Widen the guest scope to **SH4AL-DSP** — real parts are SH-4A
+plus the DSP extension — and six more appear, all J-Core's own MMU
+control-register moves against DSP registers: `STC EXPEVT/INTEVT/TRA,Rn` against
+`stc MOD/RS/RE,Rn`, and `LDC Rm,PTEH/PTEL/ASIDR` against `ldc Rm,MOD/RS/RE`.
+Ten, in that case. They are excluded here because no DSP guest is in scope and
+[decisions/0003](decisions/0003-canonical-encoding-database.md) already records
+that J-Core-vs-DSP pair as two variants that never ship together. If a DSP guest
+is ever admitted, that reasoning fails in exactly the way virtualization made it
+fail for SH-4.
+
 **Re-homing them is not something B4 can do alone.** [j4-remediation-plan.md §B4](j4-remediation-plan.md)
 is scoped to `docs/insns.json` and the check gate. These four encodings are
 defined in `decode/gen-go/spec/system.toml`, which *generates* both `insns.json`
@@ -588,8 +627,9 @@ always carries the §5 obligation.
   stores and the `QACRn`-formed burst are a data path, they are *native* under
   the guest P4 carve-out, and a little-endian guest writing through big-endian
   lanes is exactly what Decision B2-5 outlaws — on the one guest path that is
-  deliberately untrapped. Owner: [sq/spec.md](sq/spec.md), jointly with the mode
-  work above.
+  deliberately untrapped. Written up as
+  [sq/spec.md §6.4](sq/spec.md) (normative). Owner: that spec, jointly with the
+  mode work above.
 - **Teach the collision sweep about guest-hosting.** The SH4 and J4 variant
   columns are co-resident under virtualization and the sweep's variant rule
   cannot say so (§5.1). Owner: **B4**.

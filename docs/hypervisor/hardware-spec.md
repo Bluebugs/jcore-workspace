@@ -598,7 +598,7 @@ Offset  Cause(s) delivered here                              EXPEVT / INTEVT
         address error (read / write)                         0x0E0 / 0x100
         initial page write (dirty trap)                      0x5C0
         reserved instruction (no Tier 2 FPU)                 0x500
-        FPU exception / FPU slot exception                   0x800 / 0x820
+        FPU disable, general / in delay slot                 0x800 / 0x820
         EXC_FPU_DISABLED                                     0x1B0
         EXC_SIMD_DISABLED                                    0x1C0
 0x180   HCALL                                        (P3)    0x1D0
@@ -632,7 +632,10 @@ exception. The FPU spec is right, and this is settled from the kernel rather tha
 what an FPU-disable trap drives — and to `do_reserved_inst` / `do_illegal_slot_inst` on an SH-4
 without an FPU. Stock SH-4's *arithmetic* FPU error is a different code entirely, `0x120`
 (`arch/sh/kernel/cpu/sh3/ex.S`, `fpu_error_trap_handler`). Bit positions, EXPEVT values and
-delegatability are unchanged; only the labels were wrong. Raised by Wave-2 **B2**, which needed one
+delegatability are unchanged; only the labels were wrong — **both of them**:
+§2.3.1's two rows and the matching line in §4.2's vector table above, which an
+earlier revision of this correction left uncorrected 25 lines above itself while
+claiming the labels were the only thing wrong. Raised by Wave-2 **B2**, which needed one
 answer to specify guest cause translation ([../sh4-guest-model.md §3.4](../sh4-guest-model.md)).
 
 **`0x120` has no HEDR bit, and this note does not mint one.** J-Core has no FPU, so it raises no

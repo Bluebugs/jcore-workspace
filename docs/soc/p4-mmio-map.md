@@ -349,9 +349,14 @@ Rules for adding new P4 allocations:
      `TSBPTR 0x01C` on SH-4's `CCR` and `ASIDR 0x038` on SH-4's `QACR0`, both
      **decoded in RTL**; and J-Core's own `QACR0 0x03C` on SH-4's `QACR1`,
      which is an **allocation only — the RTL decodes nothing at `0x3C`**.
-     Case-insensitively, `qacr` occurs in `jcore-cpu` `origin/master` exactly
-     once outside documentation, in a `datapath.vhm` comment; the decode arms
-     in that file carry `x"38"` and `x"1C"` and no `x"3C"`.
+     Case-insensitively, `qacr` occurs in `jcore-cpu` `origin/master` outside
+     documentation as **one source comment in two committed files** —
+     `core/datapath.vhm` and the `core/datapath.vhd` generated from it and
+     committed alongside (`CLAUDE.md`, *Tracked generated files*). The decode
+     arms carry `x"38"` and `x"1C"` and no `x"3C"`. *(The count in this sentence
+     has now been wrong twice: first "all decoded", then "exactly once". It is
+     stated as source-comment-and-generated-copy rather than as a number so
+     there is nothing left to miscount.)*
 
      *(This bullet said "Three today, **all decoded in RTL**" when it was first
      written on 2026-09-07. That was false, and falsifiable from two rows of

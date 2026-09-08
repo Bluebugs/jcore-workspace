@@ -409,12 +409,18 @@ A worklist, each item = pick the true value, fix every other doc, add a CI check
 >   This closes one of the two conditions
 >   [decisions/0006](decisions/0006-endianness-is-big-endian.md) named for
 >   reopening little-endian, in the negative.
-> - **The decode-fidelity violation that matters is not the one this section
->   names.** The SIMD collisions are on paper. `CLDS`/`CSTS` versus SH-4's
->   `FLDS`/`FSTS` is in shipping RTL, is already recorded in the canonical
->   encoding database's `collides` annotation, and is invisible to the collision
->   sweep because its variant rule cannot express "an SH-4 guest on a J4 host"
->   (Decision B2-5). That is new work for **B4**.
+> - **The decode-fidelity violations that matter are not the ones this section
+>   names, and there are four of them.** The SIMD collisions are on paper. In
+>   shipping RTL: `CLDS`/`CSTS` on SH-4's `FLDS`/`FSTS`, **and `LDS Rm,CPI_COM`
+>   / `STS CPI_COM,Rn` on SH-4's `LDS Rm,FPUL` / `STS FPUL,Rn`** — the ordinary
+>   integer↔FP bridge, outside the `1111` plane and so with no plane-wide
+>   illegal-instruction backstop at all. All four are already recorded in the
+>   canonical database's `collides` annotations and all four are invisible to
+>   the collision sweep, whose variant rule cannot express "an SH-4 guest on a
+>   J4 host" (Decision B2-5). **B4 cannot deliver the re-home alone**: these are
+>   defined in `decode/gen-go/spec/system.toml`, which generates both the
+>   database and the shipping decoder, so it is an RTL change in another
+>   repository. **B4 plus an RTL / SoC co-owner.**
 > - **`soc/p4-mmio-map.md` rule 8 was factually wrong.** Its "a fourth case is
 >   deliberately absent" claim was false when written: three J-Core registers
 >   sit on stock SH-4 offsets. The rule now names them and says why the guest
