@@ -53,14 +53,19 @@ The value is bound to `linux@jcore`'s `arch/sh/configs/jcore_defconfig` by
 `platform.endianness` in [fact-ownership.md](fact-ownership.md) §Code bindings,
 so this section and the kernel configuration cannot drift apart silently.
 
-**What this does *not* say, and one thing it does.** It fixes the byte order of
-a **KVM guest** — a KVM guest executes on this fetch and load/store path, and
-there is no byte-order control for it to differ — so SH-4 guests on J4 are
-big-endian SH-4 guests and little-endian images run under full software
-emulation instead. That is
-[sh4-guest-model.md §3.1](sh4-guest-model.md), Decision B2-1; this section is
-the input to it, not the other way round. It says nothing about the byte order
-of a *software-emulated* guest, which is the emulator's own property. Nor does it say anything about SIMD *lane* order, which is
+**What this says, and what it does not.** It is a statement about the
+**product**: what the kernel is configured for, what the toolchain targets, and
+what instruction fetch does. It is *not* a statement that the hardware can only
+ever be big-endian.
+
+Project direction is that the **data path** gains a little-endian mode, owned by
+the hypervisor and selected per guest —
+[sh4-guest-model.md §3.1](sh4-guest-model.md), Decision B2-1. Instruction fetch
+stays big-endian, so a big-endian-compiled guest may run with little-endian
+data, while a stock little-endian binary still cannot run natively. None of this
+exists in `jcore-cpu` yet. The value bound below is the kernel configuration and
+it is unaffected: J32 and J64 ship big-endian, and the mode is a per-guest
+software configuration rather than a second product point. Nor does it say anything about SIMD *lane* order, which is
 little-endian within a vector register regardless of memory byte order and is
 owned by [simd/spec.md §2.2](simd/spec.md).
 

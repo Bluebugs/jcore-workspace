@@ -91,6 +91,13 @@ ASID_TAG[15:0] = (ASID[11:0] | (gen_low[3:0] << 12))
 
 Hardware does not interpret the split; only the kernel does. The Linux ASID allocator in [linux-spec.md §5](linux-spec.md) produces this 16-bit value directly.
 
+**A per-guest byte-order mode joins this register set when it is built.**
+[../sh4-guest-model.md §3.1](../sh4-guest-model.md) (Decision B2-1) makes the data path's byte
+order a per-guest, hypervisor-owned mode. Like `ASIDR` it is live per-context state that a context
+switch must carry, and like `ASIDR` getting it wrong misattributes one context's view of memory to
+another. It does not exist in `jcore-cpu` today; this note is here so the register set is not
+believed complete.
+
 **ASIDR is per-thread-context on FGMT implementations.** On a single-threaded core there is one ASIDR per CPU, as described above. On a core with `n_tc` hardware thread contexts ([glossary §4](../glossary.md)) each thread runs an independent address space, so the core holds **`n_tc` copies of ASIDR**:
 
 - `LDC Rm, ASIDR` and the `0xFF000038` read alias write and read **the issuing thread's copy**. No encoding change, no new instruction, no software-visible difference from the single-threaded case — a kernel running on logical CPU *t* simply sees its own register.
