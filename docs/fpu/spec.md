@@ -890,6 +890,16 @@ question on SR bit assignment.
 - On a Tier 2 implementation (next section), the trap is reported
   with cause `EXC_FPU_DISABLED` and is subject to HEDR delegation.
 
+**Corroboration for the `0x800`/`0x820` assignment, added 2026-09-08.**
+`linux@jcore` `arch/sh/kernel/traps_32.c` wires both codes to
+`fpu_state_restore_trap_handler` under `CONFIG_SH_FPU` — the lazy-FPU restore
+path an FPU-disable trap drives — and to the reserved/illegal-slot handlers on
+an SH-4 without an FPU. SH-4's *arithmetic* FP error is `0x120`
+(`arch/sh/kernel/cpu/sh3/ex.S`). This settles a disagreement with
+[../hypervisor/hardware-spec.md §2.3.1](../hypervisor/hardware-spec.md), which
+labelled these two codes as arithmetic exceptions; that table is corrected in
+this specification's favour.
+
 **Instructions that DO trap under SR.FD:** all FPU instructions
 including FRCHG, FSCHG, FPCHG (control-bit toggles), LDS / STS
 involving FPUL or FPSCR, and FLDS / FSTS. There is no "control-only"
