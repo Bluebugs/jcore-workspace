@@ -116,13 +116,27 @@ authority to state it and was wrong when it did — which is the failure mode
 
 The *engineering* argument sometimes offered alongside it — that SH-4 and
 Dreamcast binaries are little-endian, so J-Core should be too — does not reach
-the conclusion either, and B2's framing is why. Per
-[j4-remediation-plan.md §B2](../j4-remediation-plan.md), SH-4/Dreamcast is
-**not a bare-metal target on any J-Core core**; it runs as a KVM guest under
-the hypervisor extension. A guest's byte order is a property of the guest's
-own image and of the device model that serves it, not of the host's fetch
-path. Host byte order would matter if Dreamcast images ran bare metal. They do
-not, by decision.
+the conclusion either, and B2 is why. Per
+[sh4-guest-model.md](../sh4-guest-model.md), SH-4/Dreamcast is **not a
+bare-metal target on any J-Core core**; it runs as a guest.
+
+**This record originally continued: "a guest's byte order is a property of the
+guest's own image and of the device model that serves it, not of the host's
+fetch path." That sentence is true of an emulated guest and false of a KVM
+guest, and B2 corrected it.** A KVM guest executes its own instructions on the
+host's fetch, load and store path by definition, so its byte order *is* the
+host's — there is no J-Core byte-order mode bit for it to be anything else.
+[sh4-guest-model.md §3.1](../sh4-guest-model.md) draws the consequence:
+SH-4 guests on J4 are big-endian SH-4 guests, and little-endian images —
+which is what Dreamcast retail software is — run under full software emulation,
+where byte order really is the emulator's business.
+
+The conclusion is unchanged and the corrected route is stronger. Under the old
+argument, host byte order was simply irrelevant to guests. Under the true one it
+is decisive in the opposite direction: a little-endian host would *exclude*
+big-endian SH-4 Linux guests — the multi-tenant workload the hypervisor exists
+for — in exchange for admitting Dreamcast images to a path they cannot use
+anyway, because a Dreamcast image needs a device model that no J-Core RTL has.
 
 ## Rejected alternative — little-endian from J32 onward, per `fpu/spec.md` §6.2
 
@@ -147,20 +161,31 @@ natively.
    targets SH-2A encodings. Choosing little-endian would put the density work
    and the byte order in direct conflict.
 
-3. **The benefit accrues to a target that is not bare metal.** See above: the
-   SH-4 surface is emulated, and a device model that already translates
-   addresses can translate byte order.
+3. **The benefit accrues to a target that cannot use it.** See above: the SH-4
+   surface is emulated, and the little-endian images the alternative exists to
+   serve are on the software-emulation path
+   ([sh4-guest-model.md §3.1](../sh4-guest-model.md)), where the emulator
+   supplies byte order and the host's is irrelevant. Switching the host to
+   little-endian would buy those images nothing and would cost the KVM path its
+   big-endian guests.
 
 4. **The cost is a flag day across four repositories** with no measurement
    saying what is bought. The project's standing rule for that shape of claim
    is [0005](0005-unmeasured-figures-are-removed.md): do not act on a number
    nobody produced.
 
-**What would reopen it.** A decision that SH-4/Dreamcast guests run *natively*
-rather than trapped-and-emulated for the FP paths — B2 explicitly leaves that
-open ("Decide explicitly whether guest SH-4 FP runs natively on J4's FPU or is
-trapped-and-emulated") — **and** a measurement showing the emulation cost of
-byte-swapping is material. Both, not either.
+**What would reopen it — the first half is now answered "no."** The conditions
+were: a decision that SH-4/Dreamcast guests run *natively* rather than
+trapped-and-emulated for the FP paths, **and** a measurement showing the
+emulation cost of byte-swapping is material. Both, not either.
+
+B2 has since decided the first: **guest SH-4 floating point is trapped and
+emulated** ([sh4-guest-model.md §4](../sh4-guest-model.md), Decision B2-4), on
+the ground that no FPU exists in `jcore-cpu` at all and the whole `1111` opcode
+plane already traps as illegal on J4. So this alternative is not merely still
+rejected pending a decision; the decision was taken and it went the other way.
+Reopening now needs B2-4 itself reopened first, and §4 of that document lists
+the three conditions for that.
 
 ## Enforcement
 
@@ -197,8 +222,10 @@ would have to change first in any real migration.
   user is a relation; three would be a pattern, and the pattern to look at then
   is whether the binding table wants a general "these two strings must agree"
   rule rather than a per-fact relation name.
-- **B2 decides guest SH-4 FP runs natively**, per the rejected alternative
-  above.
+- **B2-4 is reopened and reversed** — i.e. guest SH-4 FP comes to run natively
+  after all, per the rejected alternative above. As of
+  [sh4-guest-model.md §4](../sh4-guest-model.md) it is decided the other way,
+  and that section lists what would have to change first.
 - **A little-endian J-Core target appears in a toolchain or kernel tree** — an
   `sh2el`/`sh4le` defconfig on an integration branch would make the binding red,
   which is the point of having it.

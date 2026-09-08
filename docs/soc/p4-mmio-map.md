@@ -90,16 +90,16 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 | `0x010`     | MMUCR      | MMU control                           |
 | `0x014`     | TSBBR      | TSB base register                     |
 | `0x018`     | TSBCFG     | TSB configuration                     |
-| `0x01C`     | TSBPTR     | TSB pointer (read-only)               |
+| `0x01C`     | TSBPTR     | TSB pointer, read-only; **decoded in RTL** (`P4_TSBPTR`). **Squat** per §5 rule 8: stock SH-4 puts `CCR` here (`0xFF00001C`, Linux `arch/sh/include/cpu-sh4/cpu/cache.h`). No guest consequence — [sh4-guest-model.md §3.2](../sh4-guest-model.md) |
 | `0x020`     | TRA        | TRAPA immediate — stock SH-4 placement; **decoded in RTL** (also `STC TRA,Rn`) |
 | `0x024`     | EXPEVT     | Exception event code — stock SH-4 placement; **decoded in RTL**, read-only (also `STC EXPEVT,Rn`) |
 | `0x028`     | INTEVT     | Interrupt event code — stock SH-4 placement; **decoded in RTL**, read-only (also `STC INTEVT,Rn`) |
 | `0x02C`     | MMUFSR     | Fault-status snapshot, read-only; **decoded in RTL** (see [mmu/hardware-spec.md §2.11](../mmu/hardware-spec.md)) |
 | `0x030`     | CPUINFO    | Per-CPU hart ID + capability flags — **allocated, NOT implemented in current RTL** (see note below) |
 | `0x034`     | reserved   | proposed `PTEU` (PAE only, [mmu/hardware-spec.md §2.10](../mmu/hardware-spec.md)) |
-| `0x038`     | ASIDR      | Address-space identifier, **read-only alias, decoded in RTL** (`P4_ASIDR`). J-core addition with no stock SH-4 offset, hence `0x038` (`0x034` stays reserved for the proposed `PTEU`). Replaces the retired `STC ASIDR,Rn`; write path stays `LDC Rm,ASIDR` (D7). Linux's `get_asid()` reads this. |
-| `0x03C`     | QACR0      | Store-queue 0 area register (`0xFF00003C`) — **allocated, NOT implemented in current RTL** (see the silent-failure note below), see [../sq/spec.md §3](../sq/spec.md) |
-| `0x040`     | QACR1      | Store-queue 1 area register (`0xFF000040`) — **allocated, NOT implemented in current RTL**, see [../sq/spec.md §3](../sq/spec.md) |
+| `0x038`     | ASIDR      | Address-space identifier, **read-only alias, decoded in RTL** (`P4_ASIDR`). **Squat** per §5 rule 8: stock SH-4 puts `QACR0` here. This row previously said `0x038` was chosen because *no stock SH-4 offset exists* — true of ASIDR, false of the offset, which SH-4 uses. (`0x034` stays reserved for the proposed `PTEU`; SH-4 uses that one too, for `PTEA`.) Replaces the retired `STC ASIDR,Rn`; write path stays `LDC Rm,ASIDR` (D7). Linux's `get_asid()` reads this. |
+| `0x03C`     | QACR0      | Store-queue 0 area register (`0xFF00003C`) — **allocated, NOT implemented in current RTL** (see the silent-failure note below), see [../sq/spec.md §3](../sq/spec.md). **Squat** per §5 rule 8: this offset is stock SH-4's `QACR1`, so J-Core's `QACR0` and SH-4's `QACR0` are *different addresses with the same name* — the most confusable arrangement in this table. The emulated surface a guest sees uses the stock pair: [sh4-guest-model.md §3.2](../sh4-guest-model.md) |
+| `0x040`     | QACR1      | Store-queue 1 area register (`0xFF000040`) — **allocated, NOT implemented in current RTL**, see [../sq/spec.md §3](../sq/spec.md). Stock SH-4 leaves `0x040` free, so this one is a J-Core addition rather than a squat — but it is the *pair* of a squat and moves with it if `0x03C` is ever restored to the stock layout |
 | `0x044`     | reserved   | no allocation; falls in the silent-zero class below. Previously absent from this table altogether — neither allocated nor reserved, in a table headed "current allocations" |
 | `0x048`     | TSBSLOT    | TSB slot-address helper — **decoded in RTL** (`core/datapath.vhm`, `P4_TSBSLOT`, read/write alongside TSBBR/TSBCFG/TSBPTR). Write a VA, read the same address back to get `tsb_ptr(VA)` — the exact slot address the hardware TSB walker (`core/tlb_walk.vhd`) and TSBPTR-on-fault use. Only the VA is latched; the index function is evaluated on the read, so `core/datapath_pkg.vhd`'s `tsb_ptr()` remains the single implementation. Added in Phase-2 Task 2 so Linux's `jcore_tsb_slot_offset()` bit-for-bit C mirror could be deleted; kernel side is `JCORE_TSB_SLOT` (`0xFF000048`) in `arch/sh/include/cpu-jcore/cpu/mmu_context.h`. |
 | `0x04C`     | TSBVSEED   | TSB victim-selector seed — **decoded in RTL** (`core/datapath.vhm`, `P4_TSBVSEED`). **WRITE-ONLY**: there is no read case, so a read returns the decoder's hard zero *deliberately*, not by omission. Seeds the LFSR that nominates which way of a 2-way TSB set to replace when neither tag matches. The seed comes from the OS at MMU init precisely because it must not be public — this is an open-source core, so the polynomial and any constant seed compiled into the RTL are readable by anyone. If software could read the seed back, so could an attacker. Kernel side is `JCORE_TSB_VSEED`. See [mmu/hardware-spec.md §2.13](../mmu/hardware-spec.md). |
@@ -107,6 +107,8 @@ The MMU block at `0xFF000000` carries the registers specified in [mmu/hardware-s
 | `0x054`     | TSBCNT     | Walker counters, **read-only, decoded in RTL** (`core/datapath.vhm`, `P4_TSBCNT`): `[31:16]` = `cnt_walks`, `[15:0]` = `cnt_hits`, exported by `core/tlb_walk.vhd`. **Not scaffolding** — the pair is the TSB hit-rate signal used for TSB sizing and hash tuning, and nine anti-vacuity guards assert on it. They were moved here from the P2 debug window `0xABCD0F00` (**retired**) precisely because guest P4 is trapped wholesale, so a hypervisor can virtualize or deny them; a guest reading `cnt_hits` otherwise observes TSB behaviour caused by *other* guests. See [../hypervisor/design-spec.md](../hypervisor/design-spec.md) and [mmu/hardware-spec.md §5.0](../mmu/hardware-spec.md). |
 | `0x058`     | TLBINST    | TLB slot-write counters, **read-only, decoded in RTL** (`core/datapath.vhm`, `P4_TLBINST`): `[31:16]` = ITLB slot writes, `[15:0]` = DTLB slot writes. Anti-vacuity instrumentation for the I→D shadow fill; **not architectural**, and a hypervisor may virtualize or deny it for the same guest-observability reason as `TSBCNT` above. This row was added by the B0c doc-vs-code check, which found the register decoded in RTL while this table still called `0x058` reserved. |
 | `0x05C`–`0xFFC` | reserved | future registers                                  |
+
+**`CCR` is deliberately absent from this table, and that is now a decision.** Stock SH-4's cache control register is at `0xFF00001C`, which J-Core decodes as `TSBPTR`. J-Core allocates no `CCR` anywhere and `jcore-cpu` implements none. It does not need one: a guest's `CCR` is emulated by the VMM with no host register behind it ([sh4-guest-model.md §3.2](../sh4-guest-model.md)), and the J-Core kernel configures its caches through the cache subsystem's own interface, not through an SH-4-shaped register. Adding a `CCR` here would require an offset, and every offset that could plausibly carry it is taken.
 
 **Decision: `0x020`/`0x024`/`0x028` are TRA / EXPEVT / INTEVT.** This closes the three-way
 conflict formerly recorded as §7 open question 4. CPUINFO moves from `0x020` to `0x030`, and
@@ -331,30 +333,71 @@ Rules for adding new P4 allocations:
      `TRA 0x020`, `EXPEVT 0x024`, `INTEVT 0x028`. The RTL says why in as many
      words: *"the MMIO aliases exist so generic (non-J-core) SH-4 kernel code
      that pokes 0xFF0000{20,24,28} keeps working"* (`datapath.vhm`).
-   - **J-Core addition** — no stock SH-4 offset exists, so any free offset will
-     do and the row says which and why. `ASIDR 0x038` (`0x034` held for `PTEU`),
-     `TSBBR`/`TSBCFG`/`TSBPTR` `0x014`–`0x01C`, `TSBSLOT`/`TSBVSEED`/`TSBVICT`/
-     `TSBCNT`/`TLBINST` `0x048`–`0x058`, `CPUINFO 0x030`.
+   - **J-Core addition** — SH-4 has no such register, and the offset J-Core
+     picked is one SH-4 leaves free. `TSBBR`/`TSBCFG` `0x014`–`0x018`,
+     `TSBSLOT`/`TSBVSEED`/`TSBVICT`/`TSBCNT`/`TLBINST` `0x048`–`0x058`,
+     `CPUINFO 0x030`.
    - **deliberate divergence** — the register is J-Core-only *and* the obvious
      offset is occupied by an SH-4 register, so the row names the collision it
      dodged. Exactly one today: `MMUFSR` at `0x02C`, moved off `0x028` because
      that is SH-4's `INTEVT`, onto an offset *"which SH-4 and SH-4A both leave
      free"* (`datapath.vhm`).
+   - **squat** — a J-Core register at an offset stock SH-4 uses for something
+     else. This is the case an SH-4-aware kernel cannot detect, and it is
+     licensed only by the guest model (below). Three today, all decoded in
+     RTL, each named with the SH-4 register it sits on:
+     `TSBPTR 0x01C` on SH-4's `CCR`, `ASIDR 0x038` on SH-4's `QACR0`, and
+     J-Core's own `QACR0 0x03C` on SH-4's `QACR1`.
 
-   **A fourth case is deliberately absent: a register at an offset SH-4 uses
-   for something else.** No allocation here does that and none may be added
-   without amending this rule, because that is the one arrangement an
-   SH-4-aware kernel cannot detect.
+   **The `squat` case was previously written as "a fourth case is deliberately
+   absent … no allocation here does that", and that was false when written.**
+   The three squats above were all in `datapath.vhm` at the time. The stock
+   SH-4 offsets that contradict it are not a matter of recollection: Linux
+   defines `CCR` at `0xFF00001C`
+   (`arch/sh/include/cpu-sh4/cpu/cache.h`) and `QACR0`/`QACR1` at
+   `P4SEG_REG_BASE + 0x38` / `+ 0x3c`
+   (`arch/sh/include/cpu-sh4/cpu/sq.h`), against a `P4SEG_REG_BASE` of
+   `0xff000000`. Two rows in §3.2 asserted the opposite of this in their own
+   text — `ASIDR`'s said it was placed at `0x038` because no stock SH-4 offset
+   exists, and the RTL's own comment describing `0x3C`/`0x40` as
+   "`QACR0`/`QACR1`" says nothing about the stock pair being elsewhere. Both are
+   corrected in §3.2.
 
-   **This rule covers placement, not behaviour.** Whether an SH-4 *guest* sees
-   the SH-4 semantics of a register it pokes is a hypervisor
-   emulation-fidelity question, and the compatibility model that decides it is
-   **Wave-2 B2** ([j4-remediation-plan.md §B2](../j4-remediation-plan.md)).
-   `QACR0`/`QACR1` and `CCR` are the open cases and are gated on it: `QACR0`
-   and `QACR1` are allocated and unimplemented (§3.2), and **`CCR` is not
-   allocated at all** — it appears nowhere in this map and nowhere in
-   `jcore-cpu`'s RTL. §7 item 3 records the related `0xF0000000`–`0xF7FFFFFF`
-   cache-array region as uncommitted for the same reason.
+   `0x014` and `0x018` are **not** classified above by evidence: SH-4 places its
+   UBC break-ASID registers in that area and this workspace has no in-tree
+   artifact stating their offsets, so `TSBBR`/`TSBCFG` are listed as J-Core
+   additions on the strength of the SH-4 hardware manual alone. Confirming or
+   reclassifying them belongs with whoever next revises this rule; it changes
+   nothing operationally, because the guest reasoning below holds for a squat
+   and a J-Core addition alike.
+
+   **This rule covers placement, not behaviour, and the behaviour is now
+   settled.** Whether an SH-4 *guest* sees the SH-4 semantics of a register it
+   pokes is decided by
+   [sh4-guest-model.md](../sh4-guest-model.md) (Wave-2 **B2**):
+
+   - **A squat costs a guest nothing.** Guest P4 traps wholesale
+     ([../hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spec.md)),
+     so a guest's P4 access never reaches this decoder. The VMM presents the
+     stock SH-4 map — `CCR` at `0xFF00001C`, `QACR0` at `0xFF000038`, `QACR1`
+     at `0xFF00003C` — while the hardware keeps the offsets in §3.2. See
+     [sh4-guest-model.md §3.2](../sh4-guest-model.md).
+   - **A squat costs a bare-metal stock SH-4 kernel everything**, silently,
+     because undecoded P4 reads return zero and writes are discarded (§3.2).
+     That cost is accepted: a stock SH-4 kernel on bare-metal J-Core is not a
+     target — [sh4-guest-model.md §2](../sh4-guest-model.md) — and the J-Core
+     kernel uses `arch/sh/include/cpu-jcore/`, which carries these offsets.
+   - **`QACR0`/`QACR1` behaviour** is therefore: emulated at the stock offsets
+     for a guest; on the host, allocated here and unimplemented, and they stay
+     unimplemented until the store queue exists at all
+     ([../sq/spec.md](../sq/spec.md) is a paper spec — `jcore-cpu` has no store
+     queue, no SQ region decode and no SH-4 `PREF`).
+   - **`CCR` behaviour** is: emulated by the VMM with **no host register
+     behind it**. This map is right not to allocate one, and this is now a
+     decision rather than an omission. §7 item 3's `0xF0000000`–`0xF7FFFFFF`
+     cache-array region is settled the same way: the guest P4 trap covers it,
+     so no allocation is needed for the guest, and none is proposed for the
+     host.
 
 ---
 
@@ -378,7 +421,7 @@ All references pre-2006, satisfying the project-wide prior-art policy ([glossary
 
 1. **Pre-this-map peripheral addresses.** Several jcore-soc peripherals currently sit at ad-hoc P4 addresses outside this map. A coordinated re-allocation across the existing RTL and the Linux DTS is required to bring them into conformance. Owner: jcore-soc maintainer + Linux DTS maintainer.
 2. **Cross-CPU debug access.** Reserved range `0xFF003000`–`0xFF00EFFF` is currently empty. If a cross-CPU register-poke debug facility is desired (e.g. for halt-mode debugging), specify the protocol and consume some of this range.
-3. **L1 array access for diagnostics.** SH-4 used the `0xF0000000`–`0xF7FFFFFF` region for direct cache-array access. J-Core has not yet committed to whether to implement an equivalent facility; the region is reserved either way.
+3. **L1 array access for diagnostics — the guest half is closed.** SH-4 used the `0xF0000000`–`0xF7FFFFFF` region for direct cache-array access. A *guest* never reaches it: guest P4 traps wholesale ([../hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spec.md)) and the region is `not supported` on the guest surface ([sh4-guest-model.md §3.5](../sh4-guest-model.md)), so no allocation is owed to SH-4 compatibility. What remains open is only whether J-Core wants such a facility *for itself*; the region is reserved either way. Owner: RTL / SoC integration.
 4. **Three-way conflict at `0x020`/`0x024`/`0x028` — RESOLVED.** *(This item said
    "CPUINFO moves to `0x02C`" until 2026-08-25. It was wrong and had been since
    §3.2 was written: `0x02C` is MMUFSR, as §3.2 states twice, and CPUINFO is at

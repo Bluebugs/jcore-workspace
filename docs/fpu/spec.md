@@ -204,6 +204,14 @@ and Tier 2:
    produce architecturally identical results. Where the SH-4
    Software Manual is ambiguous or implementation-defined, qemu's
    post-2017 `target/sh4` is the tiebreaker reference (Appendix C).
+   **Open: the tiebreaker names no version.** An oracle that moves is
+   not an oracle — two engineers consulting "post-2017 qemu" in
+   different years can get different answers, which is the drift the
+   fact-ownership work exists to remove. A specific qemu tag must be
+   cited here. The tiebreaker's *scope* is settled and is the CPU
+   surface only: [../sh4-guest-model.md §6](../sh4-guest-model.md),
+   which also records that qemu is a conformance oracle rather than
+   prior art, so the pre-2006 policy does not reach it.
 
 ### 1.4 In scope / out of scope
 
@@ -770,6 +778,15 @@ Beyond the new instructions, Tier 1 brings into scope:
 > around it. If 0006 is ever reopened — its own "what would reopen this"
 > names the conditions — this is the work that would otherwise have to be
 > redone. Read it as an analysis, not as a requirement.
+>
+> **One of 0006's two reopening conditions is now closed.** 0006 said it would
+> reopen only if B2 decided guest SH-4 FP runs natively *and* a measurement
+> showed the byte-swap cost material. B2 decided the opposite:
+> [sh4-guest-model.md §4](../sh4-guest-model.md) traps and emulates guest FP,
+> because `jcore-cpu` has no FPU and J4 already raises a general illegal
+> instruction across the whole `1111` opcode plane. Points 1 and 2 below are
+> therefore analysis with no live path back to normativity unless that decision
+> is reversed first.
 
 **Statement, as it stood.** Tier 0 implementations may ship big-endian to
 match existing J2 silicon; Tier 1 implementations are little-endian. The

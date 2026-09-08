@@ -17,6 +17,15 @@ pending this specification. §1–§5 define the baseline hardware feature, whic
 and is what a non-virtualized J-Core implements; §6–§7 then specify what changes when the store
 queue is used by a hypervisor guest.
 
+**Implementation status: none of this exists.** `jcore-cpu` `origin/master` has no store queue, no
+decode of the SQ region, and no SH-4 `PREF` — the only `PREF` in the instruction set is the SH-2A
+hint form, implemented as a nop. Read every "is" below as "shall be". This matters beyond
+book-keeping in one place: [../hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spec.md)
+carves `0xE0000000`–`0xE3FFFFFF` out of the guest P4 trap so that guest queue stores run
+untrapped, and a carve-out over hardware that does not exist is a hole, not an optimisation. **The
+carve-out must not be enabled before the queues are.** See
+[../sh4-guest-model.md §3.3](../sh4-guest-model.md).
+
 ## 2. Region Layout
 
 ```
@@ -67,9 +76,22 @@ PA[25:5]  = VA[25:5]            (VA is the address used in the triggering PREF o
 PA[4:0]   = 0
 ```
 
-This matches the SH-4 address-formation algorithm exactly, so existing SH-4 software needs no
-change to use the J-Core store queue. Note that PA here is a guest physical address when a guest
-is running — §6 covers what happens next.
+This matches the SH-4 address-formation algorithm exactly. It does **not** follow that existing
+SH-4 software runs unchanged, and an earlier revision of this paragraph said it did. The
+*algorithm* is stock; the *register addresses* are not. Stock SH-4 places `QACR0` at
+`0xFF000038` and `QACR1` at `0xFF00003C` — J-Core decodes `0xFF000038` as `ASIDR`, and its own
+`QACR0` sits where SH-4 puts `QACR1`. A bare-metal stock SH-4 kernel that pokes the stock
+addresses therefore programs the wrong register or none at all, silently, because undecoded P4
+writes are discarded ([../soc/p4-mmio-map.md §3.2](../soc/p4-mmio-map.md)).
+
+That costs nothing, because bare-metal stock SH-4 is not a target
+([../sh4-guest-model.md §2](../sh4-guest-model.md)) and a *guest* never sees these offsets: its P4
+access traps and the VMM presents the stock pair
+([../sh4-guest-model.md §3.2](../sh4-guest-model.md)). What survives is a rule for whoever ports
+software: SH-4 store-queue code needs its two register addresses changed and nothing else.
+
+Note that PA here is a guest physical address when a guest is running — §6 covers what happens
+next.
 
 ## 4. Burst Semantics
 
@@ -119,8 +141,12 @@ Consequences, stated as rules:
    — the hypervisor performs no address arithmetic on them.
 
 **Rationale:** the alternative — trapping every burst — costs roughly 30 cycles per 32 bytes.
-For the motivating workload (a Dreamcast title streaming vertex data to the tile accelerator,
-megabytes per frame) that would be the single dominant cost in the system. Making the common
+For the motivating workload (a title streaming vertex data to a tile accelerator, megabytes per
+frame) that would be the single dominant cost in the system. *(The workload was originally written
+as a Dreamcast title running as a guest. Per [../sh4-guest-model.md §3.1](../sh4-guest-model.md) a
+Dreamcast image is little-endian and does not run on the KVM path at all, so it is not the guest
+this section serves. The shape of the workload — bulk streaming to a device from a guest — is what
+the rationale rests on, and that is unchanged.)* Making the common
 case a plain memory write lets a hypervisor map the guest's submission window to an ordinary
 ring buffer in host memory and drain it asynchronously.
 

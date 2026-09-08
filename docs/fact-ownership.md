@@ -88,6 +88,12 @@ are the substitute for a check that cannot be written cleanly — see
 | `ooo.gates.core` | OoO core + caches: **256,850** gate equivalents — an estimate, not a measurement | [ooo/j32ooo-spec.md §15](ooo/j32ooo-spec.md) | `256,850` |
 | `cache.l1.index` | L1 index: **8** bits over 32-byte lines, so the top index bit is 12 | [mmu/hardware-spec.md §4.1a](mmu/hardware-spec.md) | `cache_index_bits = 8` |
 | `platform.j4` | **J4** is the `jcore-cpu` build variant with `PRIV_ARCH = true`, not a product point | [glossary.md §7](glossary.md) | `PRIV_ARCH = true` |
+| `sh4guest.ccr.stock` | Emulated SH-4 `CCR`: stock offset `SH_CCR` = `0xff00001c` | [sh4-guest-model.md §3.2](sh4-guest-model.md) | `\bSH_CCR\b` |
+| `sh4guest.qacr0.stock` | Emulated SH-4 `QACR0`: stock offset `SQ_QACR0` = P4 `0x38` | [sh4-guest-model.md §3.2](sh4-guest-model.md) | `\bSQ_QACR0\b` |
+| `sh4guest.qacr1.stock` | Emulated SH-4 `QACR1`: stock offset `SQ_QACR1` = P4 `0x3c` | [sh4-guest-model.md §3.2](sh4-guest-model.md) | `\bSQ_QACR1\b` |
+| `sh4guest.fplane` | Bare-metal J4 traps the `1111` opcode plane; RTL guard word `0xF000` | [sh4-guest-model.md §2](sh4-guest-model.md) | `\b0xF000\b` |
+| `sh4guest.clds` | SH-4 `flds` and J-Core `clds` are **one encoding** (canonical DB `collides`) | [sh4-guest-model.md §5.1](sh4-guest-model.md) | `flds FRm,FPUL` |
+| `sh4guest.csts` | SH-4 `fsts` and J-Core `csts` are **one encoding** (canonical DB `collides`) | [sh4-guest-model.md §5.1](sh4-guest-model.md) | `fsts FPUL,FRn` |
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
@@ -165,6 +171,12 @@ formatting.
 | `platform.j4` | `` `(PRIV_ARCH) = true` `` | `jcore-cpu:variants.toml` | `\[j4\]\ngenerics    = \{ (PRIV_ARCH) = "true" \}` | `eq-text` |
 | `platform.fmax.floor` | `[\|] J1 [\|] ~38–40 MHz [\|] (\d+) MHz [\|]` | `jcore-cpu:.github/workflows/synth-cpu.yml` | `j1\)  floor=(\d+)` | `eq` |
 | `platform.fmax.floor` | `CDC-limited [\|] (\d+) MHz [\|]` | `jcore-cpu:.github/workflows/synth-cpu.yml` | `j2c\) floor=(\d+)` | `eq` |
+| `sh4guest.ccr.stock` | `SH_CCR at 0x([0-9a-f]+)` | `linux:arch/sh/include/cpu-sh4/cpu/cache.h` | `#define SH_CCR\s+0x([0-9a-f]+)` | `eq-hex` |
+| `sh4guest.qacr0.stock` | `SQ_QACR0 at offset 0x([0-9a-f]+)` | `linux:arch/sh/include/cpu-sh4/cpu/sq.h` | `#define SQ_QACR0\s+\(P4SEG_REG_BASE\s+\+ 0x([0-9a-f]+)\)` | `eq-hex` |
+| `sh4guest.qacr1.stock` | `SQ_QACR1 at offset 0x([0-9a-f]+)` | `linux:arch/sh/include/cpu-sh4/cpu/sq.h` | `#define SQ_QACR1\s+\(P4SEG_REG_BASE\s+\+ 0x([0-9a-f]+)\)` | `eq-hex` |
+| `sh4guest.fplane` | `the guard word is 0x([0-9A-F]+)` | `jcore-cpu:sim/tests/j4_illegal_trap.S` | `\.word\s+0x(F000)` | `eq-hex` |
+| `sh4guest.clds` | `annotation on flds FRm,FPUL names ([a-z]+)` | `jcore-cpu:docs/insns.json` | `"collides": \["(clds)\\tCPI_Rm,CPI_COM"\]` | `eq-text` |
+| `sh4guest.csts` | `annotation on fsts FPUL,FRn names ([a-z]+)` | `jcore-cpu:docs/insns.json` | `"collides": \["(csts)\\tCPI_COM,CPI_Rn"\]` | `eq-text` |
 
 Notes on what is deliberately **not** here, so the gaps are visible rather than
 inferred from silence:
@@ -215,6 +227,19 @@ inferred from silence:
   no true positives is worse than none. The comment defect was fixed by hand
   and the sweep was not shipped. The structured half — the map table versus the
   decode — is checked, and that is where the authority actually lives.
+- **The `sh4guest.*` registry patterns are deliberately tight**, keying on the
+  Linux symbol name (`SH_CCR`, `SQ_QACR0`, `SQ_QACR1`) rather than on the hex
+  value. The values themselves are not usable as patterns here: `0xFF000038` is
+  stock SH-4's `QACR0` **and** J-Core's `ASIDR` alias, and `0xFF00001C` is stock
+  SH-4's `CCR` **and** J-Core's `TSBPTR` — the same number naming different
+  registers in the same tree. A bare-hex pattern would fire on five correct
+  lines in `mmu/`, and the only way to keep it green would be five waiver rows
+  for a check that was wrong. The cost is real and is stated rather than hidden:
+  `restatement-is-linked` will not catch a bare `0xFF000038` written elsewhere
+  as if it were the stock `QACR0`. What is caught is the direction that rots —
+  the owning document drifting from the header it claims to follow — because
+  each of these facts is code-bound.
+
 - **`mmu.page.base` binds to Kconfig, not to the RTL,** because the RTL has no
   page-size constant: it is page-size-general, with `PageMask` in `PTEL[11:8]`
   selecting per entry. There is nothing in the hardware for `16 KB` to disagree
@@ -318,7 +343,7 @@ new file.
 
 | Fact | State | Owned by (task) |
 |---|---|---|
-| **P4 SH-4 compatibility of QACR0/QACR1/CCR** | The *placement* rule is settled: [soc/p4-mmio-map.md §5](soc/p4-mmio-map.md) rule 8 classifies every MMU-block offset as alias / J-Core addition / deliberate divergence, and every offset the RTL decodes now matches the map. What is not settled is **behaviour**: QACR0/QACR1 are allocated and undecoded, and `CCR` is allocated nowhere. Both need the emulated-SH-4 surface. | Wave-2 **B2** (SH-4-as-guest model) |
+| **J-Core `EXPEVT` cause table** | Two documents give different assignments for J-Core's own exception cause codes. [mmu/hardware-spec.md §5](mmu/hardware-spec.md) has `IMISS 0x040`, `DMISS_R 0x060`, `DMISS_W 0x080`, `IPROT 0x0A0`, `DPROT_R`/`DPROT_W` both `0x0C0`, and matches `jcore-cpu`'s `decode/gen-go/spec/sh4/exceptions.toml`. [hypervisor/hardware-spec.md §2.3.1](hypervisor/hardware-spec.md)'s HEDR table instead reads `0x040` as *TLB miss (read)*, `0x060` as *TLB miss (write)*, `0x0A0`/`0x0C0` as read/write protection, and gives `0x800`/`0x820` to FPU *arithmetic* exceptions where [fpu/spec.md §6.3](fpu/spec.md) gives them to FPU *disable*. Found by Wave-2 **B2**, which needs one table to specify guest cause translation ([sh4-guest-model.md §3.4](sh4-guest-model.md), Decision B2-2) and cannot pick a winner without changing HEDR bit meanings. | **hypervisor / priv-arch spec reconciliation**, not B2 |
 | **CPU P4 decode width vs the P4 block allocation** | Contradictory, and this one is hardware. [soc/p4-mmio-map.md §3.2a](soc/p4-mmio-map.md): `datapath.vhm` gates on `VA[31:24] == 0xFF` and compares only `ma_ad[7:0]`, so on a `PRIV_ARCH` build no P4 access reaches the fabric: a block is implemented as an arm of the `ma_ad[23:12]` page selector or not at all. One of §3's seven blocks (the PMU) has such an arm; six do not and read as zero. The MMU page's byte-wide compare additionally aliases every 256 bytes, which the RTL preserves deliberately. All three widths are code-bound so none can move quietly. | **RTL / SoC integration**, not a doc task; found by Wave-2 **B1** |
 | **Instruction encodings** | Not a registry fact by design, and **no longer unresolved as to which file**: [decisions/0003](decisions/0003-canonical-encoding-database.md) makes `jcore-cpu/docs/insns.json` canonical and deletes this repo's copy. Checked by `insns2asm --emit check` and `cpugen insns -check`; prose specs cite it and must not restate bit patterns. | Wave-2 **B4** (the sweep itself) |
 

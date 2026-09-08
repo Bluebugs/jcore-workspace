@@ -558,6 +558,16 @@ Predication is orthogonal: a predicated saturating instruction applies saturatio
 
 Encoded in the SH-4 FPU unary row `1111 nnnn xxxx 1101`, slots `xxxx ∈ {1000..1111}`:
 
+> **Those slots are not free, and this table's premise that they are is wrong.** SH-4 defines
+> `FLDI0`, `FLDI1`, `FCNVSD` and `FCNVDS` in that range — see
+> [../fpu/spec.md §5.2–§5.3](../fpu/spec.md) and the canonical encoding database
+> ([decisions/0003](../decisions/0003-canonical-encoding-database.md)). This is **not** a
+> violation of [../sh4-guest-model.md §5](../sh4-guest-model.md) Decision B2-5, because these are
+> *governed* instructions: they are reachable only inside an open SIMD block, and a guest that
+> never opens one never decodes them. The justification is what is false, not the placement, and
+> [j4-remediation-plan.md §B4](../j4-remediation-plan.md) should not treat the range as virgin
+> when it sweeps.
+
 | Encoding | Mnemonic | Operation | Tier |
 |---|---|---|---|
 | `1111 nnnn 1000 1101` | VABS Vn | per-lane signed absolute value | T1 |
@@ -686,6 +696,18 @@ where `TABLE_C` is the standard 256-entry CRC-32C table for polynomial 0x1EDC6F4
 Tier 0 vector memory and SIMD-control instructions are reproduced unchanged from spec-v0.5 §5.5/§5.6. The detailed encoding table is captured in Appendix A; the highlights:
 
 - **VLD.Q / VST.Q** at six addressing modes (`@Rm`, `@Rm+`, `@-Rm`, `@(R0,Rm)`, plus indexed forms). Each moves a full vector = VLEN/8 bytes (32 B J32, 64 B J64), **VLEN/8-byte aligned**. Valid in or out of SIMD blocks.
+
+> **These encodings are SH-4's `FMOV.S` forms, and "out of SIMD blocks" makes that a
+> violation.** [../sh4-guest-model.md §5](../sh4-guest-model.md) Decision B2-5 requires that any
+> encoding SH-4 defines either behave as SH-4 defines it or raise a trap the hypervisor sees, on
+> any core that can host an SH-4 guest; decoding it as a different J-Core instruction is the one
+> forbidden outcome. Inside a block the reuse is fine — a guest that never opens a block cannot
+> reach it, which is exactly the *contextual* reuse §5.4 relies on. Outside one it is not, and
+> §5.4 of this document already says these encodings are redefined "inside SIMD blocks", which
+> contradicts the sentence above. **`VMKCHG` (below) has the same problem** — it is placed outside
+> SIMD blocks and its encoding is one operand form of SH-4's `FSCA`. Re-homing both is
+> [j4-remediation-plan.md §B4](../j4-remediation-plan.md)'s encoding sweep, which was told to
+> decide them jointly with the guest decode-fidelity policy; that policy is now written.
 - **VGATHER.Q / VSCATTER.Q** with per-lane offsets from Vm (inside SIMD block only).
 - **VMOV Vm, Vn** (inside SIMD block; SH-4 FMOV-register encoding reinterpreted).
 - **VLDI.Q #imm, Vn** (8-bit signed immediate broadcast; inside SIMD block).

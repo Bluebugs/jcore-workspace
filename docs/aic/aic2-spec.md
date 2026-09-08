@@ -198,7 +198,17 @@ winner = argmax over sources s of (PRIO[s] | (ENABLE[s] & PEND[s] & target_match
                                        (0 if disabled, else PRIO[s])
 ```
 
-If `PRIO[winner] > SR.IMASK` on the owning CPU (and the CPU is not in a delay-slot / BL-blocked window), AIC2 asserts `cpu_event_i_t.irq_level = PRIO[winner]` and `vector_number = winner`. The CPU's exception logic accepts and jumps to `VBR + 0x600 + vector_number * 0x20` (the standard SH external-interrupt vector layout — see [mmu/hardware-spec.md §5](../mmu/hardware-spec.md) for the vector conventions AIC2 follows).
+If `PRIO[winner] > SR.IMASK` on the owning CPU (and the CPU is not in a delay-slot / BL-blocked window), AIC2 asserts `cpu_event_i_t.irq_level = PRIO[winner]` and `vector_number = winner`. The CPU's exception logic accepts and jumps to `VBR + 0x600 + vector_number * 0x20` (see [mmu/hardware-spec.md §5](../mmu/hardware-spec.md) for the vector conventions AIC2 follows).
+
+> **The per-vector stride is a J-Core convention, not the SH-4 one.** Stock SH-4 has a single
+> external-interrupt entry point and discriminates with `INTEVT`; the Linux SH exception table
+> still labels it that way (`arch/sh/kernel/cpu/sh3/entry.S`, "0x600: Interrupt / NMI vector").
+> This paragraph previously called the layout "the standard SH external-interrupt vector layout",
+> which overstates it. Nothing about the host changes — but it means **AIC2 is never a guest's
+> interrupt controller**: a stock SH-4 guest entered at a strided vector lands somewhere its own
+> handler table does not describe. A guest's controller is emulated, and AIC2's direct
+> guest-injection path (§5) is a paravirtual facility for a J-Core-aware guest only. See
+> [../sh4-guest-model.md §3.4](../sh4-guest-model.md), Decision B2-3.
 
 When the CPU accepts (drives `cpu_event_o_t.ack` for the AIC2-presented vector), AIC2 atomically:
 
