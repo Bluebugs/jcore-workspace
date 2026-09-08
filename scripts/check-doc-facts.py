@@ -934,7 +934,15 @@ def check_no_stale_value(cfg, report, facts, guards, waivers):
     # was. The weakness is stated rather than hidden.
     registry_values = set()
     for f in facts:
-        registry_values.update(re.findall(r"\d+", f.value))
+        # `\d[\d,]*` and not `\d+`: a Constant cell reading "**256,850** gate
+        # equivalents" is ONE value, and splitting it into "256" and "850" left
+        # every thousands-separated fact unguardable -- the licensing set could
+        # never contain the string a scan pattern captures, so such a row would
+        # fail as `stray` however correct it was. Both forms are added, so a
+        # document writing 256850 unseparated still matches.
+        for raw in re.findall(r"\d[\d,]*", f.value):
+            registry_values.add(raw)
+            registry_values.add(raw.replace(",", ""))
     corpus = {}
     for p in cfg.markdown_files():
         # The decision records quote retired values on purpose -- 0001's whole

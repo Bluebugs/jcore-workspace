@@ -289,10 +289,10 @@ A worklist, each item = pick the true value, fix every other doc, add a CI check
 > - **The "J4" naming item resolves against the glossary**, not for it. See the
 >   long-tail bullet.
 >
-> Eleven registry rows, ten code bindings and one value guard were added,
-> taking `doc-matches-code` from 5 comparisons to 15. Two waiver rows went — one
-> ordinary `restatement-is-linked` row, and the registry's only `value-free`
-> fence together with the row licensing it. Five rows of
+> Sixteen registry rows and fifteen code bindings were added (18 → 34 and
+> 5 → 20 rows), three of them value guards rather than bindings. Two waiver rows
+> went — one ordinary `restatement-is-linked` row, and the registry's only
+> `value-free` fence together with the row licensing it. Six rows of
 > [security/threat-model.md §11](security/threat-model.md) that named B1 as
 > owner are closed too — that table is part of this worklist and the bullets
 > below are not the whole of it.
@@ -312,10 +312,30 @@ A worklist, each item = pick the true value, fix every other doc, add a CI check
   dimensions, so on a `PRIV_ARCH` build the datapath consumes *all* of
   `0xFF......` and no P4 block outside it is reachable. That is an RTL question,
   not a doc one; both widths are now code-bound so they cannot move quietly.
-- **Endianness** (glossary "little" vs `sh2eb` big-endian builds & mt2x2 note).
-- **Baseline Fmax** (42 vs 80 MHz) — this poisons every throughput table.
-- **Area/BRAM budgets** (OoO ~10k vs 35–45k LUT4; FGMT +1.5–2.5k vs ~13.45k;
-  BRAM 104 vs 141 EBR) — supersede with one measured/estimated number (Track D).
+- ~~**Endianness**~~ — **CLOSED: big-endian at every product point**
+  ([platform-baseline.md §2](platform-baseline.md),
+  [decisions/0006](decisions/0006-endianness-is-big-endian.md)). Decided against
+  the kernel defconfig, the toolchain target and the RTL's instruction-halfword
+  selection, all three of which are big-endian and none of which has a
+  little-endian arm. Bound to `linux@jcore`'s `jcore_defconfig`. The glossary's
+  `Endianness` column is deleted rather than corrected.
+- ~~**Baseline Fmax**~~ — **CLOSED, and it is not one number**
+  ([platform-baseline.md §3](platform-baseline.md)). 42 is measured and gated in
+  `jcore-cpu` CI; 80 was never measured and is removed with everything derived
+  from it. The figure that matters here is neither: **J4-with-MMU measures ~33
+  MHz**. Two CI floors are code-bound to the workflow.
+- ~~**Area/BRAM budgets**~~ — **CLOSED, and two of the three were not
+  contradictions.** FGMT was a unit mismatch (gates vs LUT4); BRAM was a scope
+  mismatch (one core vs two) *plus* a genuine 1-EBR disagreement about the same
+  L2, now owned by [cache/l2-spec.md §20.1](cache/l2-spec.md) at 69, which makes
+  the arithmetic close exactly (105 + 36 = 141). Only the OoO LUT4 spread was
+  real, and **neither side of it is measured** — there is no OoO, FGMT or L2 RTL
+  to synthesize — so
+  [decisions/0005](decisions/0005-unmeasured-figures-are-removed.md) applies and
+  the budget is kept, labelled as a budget. *This bullet's original instruction
+  — "supersede with one measured/estimated number" — is the convention 0005
+  retired: an estimate offered in place of a measurement is exactly what it
+  forbids.*
 - ~~**L2 write-through vs write-back / MSI-M**~~ — **CLOSED**
   ([cache/l2-spec.md §17.1](cache/l2-spec.md),
   [decisions/0007](decisions/0007-l1d-write-policy-under-msi.md)). The **L2's**
@@ -361,7 +381,7 @@ A worklist, each item = pick the true value, fix every other doc, add a CI check
     deprecated "J4" as a synonym for J32, and nothing complied, including this
     plan's own filename. It should not have: `jcore-cpu@master`'s
     `variants.toml` names `[j4]` as the authoritative build variant
-    (`PRIV_ARCH = true`). J4 is a bitstream configuration and J32 is a product
+    (`PRIV_ARCH = true`, [glossary §7](glossary.md)). J4 is a bitstream configuration and J32 is a product
     point; [glossary §7](glossary.md) now says that, and the deprecation is
     withdrawn rather than enforced.
 

@@ -160,7 +160,7 @@ buy back CAS.L.
 
 ## Enforcement
 
-`cache.l1d.write.t0` in [fact-ownership.md](../fact-ownership.md) names
+`cache.l1d.write` in [fact-ownership.md](../fact-ownership.md) names
 [cache/l2-spec.md §17.1](../cache/l2-spec.md) as the owner of the L1-D write
 policy, so a document restating it needs a link.
 
@@ -175,3 +175,14 @@ all: there is no L2, no directory and no snoop port in `jcore-cpu@master`. This
 item is therefore closed by ownership and by tier-scoping, and the check that
 would close it properly is a doc-vs-code binding written *with* the L2 RTL, not
 before it.
+
+**One cross-repo loose end, recorded where the next person to touch this will
+see it.** `jcore-cpu`'s `cache/dcache_color_tb.vhd` is still listed in
+`sim/Makefile`'s `VHDL_TOPS`, and its comments describe a store as
+*"dirty, write-back -> mem"*. It is the last colour-era artifact — the CPU-level
+`mmucolor` guard was retired when PIPT landed
+([mmu/hardware-spec.md §4.1a](../mmu/hardware-spec.md)) — and its wording
+contradicts the no-dirty-bit finding this record's T0 half rests on. The
+testbench's *behaviour* is not in question here; its comments are, and they will
+mislead exactly the reader who comes to check this decision against the RTL.
+Fixing it belongs in `jcore-cpu`, not in this repository.
