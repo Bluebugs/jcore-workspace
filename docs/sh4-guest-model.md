@@ -329,8 +329,8 @@ Four reasons, in descending order of how hard they are to argue with.
    about the fetch path rather than on an architectural impossibility. Reasons
    1–3 carry this decision on their own.
 
-**What this decision costs, stated plainly.** FP-heavy big-endian SH-4 guests
-run their floating point through a trap per instruction. That is expensive, and
+**What this decision costs, stated plainly.** FP-heavy SH-4 guests run their
+floating point through a trap per instruction. That is expensive, and
 if such a guest ever becomes a real workload this decision is the thing to
 revisit — with a measurement, not an argument.
 
@@ -345,27 +345,20 @@ revisit — with a measurement, not an argument.
 
 ### 4.1 Consequences for `decisions/0006` (endianness)
 
-`0006` was **mis-scoped, not wrong**, and B2 re-scopes it rather than reversing
-it. What it got right and keeps: the kernel is configured big-endian and that
-binding stands, the toolchain target is big-endian, SH-2A has no little-endian
-form so the density extension cannot move, and the glossary had no authority to
-say otherwise. What it stated too broadly: that there is no per-product-point
-byte order **and no migration**, and that making the hardware little-endian is
-"not a configuration change". Decision B2-1 makes the *data* path exactly a
-configuration — a per-guest one — so that exclusion does not survive.
+`0006` was **mis-scoped, not wrong**, and B2 re-scopes rather than reverses it;
+the full accounting of what survives and what does not is in that record's own
+*Re-scope* section. Two points belong here because they are B2's:
 
-Two of `0006`'s objections to a wholesale little-endian J-Core are untouched by
-this and are now the only load-bearing ones left: **SH-2A has no little-endian
-encoding form**, and **a wholesale switch is a flag day across four repositories
-with no measurement saying what it buys**. Neither is an argument against a
-per-guest data mode, and neither is repealed by one. They are cost, not
-exclusion.
-
-`0006` also carried a sentence saying a guest's byte order is a property of the
-guest image and its device model, "not of the host's fetch path". That is true
-of a software-emulated guest and false of a KVM guest, which uses the host's
-path by construction — which is precisely why the mode bit of §3.1 has to exist
-in hardware rather than being arranged in software.
+1. **What does not survive is an exclusion, not a fact.** `0006` read "the RTL
+   has one byte order and no mode bit" as "there will be no other byte order".
+   Decision B2-1 makes the data path a per-guest configuration, so the
+   product-point statement holds and the exclusion does not.
+2. **Two of its objections stand and are now the only load-bearing ones**:
+   SH-2A has no little-endian encoding form, and a wholesale switch is a flag
+   day across four repositories with no measurement saying what it buys. Neither
+   argues against a per-guest *data* mode, and neither is repealed by one. They
+   are cost, not exclusion — which is why B2-1 avoids both by not being a
+   wholesale switch.
 
 ### 4.2 Consequences for the SIMD encoding collisions
 
