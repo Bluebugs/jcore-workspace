@@ -362,48 +362,106 @@ silent. §5.
 
 ## 5. The decode-fidelity rule, and the encodings that break it
 
-> **Decision B2-5 (normative).** On any core that can host an SH-4 guest, every
-> encoding SH-4 defines must, when executed by a guest, either (a) behave as
-> SH-4 defines it, or (b) raise an exception the hypervisor observes. **No such
-> encoding may decode as a different J-Core instruction.**
+> **Decision B2-5 (normative).** On any core that can host an SH-4 or SH-4A
+> guest, every encoding SH-4 **or SH-4A** defines must, when executed by a
+> guest, either (a) behave as that architecture defines it, or (b) raise an
+> exception the hypervisor observes. **No such encoding may decode as a
+> different J-Core instruction.**
+
+*SH-4A is in the rule deliberately.* An earlier draft said "every encoding SH-4
+defines", inherited from [j4-remediation-plan.md §B4](j4-remediation-plan.md)'s
+wording and then asserted as this document's own. It excluded the SH-4A-only
+encodings, which is wrong twice over: an SH-4A guest is as much a guest as an
+SH-4 one, and [fpu/spec.md §6.1](fpu/spec.md)'s Tier 1 explicitly targets SH-4A
+additions. It also silently dropped one of the violations below —
+`FSCA` is `SH4=false, SH4A=true` in the canonical database.
 
 The rule is deliberately not "J-Core may not reuse SH-4 encodings". Reuse is
 fine where it is *contextual and unreachable* — a reinterpretation that requires
 an open SIMD block cannot be reached by a guest that never opens one. The rule
 bites only on encodings a guest can execute from a cold start.
 
-Applied to the tree, the rule has **two live violations in shipping RTL** and
+Applied to the tree, the rule has **four live violations in shipping RTL** and
 **two on paper**.
 
-### 5.1 Live, in `jcore-cpu@origin/master`: `CLDS` / `CSTS`
+### 5.1 Live, in `jcore-cpu@origin/master`: four encodings, not two
 
 The canonical encoding database ([decisions/0003](decisions/0003-canonical-encoding-database.md),
-`jcore-cpu/docs/insns.json`) already records the collision in its own
-`collides` annotation: the annotation on flds FRm,FPUL names clds, and the
-annotation on fsts FPUL,FRn names csts. Both J-Core forms are marked live on
-J2 and J4; both SH-4 forms are marked live on SH-4. They are the same sixteen
-bits.
+`jcore-cpu/docs/insns.json`) already records all four in its own `collides`
+annotations. Each pair is bit-identical, with the J-Core form marked live on J2
+and J4 and the SH-4 form marked live on SH-4 and SH-4A:
 
-The coprocessor decode that makes them live is on by default —
-`copro_decode` defaults true in `core/cpu.vhd` and only the timing-synthesis
-harness sets it false — so on a J4 build these two encodings do **not** take the
-general-illegal path the rest of the `1111` plane takes. What they do instead
-depends on whether a coprocessor is attached, and nothing specifies it. Either
-way it is not `FLDS`/`FSTS`, and it is not a trap.
+| J-Core form | SH-4 form it occupies | Plane |
+|---|---|---|
+| `clds CPI_Rm,CPI_COM` | `flds FRm,FPUL` | `1111` |
+| `csts CPI_COM,CPI_Rn` | `fsts FPUL,FRn` | `1111` |
+| `lds Rm,CPI_COM` | `lds Rm,FPUL` | `0100` |
+| `sts CPI_COM,Rn` | `sts FPUL,Rn` | `0000` |
 
-**This is the one finding in this whole task that is a defect in hardware that
-exists**, rather than a requirement on hardware that does not. Everything else
-here is a rule for future work.
+Four of those annotations are code-bound in [fact-ownership.md](fact-ownership.md):
+the annotation on flds FRm,FPUL names clds;
+the annotation on fsts FPUL,FRn names csts;
+the annotation on lds Rm,FPUL names lds;
+and the annotation on sts FPUL,Rn names sts.
 
-**Why no existing check caught it.** `jcore-cpu`'s collision sweep
+**Read those four bindings for exactly what they check, and no more.** Each
+asserts that a given mnemonic still appears inside a given `collides`
+annotation. None of them asserts that the two encodings coincide — the database
+has no field saying that which a single capture could read. **All four will go
+red the day B4 does the re-homing this section asks for**, which is correct
+behaviour and not a regression: the re-homer updates this table and the rows
+together, and the red is the reminder to.
+
+**The second pair is worse than the first, and this task missed it on the first
+pass.** `LDS Rm,FPUL` … `STS FPUL,Rn` is the *ordinary* SH-4 integer↔FP bridge —
+the sequence any FP-using SH-4 binary executes to move a word between a general
+register and the FPU. It sits outside the `1111` plane, in `0100` and `0000`, so
+it has no plane-wide illegal-instruction backstop at all: a stock SH-4 guest
+running that bridge silently drives the coprocessor communication register
+instead. The first pass found the `1111` pair by looking at the FP plane and
+stopped there, which is precisely the shape of search that misses the encodings
+that are not where you are looking.
+
+**Why the trap does not catch them, corrected.** An earlier revision blamed the
+`copro_decode` generic. That was wrong, and the truth is worse.
+
+- Whether an encoding traps is decided by the **decoder specification**, not by
+  `copro_decode`. `opcode = "1111` appears exactly twice across
+  `decode/gen-go/spec/` — the two CPI forms above — so those encodings are
+  *declared*, and the generated illegal-instruction check can never fire on them
+  on **any** build. The `0100`/`0000` pair is declared the same way, in
+  `decode/gen-go/spec/system.toml`.
+- `copro_decode` gates only two output muxes in `core/cpu.vhd`
+  (`coproc.cpu_data_mux` and `coproc.coproc_cmd`). Setting it **false** does not
+  restore a trap: the instruction still decodes, `coproc_cmd` becomes `NOP` and
+  the write-back mux falls through to `DBUS`. That is a **silent nop with
+  writeback from the data bus** — strictly worse than the coprocessor behaviour,
+  not a safe fallback.
+
+Either way, none of the four is `FLDS`/`FSTS`/`LDS`/`STS` as SH-4 defines them,
+and none of them traps.
+
+**These four are the only findings in this task that are defects in hardware
+that exists**, rather than requirements on hardware that does not. Everything
+else here is a rule for future work.
+
+**Why no existing check caught them.** `jcore-cpu`'s collision sweep
 ([decisions/0003 §Enforcement](decisions/0003-canonical-encoding-database.md))
 fails only on two instructions with an identical encoding that **share an
-enabled variant**. `CLDS` is a J2/J4 instruction and `FLDS` is an SH-4
-instruction, so under that rule they never ship together — which is true of
-*bare metal* and false of *a J4 hosting an SH-4 guest*. **Virtualization makes
-the SH4 and J4 variant columns co-resident, and the variant rule has no way to
-express that.** Teaching the sweep about the guest-hosting pair is work for
-**B4**; this document supplies the requirement.
+enabled variant**. The J-Core forms are J2/J4 and the SH-4 forms are SH4/SH4A,
+so under that rule they never ship together — which is true of *bare metal* and
+false of *a J4 hosting an SH-4 guest*. **Virtualization makes the J and SH
+variant columns co-resident, and the variant rule has no way to express that.**
+Teaching the sweep about the guest-hosting pair is work for **B4**.
+
+**Re-homing them is not something B4 can do alone.** [j4-remediation-plan.md §B4](j4-remediation-plan.md)
+is scoped to `docs/insns.json` and the check gate. These four encodings are
+defined in `decode/gen-go/spec/system.toml`, which *generates* both `insns.json`
+and the shipping RTL decoder — so a re-home is an RTL change in another
+repository, not a database edit. **B4 plus an RTL / SoC co-owner**, or it does
+not happen. The one cost that is *not* incurred is the toolchain:
+`binutils-gdb@origin/master` has no SH `clds` or `csts` at all, so no assembler
+or disassembler entry has to move.
 
 ### 5.2 On paper, in `simd/spec.md`
 
@@ -494,7 +552,7 @@ always carries the §5 obligation.
 | AIC2 vectoring | **Emulated** | Decision B2-3, §3.4. |
 | Little-endian paired-`FMOV` divergence | **Deferred, and re-armed** | Inert while B2-4 traps all guest FP, so nothing observes it today. But a double-`FMOV`'s half-pair order is a *data*-path property, so Decision B2-1 puts it back in scope: [fpu/spec.md §6.2](fpu/spec.md)'s analysis becomes a live requirement the day a Tier-1 FPU lands, and it is no longer "withdrawn". |
 | SIMD-vs-scalar encoding collisions | **Native — must decode as SH-4 or trap** | Decision B2-5, §5.2. Re-homing is B4. |
-| `CLDS`/`CSTS` vs `FLDS`/`FSTS` | **Native — violation in shipping RTL** | §5.1. New in this task; the review did not have it. |
+| `CLDS`/`CSTS` vs `FLDS`/`FSTS`, and `LDS`/`STS` `CPI_COM` vs `FPUL` | **Native — four violations in shipping RTL** | §5.1. New in this task; the review did not have it. The `LDS`/`STS` pair is the ordinary SH-4 integer↔FP bridge and sits outside the `1111` plane, so nothing traps it at all. |
 | Guest SH-4 FP native or trapped | **Trapped** | Decision B2-4, §4. |
 | J-Core P4 offsets that sit on stock SH-4 registers | **Emulated — no guest consequence**; a bare-metal divergence only | §3.2 and [soc/p4-mmio-map.md §5](soc/p4-mmio-map.md) rule 8. |
 
@@ -523,8 +581,14 @@ always carries the §5 obligation.
 - **Teach the collision sweep about guest-hosting.** The SH4 and J4 variant
   columns are co-resident under virtualization and the sweep's variant rule
   cannot say so (§5.1). Owner: **B4**.
-- **Re-home `CLDS`/`CSTS`, `VLD.Q`/`VST.Q`, `VMKCHG`**, and correct
-  [simd/spec.md §5.4.2](simd/spec.md)'s free-slot claim. Owner: **B4**.
+- **Re-home four RTL encodings** — `CLDS`, `CSTS`, `LDS Rm,CPI_COM`,
+  `STS CPI_COM,Rn` (§5.1) — plus the paper ones, `VLD.Q`/`VST.Q` and `VMKCHG`,
+  and correct [simd/spec.md §5.4.2](simd/spec.md)'s free-slot claim. Owner:
+  **B4 *and* an RTL / SoC co-owner**. B4 as the plan scopes it — `insns.json`
+  plus the check gate — **cannot deliver the first four**: they are defined in
+  `decode/gen-go/spec/system.toml`, which generates both the database and the
+  shipping decoder, so re-homing them is an RTL change in another repository.
+  Toolchain cost is nil (`binutils-gdb@origin/master` has no SH `clds`/`csts`).
 - **Pin the qemu tiebreaker to a tag** (§6). Owner: [fpu/spec.md](fpu/spec.md)
   for the FPU surface; the VMM work for the register surface.
 - **The store-queue carve-out is enabled against hardware that does not exist**
