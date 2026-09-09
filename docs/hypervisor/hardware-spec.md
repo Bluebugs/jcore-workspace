@@ -386,12 +386,31 @@ disclosure and corruption on the hot path the carve-out exists to accelerate. Se
 largest single security line item in that design.
 
 **This list is incomplete as of 2026-09-08, and the missing entry is known.**
-[../sh4-guest-model.md §3.1](../sh4-guest-model.md) (Decision B2-1) adds a per-guest
-**data byte-order mode**, hypervisor-owned and not guest-writable. It is per-vCPU state by the same
-argument as everything above, and per thread context by the same argument again. Neither the mode
-nor its control register exists yet; when it does, it belongs in this list and in the save/restore
-contract, and a guest resumed under the wrong byte order sees silently wrong data — the outcome
-[../sh4-guest-model.md §1](../sh4-guest-model.md) outlaws.
+[../bi-endian-spec.md §6](../bi-endian-spec.md) (Decision BE-1) adds a per-context **byte-order
+mode** covering both the data path and instruction fetch, hypervisor-owned and neither
+guest-writable nor guest-readable. It is carried in **two** bits, and only one of them belongs in
+this list:
+
+- **`LE`** — the byte order of the current non-hyperprivileged context. **Per-vCPU state**, by the
+  same argument as everything above, and **per thread context** by the same argument again. When it
+  exists it belongs in this list and in the save/restore contract. A guest resumed under the wrong
+  byte order sees silently wrong data *and executes silently wrong instructions* — the outcome
+  [../sh4-guest-model.md §1](../sh4-guest-model.md) outlaws, now reachable through the fetch path
+  as well as the data path.
+- **`HLE`** — the byte order hyperprivileged code runs in, and therefore the byte order every
+  hypervisor entry starts in. It describes the **host**, of which there is one, and is written once
+  at hypervisor initialisation. It is **not** per-vCPU and must not be added to this list; putting
+  it here would make the byte order of the trap handler depend on which guest was interrupted,
+  which is the exact property the second bit exists to remove
+  ([../bi-endian-spec.md §6.2](../bi-endian-spec.md)).
+
+Neither bit exists in `jcore-cpu` today, and neither has been allocated a register or a bit
+position — [../bi-endian-spec.md §10](../bi-endian-spec.md) records that allocation as an open item
+owned by **§2.2 of this document**.
+
+*This paragraph previously named a per-guest **data** byte-order mode from Decision B2-1, as a
+single unnamed bit. B2-1 is superseded; the mode covers both paths and takes two bits, of which one
+is per-vCPU and one is not.*
 
 This mirrors [../mmu/hardware-spec.md](../mmu/hardware-spec.md)'s per-context requirement for
 `ASIDR`, `PTEH`, `TEA`, `MMUFSR` and `TSBPTR`, already recorded in

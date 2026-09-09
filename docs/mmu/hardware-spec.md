@@ -91,12 +91,18 @@ ASID_TAG[15:0] = (ASID[11:0] | (gen_low[3:0] << 12))
 
 Hardware does not interpret the split; only the kernel does. The Linux ASID allocator in [linux-spec.md §5](linux-spec.md) produces this 16-bit value directly.
 
-**A per-guest byte-order mode joins this register set when it is built.**
-[../sh4-guest-model.md §3.1](../sh4-guest-model.md) (Decision B2-1) makes the data path's byte
-order a per-guest, hypervisor-owned mode. Like `ASIDR` it is live per-context state that a context
-switch must carry, and like `ASIDR` getting it wrong misattributes one context's view of memory to
-another. It does not exist in `jcore-cpu` today; this note is here so the register set is not
-believed complete.
+**A per-context byte-order bit joins this register set when it is built.**
+[../bi-endian-spec.md §6](../bi-endian-spec.md) (Decision BE-1) makes the byte order of the data
+path **and of instruction fetch** a per-context, hypervisor-owned mode. Its `LE` bit — the byte
+order the current non-hyperprivileged context runs in — is live per-context state that a context
+switch must carry, exactly like `ASIDR`, and getting it wrong misattributes one context's view of
+memory to another in exactly the same way. Its companion `HLE` bit describes the host rather than a
+context and does **not** join this set. Neither exists in `jcore-cpu` today; this note is here so
+the register set is not believed complete.
+
+*This note previously described a per-guest **data** byte-order mode from Decision B2-1, which is
+superseded. The change that matters for a per-context register list is that a wrong `LE` now also
+mis-fetches, so the failure is not confined to data.*
 
 **ASIDR is per-thread-context on FGMT implementations.** On a single-threaded core there is one ASIDR per CPU, as described above. On a core with `n_tc` hardware thread contexts ([glossary §4](../glossary.md)) each thread runs an independent address space, so the core holds **`n_tc` copies of ASIDR**:
 

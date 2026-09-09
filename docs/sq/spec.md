@@ -198,22 +198,47 @@ hardware performs no writeback and does not clear `HSQCR.VALID`/`DIRTY` for the 
 trap entry. The hypervisor alone decides, after inspecting the buffer via §6.2, whether the burst
 is considered consumed and clears `HSQCR` accordingly before resuming the guest.
 
-### 6.4 The queue inherits the guest's byte order (normative)
+### 6.4 Queue-data stores follow the guest's byte order; the burst has none (normative)
 
-**Decision:** queue-data stores and the `QACRn`-formed burst are **data**
-accesses, so they follow the guest's byte-order mode — the byte lanes a guest
-store lands in, and the byte order of the 32-byte burst, follow the guest's
-setting and not the host's.
+> **SUPERSEDED BY this section's own text — 2026-09-08.** It previously read
+> "**Decision:** queue-data stores and the `QACRn`-formed burst are **data**
+> accesses, so they follow the guest's byte-order mode — the byte lanes a guest
+> store lands in, and the byte order of the 32-byte burst, follow the guest's
+> setting and not the host's." The half about the burst is **withdrawn**: it was
+> written against Decision B2-1, whose scheme was word-invariant, and it does not
+> survive the move to byte invariance. The half about the stores stands and is
+> restated below.
 
-Per [../sh4-guest-model.md §3.1](../sh4-guest-model.md), Decision B2-1, J-Core is
-to gain a per-guest little-endian *data* mode, owned by the hypervisor and not
-guest-writable. This section is in §6 and not in §3 deliberately: §1 declares
+**Decision:** queue-data stores are **data** accesses, so they follow the
+guest's byte-order mode: the byte lanes a guest store lands in follow the
+guest's setting and not the host's. **The 32-byte burst has no byte order of
+its own** and needs no rule.
+
+Per [../bi-endian-spec.md §1](../bi-endian-spec.md), Decision BE-1, J-Core is to
+gain a byte-invariant per-context byte-order mode covering the data path and
+instruction fetch, owned by the hypervisor and neither guest-writable nor
+guest-readable. This section is in §6 and not in §3 deliberately: §1 declares
 §1–§5 to be the non-virtualized baseline, and this requirement is per-guest and
-hypervisor-owned, so it belongs with the rest of the hypervisor interaction. It
-governs both halves of §3–§4's subject — the lanes a store lands in, and the
-order of the burst §4 issues — and both are restated above rather than
-cross-referenced, because a reader of §4 alone must not be able to build the
-burst path without meeting this.
+hypervisor-owned, so it belongs with the rest of the hypervisor interaction.
+
+**Why the burst drops out, since this is a requirement being removed and a
+removed requirement deserves more argument than an added one.** Under byte
+invariance the swap sits at the register boundary
+([../bi-endian-spec.md §2.2](../bi-endian-spec.md)), so what a guest's stores
+leave in the queue buffer is *raw bytes* — already in the order they will occupy
+in memory. §4's burst writes all 32 of those bytes to the bus in one
+transaction. A byte copy of bytes that are already correct has nothing to
+reorder, in either mode. The buffer is not a register file and the burst is not
+a load or a store; it is the one part of this path with no byte-order property
+at all.
+
+Had the scheme been word-invariant, the withdrawn half would have been
+necessary — under address adjustment the buffer's byte at offset 0 is not
+necessarily the memory byte at offset 0, and the burst would have had to know
+which mode laid the bytes down. That is one concrete instance of the cost §2.2
+of the bi-endian spec is about, and it is recorded here because it is the only
+place in this workspace where the two schemes produce a visibly different
+requirement.
 
 **Rationale, and why it is not optional politeness.** §4.4.3 of
 [../hypervisor/hardware-spec.md](../hypervisor/hardware-spec.md) carves the SQ
@@ -225,12 +250,23 @@ Neither the mode nor the queues exist yet; both must arrive with this property
 already in them, because there is no later point at which a guest would notice
 it was missing.
 
-**Interaction with §7.** The mode is per-vCPU context like everything else in
-§7, and like `HSQCR` it must be restored before the guest resumes: a vCPU
-resumed under the wrong byte order bursts a buffer whose bytes were laid down
-under the other one. See
+**Interaction with §7.** The mode's `LE` bit is per-vCPU context like everything
+else in §7, and like `HSQCR` it must be restored before the guest resumes. *This
+paragraph previously gave the failure as "a vCPU resumed under the wrong byte
+order bursts a buffer whose bytes were laid down under the other one", which is
+the withdrawn burst claim in another form and is false under byte invariance:
+the burst is unaffected.* The real failure is one step earlier and no less
+serious — a vCPU resumed under the wrong `LE` lays down **subsequent** stores
+into that buffer in the wrong byte order, mixing them with the bytes it wrote
+before the exit, and then bursts the mixture. Nothing traps, because the
+carve-out exists to keep this path untrapped. See
 [../hypervisor/hardware-spec.md §2.9](../hypervisor/hardware-spec.md), whose
-per-vCPU register list records the same gap.
+per-vCPU register list records the same gap and distinguishes `LE` from `HLE`.
+
+**Hyperprivileged buffer readback (§6.2) needs no byte-order rule.** The
+hypervisor runs at `HLE`, so its loads from a guest's queue buffer assemble in
+the host's byte order — which is what saving and restoring raw bytes requires,
+and what §7's save sequence already assumes.
 
 ## 7. Context Switch
 
