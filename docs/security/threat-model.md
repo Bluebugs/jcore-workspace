@@ -429,6 +429,19 @@ observable by the same mechanism as the architectural one.
 the two are not the same claim.** Wave 3's C2b must cover the I-side walk arm,
 not only the D-side load path.
 
+**Widened by C2b, 2026-09-09 — it is two installs and four transmitters, not
+one install.** The paragraph above says "a TLB install", singular. An I-side
+install also drives a second, **speculative DTLB install** one cycle later —
+`core/cpu.vhd` registers `shadow_wr <= walk_install and walk_side_i` and re-drives
+the DTLB write port from it — so a squashed fetch reaches the D-side translation
+array as well as the I-side one. Counting the L1-I line the fetch itself filled,
+a fetch squashed before dispatch can leave state in four structures, and three of
+the four are conditional on the arm this section names. The enumeration, the rules
+that bound them, the one that is accepted rather than closed, and the experiment
+that prices the gate are [mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md).
+**Nothing in this widening moves the verdict** — it makes the exposure wider than
+this section stated and does not make it new.
+
 ### 7.3 Delay-on-miss is a good primary and is not a solution
 
 **Ratified as specified, with its completeness claim removed.**
@@ -450,6 +463,26 @@ address or a branch condition), rule 5 gives mode snapshots. What is missing is
 (a) the I-side walk arm of §7.2, (b) an honest statement of the residual, and
 (c) the scope fix to §8.2a's sentence. **All three are Wave-3 C2b**, and item
 **L4** of §8 is the pass mark.
+
+**All three have landed as specification, 2026-09-09 — and the sentence had a
+second defect that the completeness charge hid.** (a) is
+[mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md); (b) is §10 items 11–13
+below; (c) is [ooo/j32ooo-spec.md §8.2a](../ooo/j32ooo-spec.md), where the
+sentence is now scoped to the fill/allocation half. The second defect is that
+§8.2a **contradicted itself**: two bullets above the struck sentence, speculative
+L1-D hits proceed at full speed, and [ooo/j32ooo-spec.md §11.1, §11.2](../ooo/j32ooo-spec.md)
+make both L1s pseudo-LRU — so a hitting load that never commits does update
+replacement state, in the same subsection that said no non-committing load can.
+This is the *speculative-hit pLRU-update contradiction*
+[j4-remediation-plan.md §C2](../j4-remediation-plan.md) asks C2b to resolve, and
+it is worth noting that it sat inside a sentence already flagged for a different
+reason: striking the completeness claim would have deleted the evidence of the
+contradiction without ever naming it. **It is a defect of the specifications and
+of nothing built** — `jcore-cpu@origin/master`'s L1s are direct-mapped and hold
+no replacement state, and a case-insensitive search of that tree for `plru` or
+`pseudo-lru` returns nothing. It is therefore *not* the same finding as §7.6's
+hit-time pLRU update, which is about two way-partitions of a shared L2 and
+belongs to **L5**/C2e; the two share a word and not a mechanism.
 
 ### 7.4 "Do not truncate `ASID_TAG` into a predictor index" — conclusion upheld, on a third leg
 
@@ -975,6 +1008,38 @@ re-published with the implementation, since a mitigation that closes one
 transmitter changes which residuals remain. A green corpus with no updated
 residual list does not discharge this item's last clause.
 
+**Widening 3 — the mechanism list splits in two, and the split is the point.**
+*(C2b, 2026-09-09.)* The four mechanisms Wave 3 lists against this item are not
+one workstream. **Commit-time predictor updates, a tenant-tagged BTB and
+degenerate-STT taint** describe structures that exist in no repository — a
+case-insensitive search of `jcore-cpu@origin/master` for `branch_pred`, `btb`,
+`bimodal`, `gshare`, `ras` or `predictor` returns no predictor, no RTL logic and
+six false positives — and all three are **already specified**, for the design
+points [decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md)
+paused: [ooo/j32ooo-spec.md §3.2](../ooo/j32ooo-spec.md) trains every predictor
+structure at commit only from a `DOM` captured at rename, tags the BTB with the
+full `DOM`, and §9.4 rule 3 is the degenerate taint. C2b added no clause to any
+of them. **Delayed speculative TLB/PTW fill** is the fourth, and it is the only
+one that lands on hardware that exists. A wave that had spent its effort on the
+first three would have produced a defence for a paused path and left the live arm
+where it was — which is the shape of the status line this item carried.
+
+**What C2b changed, and what it did not.** The I-side arm now has a rule
+([mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) **W-R1**), the frontend
+prefetch gap in the paused specs has one
+([ooo/j32ooo-spec.md §11.1a](../ooo/j32ooo-spec.md)), the completeness sentence
+is scoped (§7.3), and the residuals are named (§10 items 11–13). No test in
+clause (a) exists, no non-vacuity demonstration in clause (b) has been run, and
+no RTL has changed. This item stays `NOT MET`.
+
+**The category is different from L2, L3 and L6, and reading it as the same would
+be the mistake.** Those three are unmet because the hardware to test is not
+built — no IOMMU, no FPU, no store queues. **L4's transmitters are on
+`origin/master` today.** The gate here is RTL nobody has written against
+hardware that ships, not a specification waiting for a unit to exist. It is the
+one bar item on this list whose evidence clauses (a) and (b) could begin being
+discharged now, for the walk arm, with the counter **W-E1** describes.
+
 **Gated Wave-3 items:** C2b.
 
 ### L5 — Cache isolation beyond ways
@@ -1100,7 +1165,7 @@ which bar they must clear.
 | **C1b** eager FP/SIMD switch *(design landed 2026-09-09; no RTL possible — see §7.8)* | **L3**, **L6**, **L1**'s added clause | L3's *no-saved-image* branch — an eager save/restore between two established owners passes without touching it (§7.8). The clause most likely to be missed **next** is that the branch is not the only one: `HEDR[3]`/`HEDR[24]` delegation hands the first-use trap to the guest, so a scrub written into that handler is switched off by configuration |
 | **C1c** FPSCR ownership *(design landed 2026-09-09; **the fix is above this bar, not on it** — see §8 L3)* | **L3**, and it turns out **none of L3** | That the defect is **not** cross-tenant. C1b's FP-R3 already scrubs `FPSCR`, so the exposure is between two tasks inside one guest: wrong rounding mode from the parked FPU owner's `FPSCR.RM`, sticky flags accumulated into it. The clause most likely to be missed **next** is [simd/spec.md §2.4.1](../simd/spec.md) **S-R2** — the natural optimisation is to require ownership only when `VCSR.IEE = 1`, since that is when `FPSCR` is *written*, and it leaves the `FPSCR.RM` read open in the **default** mode. The second is **S-R3**: §3.2's prefix encodes `H`/`ww`/`rrr`/`N` and nothing that says FP, so "checked at prefix decode" is unimplementable without scanning the block's governed opcodes |
 | **C2a** GPU protection *(design landed 2026-09-09; no RTL possible — no GPU exists in either repo)* | **L2**, **L6**, and a scoping question against **L1** | L2 is `N/A` only while no tenant-influenced DMA master exists. The GPU *is* one, so C2a flips L2 to blocking — and C2a does **not** move L2, because L2 is about the IOMMU and the GPU's windows are inside the GPU. The clause most likely to be missed **next** is that the row's single bar item was wrong in two directions. **L6:** [simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md) **G-R8** makes the tile buffer, texture cache and per-warp register files ownership-change sites, so L6 gains three *specified, unbuilt* structures; G-R7 adds no `undefined` site because it defines the blocked-access result. **L1:** see §8 L1's scoping note — L1's own text may already bar the multi-tenant GPU that C2a is written to enable, which is not C2a's to decide |
-| **C2b** speculation coverage | **L4**, **L7** part 4 | The **TSB walk** is a frontend transmitter (§7.2), and the I-side arm is on the *in-order* core too. Also: §12's code-level trigger — making the walk uncacheable flips §7.1 |
+| **C2b** speculation coverage *(design landed 2026-09-09; **the implementation half is dispatchable in part, which no earlier Wave-3 item was** — see §8 L4)* | **L4**, **L7** part 4 | The **TSB walk** is a frontend transmitter (§7.2), and the I-side arm is on the *in-order* core too. Also: §12's code-level trigger — making the walk uncacheable flips §7.1. The clause most likely to be missed **next** is that three of this row's four named mechanisms target structures no repository contains *and are already specified* for the paused design points, so an implementer who works the list in order builds nothing that runs; the fourth, delayed speculative TLB/PTW fill, is the whole of the live work. The second is that an abort path in `core/tlb_walk.vhd` looks like the same mitigation and is not — **W-R2**: it closes the two installs and leaves the cacheable TSB reads, which are §7.1's observable |
 | **C2c** FGMT microreset | **L1** | The detector. "An unenforceable rule with no detector is not a control" |
 | **C2d** IOMMU | **L2** | Two of the five clauses are inherited without C0 backing and owe a derivation (§7.7) |
 | **C2e** cache isolation | **L5**, **L6** | Five mechanisms, five tests. The MSHR one must target the **L2** pool, not the core-side pool that already has evidence |
@@ -1113,7 +1178,7 @@ which bar they must clear.
 | L1 | **NOT MET** — rule specified; gang-switch list complete as a specification (item 7 C1a, item 8 C1b); no detector, and no item on the list demonstrated | C2c |
 | L2 | **NOT MET** — reset is all-bypass, and that reset is a *specification* value: no IOMMU RTL exists in `jcore-cpu` or `jcore-soc` at `origin/master` (case-insensitive `iommu`, `bmid`: zero files). C2a's design landed and does **not** move this item — its windows sit inside the GPU, one master port down from where L2 acts | C2d |
 | L3 | **NOT MET** — eager-across-tenants specified by C1b; *specified, unbuilt* — no FPU and no SIMD unit exists to run the five residue tests on. C1c's design landed and does **not** bear on this item: its defect is intra-tenant (§8 L3) | the RTL that builds an FPU |
-| L4 | **NOT MET** — specified for cores that do not exist; I-side walk arm uncovered on the core that does | C2b |
+| L4 | **NOT MET** — the I-side walk arm is now *specified* ([mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) W-R1–W-R5, C2b) and unimplemented; the frontend rules of the paused specs are tightened but remain specified for cores that do not exist. **Not the same category as L2/L3/L6:** the transmitters are on `origin/master` today, so what is missing is RTL against shipping hardware, not hardware to test | C2b |
 | L5 | **NOT MET** — way-partitioning specified; metadata, L2 MSHRs, bandwidth, KSM, flush-op gating all open | C2e |
 | L6 | **NOT MET** — **1** open `undefined` site, was three; the store-queue and FP/SIMD sites are *specified, unbuilt* — the scrubs are stated and `jcore-cpu` has neither queues nor an FPU to run the residue tests on. C2a adds three more *specified, unbuilt* sites and no new `undefined` one: the GPU tile buffer, texture cache and per-warp register files ([simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md) G-R8) | C2e, and the RTL that builds the queues, the FPU and the GPU |
 | L7 | **NOT MET** — both preconditions absent; walker already merged | hypervisor Phase 3 |
@@ -1240,6 +1305,38 @@ close one is scope expansion, not compliance.
 9. **[accepted]** **Fault and exception oracles** — `EXPEVT`/`TEA`/`MMUFSR` are high-fidelity by
    design and fine within a tenant.
 10. **[accepted]** **Rowhammer**, and everything physical.
+11. **[accepted]** **The L1-I line filled by a wrong-path fetch**, on every core in this
+    document. *(Added by C2b, 2026-09-09.)* A fetch squashed before dispatch has already
+    entered `MISS1` and committed its tag — `cache/icache_ccl.vhm` has no speculation input
+    at all — and the shipping L1-I is **direct-mapped**, so one line is the whole eviction set
+    for its index and an observer resolves that index with no ambiguity. Unlike the walk arm
+    it cannot be closed by delay, because a fetch cannot wait for the dispatch of the
+    instruction it is fetching. Both mechanisms that would close it are refused elsewhere and
+    C2b did not overturn either: a flush-on-switch filter cache is on
+    [j4-remediation-plan.md §E.10](../j4-remediation-plan.md)'s **don't build** list, and a
+    speculative fill buffer is [ooo/j32ooo-spec.md §20.7](../ooo/j32ooo-spec.md) rejection 1,
+    refused on live-patent grounds. [mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md)
+    **W-R4** names a third — discarding the returning line instead of committing its tag —
+    and declines to adopt it until the prior-art check §20.7 requires has been done and
+    **W-E1** has measured how often the case arises.
+12. **[accepted]** **The I→D shadow fill's cross-structure disclosure, intra-tenant.**
+    *(Added by C2b, 2026-09-09.)* An ITLB install drives a speculative DTLB install of the
+    same page (§7.2), so a page that was only ever *executed* becomes D-side resident and
+    D-side timing reports I-side activity. **W-R1** removes its transient-execution half by
+    removing the arm; what is left is architectural and inside one tenant, which is where
+    **L1** puts observer and victim — the same position item 7 above takes on the AnC
+    primitive, and it is listed beside it deliberately, because that is now three intra-guest
+    channels rather than two.
+13. **[accepted, speculative class only]** **Replacement-metadata update by a squashed
+    *hitting* load.** *(Added by C2b, 2026-09-09.)* Delay-on-miss lets L1-D hits proceed
+    speculatively, and a hit moves a pLRU tree
+    ([ooo/j32ooo-spec.md §8.2a](../ooo/j32ooo-spec.md)). **This channel does not exist on any
+    core that has been built** — the shipping L1s are direct-mapped and hold no replacement
+    state — and it is distinct from item 2, which is the *same word* about a different
+    mechanism: item 2 is a victim's architectural hit crossing an L2 way partition and is
+    **L5**'s, this is a squashed path inside one domain and is **L4**'s. The one mechanism
+    that would close it has no price in §E.10 and the decision belongs to whoever resumes the
+    design point.
 
 ---
 
@@ -1263,12 +1360,18 @@ from case-sensitively grepping a case-insensitive language (see §7.1). It is no
 bound as `cache.l1.index`. **The `TSBBR` bounds check is still absent** from `tlb_walk.vhd` — fail-open does not supply one — so
 **L7** stands unchanged.
 
+**One further row was closed by Wave-3 C2b** (2026-09-09) and deleted on the same
+principle: [ooo/j32ooo-spec.md §8.2a](../ooo/j32ooo-spec.md)'s completeness
+sentence is scoped, and the scoping turned up a second defect inside the same
+sentence that the row did not know about — see §7.3. The row for
+`jcore-cpu/docs/architecture/tlb.md` below is **not** closed and has grown; it is
+now the implementation half of C2b.
+
 | Defect | Owner |
 |---|---|
-| `jcore-cpu/docs/architecture/tlb.md §7` still claims the core is "strictly non-speculative" and that "the **software** TLB walk … removes … AnC". Both false; cross-repo, so not fixable in this commit | Wave-3 **C2b** (it touches `jcore-cpu` anyway) |
+| `jcore-cpu/docs/architecture/tlb.md §7` still claims the core is "strictly non-speculative" and that "the **software** TLB walk … removes … AnC". Both false; cross-repo. **C2b's design half read the file and the count is now four, not two** *(2026-09-09)*: the same sentence also says "no prefetcher" and "no data/target speculation", and **§4.1 of that same file calls the I→D shadow fill a "speculative install" in four places** — so the document contradicts itself across two sections, which is why the row cannot be closed by deleting a clause; the residual paragraph under it also carries the `TSB_SIZE_LOG` offset range that Wave-2 **B1** corrected in [mmu/hardware-spec.md §2.8a](../mmu/hardware-spec.md), and §1's banner still describes the walker as arriving on a branch. **This is C2b's implementation half and it is dispatchable now** — it needs no hardware, only the repository | Wave-3 **C2b**, implementation half |
 | **J32-FM — the product — has no owning specification.** One glossary table cell is its entire definition, and the glossary is not authoritative | Wave-2 **B3** |
 | **The guest-`ASIDR` justification has expired** — *the contradiction is corrected, the security question is not.* [hypervisor/design-spec.md §5](../hypervisor/design-spec.md) now records that `ASIDR` is the TLB **match** input on every translation (`core/cpu.vhd`, `asid => dp_mmu_regs.asidr(...)` into both TLB instances) and a TSB index input on every miss, so the "write-only staging state consulted only at `LDTLB` time" argument for leaving a guest write untrapped is void; the stale one-`LDTLB`-trap costing beside it is likewise marked. **Whether the write must now be trapped is a hypervisor-design decision B1 did not make.** | Wave-2 **B1** (doc) → **Wave-3** (decide) |
-| [ooo/j32ooo-spec.md §8.2a](../ooo/j32ooo-spec.md)'s completeness sentence needs scoping (§7.3) | Wave-3 **C2b** |
 | [cache/l2-spec.md §16.1](../cache/l2-spec.md)'s "closes the channel" needs scoping to occupancy (§7.6) | Wave-3 **C2e** |
 | Intra-guest AnC (§7.1) has no bar item and no owner | Wave-3, after C2b |
 | The one-cycle `dp_p4_viol` window clobbers an older fault's `TEA` ([j4-wave0-status.md](../j4-wave0-status.md)) | Wave-3 follow-up, red guard first |
@@ -1305,7 +1408,7 @@ which flips it**:
 | **The walker's TSB reads stop being cacheable** — `jcore-cpu/core/cpu.vhd`, the `TSB COHERENCY POLICY` block, currently "the walker reads through the very cache those stores go through" | §7.1's observable disappears and the AnC verdict flips **back to `N/A`**. §6's AnC row, §10 items 5 and 7, and §11's intra-guest row all move with it | **C2b — this is the most obvious AnC mitigation available**, and it would be done for that reason. It is also not free: the RTL block records that the uncached path "is not coherent with dirty dcache lines holding TSB writes" |
 | **The TSB set stops being exactly one cache line** — either `mmu/hardware-spec.md §2.8`'s set size or `jcore-cpu/cache/cache_pkg.vhd`'s `cache_line_width_bits` moves | The observer gains or loses sub-line ambiguity. A *larger* line weakens the attack; a set spanning two lines strengthens it | A cache resize for area or for the L2's `L2_LINE_BYTES=64` option |
 | **`tsb_ptr()` stops being XOR-separable, or its VPN half stops being GF(2)-linear** — `jcore-cpu/core/datapath_pkg.vhd` | The "recompute `g`, solve for VPN" step fails and the attack becomes a search rather than a solve. This is the *other* real mitigation, and `mmu/hardware-spec.md §2.8b` explains why it is closed to this project on prior-art grounds — **re-read that before proposing it** | Anyone re-reading §2.8a and concluding the fold should be secret |
-| **The hardware walker stops being the sole TLB installer** — `jcore-cpu/core/tlb_walk.vhd` | The whole of §7.1 and half of §0 revert to the superseded review's world | A revert, or a second install path added for the hypervisor |
+| **The hardware walker stops being the sole TLB installer** — `jcore-cpu/core/tlb_walk.vhd` | The whole of §7.1 and half of §0 revert to the superseded review's world | A revert, or a second install path added for the hypervisor. **Checked by C2b, 2026-09-09: this trigger has not fired, and it comes closer to firing than the row suggests.** `core/cpu.vhd`'s I→D shadow fill *is* a second write of the DTLB port, described in the RTL and in `jcore-cpu/docs/architecture/tlb.md` §4.1 as a "speculative install" — but it is derived from `walk_install`, so the walker is still the only thing that decides an entry exists. A reviewer reading "a second, speculative DTLB install" without following `shadow_wr` back to its driver would report this trigger as fired. [mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) **W-R3** makes keeping that true a rule rather than a coincidence |
 
 And for §7.2, which is what retires the "non-speculative core" premise:
 
@@ -1316,5 +1419,17 @@ And for §7.2, which is what retires the "non-speculative core" premise:
   be a genuine improvement, and would make §7.2, §6's in-order column and part of
   **L4** overstated rather than merely conservative. **Do not delete them; re-derive
   them**, because the *speculative* class keeps the exposure regardless.
+  **This bullet says "either" and the two are not equivalent** *(C2b, 2026-09-09)*:
+  [mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) **W-R2** shows that an
+  abort path closes the two TLB installs and leaves the walk's cacheable TSB
+  reads — §7.1's whole observable — already issued. Only the dispatch dependence
+  (**W-R1**) is the trigger this bullet describes. An implementation that lands
+  the abort path alone does **not** fire this trigger and must not be read as
+  having done so.
+- **`walk_i_miss` gains a dispatch term — the same event, seen from the other
+  side.** When W-R1 lands, §10 items 12 and 13 shrink and item 11 does not, and
+  **W-E1**'s counter is the evidence for clause (b) of §8 **L4**. Re-publishing
+  §10 at that moment is not optional tidying; it is the third clause of that
+  item.
 - **A tenant-influenced DMA master is added**, which flips L2 from `N/A` to
   blocking for that configuration.
