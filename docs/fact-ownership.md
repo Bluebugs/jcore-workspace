@@ -207,6 +207,49 @@ larger piece of work than this task's scope. The honest summary is that the
 registry can tell you the number changed and cannot tell you the number stopped
 matching the thing it counts.
 
+Wave-3 **C2b** added `mmu.walk.transmitters` and `mmu.walk.spec` — again one of
+each kind, and this time **with a `## Code bindings` row**, which is what makes
+the pair worth reading beside C2a's. C2b is the first Wave-3 task whose subject
+is hardware on `origin/master`, so its name fact is not left to guard a token on
+its own: the binding hung off `mmu.walk.spec` compares the driver the owner
+quotes for `shadow_wr` against the driver `jcore-cpu:core/cpu.vhd` actually uses.
+That is the difference between "the rule is written down" and "the rule is still
+true of the tree". Twelve perturbations were run, of which four pass:
+
+| Perturbation | Result |
+|---|---|
+| the owner's transmitter count changed from four to three | **caught twice**: `owner-has-fact` on a **pattern non-match** (the registry pattern pins the literal count), and `no-stale-value` on a **value disagreement** in `security/threat-model.md` |
+| the count changed to three in `security/threat-model.md` only, owner still four, link intact | **caught**, `no-stale-value`, on a **value disagreement** — the link does not license the number |
+| `mmu.walk.transmitters`'s `Constant` cell set to **3**, contradicting its own owner | **passes** — the cell is prose no check reads. Third time this table has recorded it; see C1c and C2a |
+| every `W-R`*n* token removed from the owner | **caught**, `owner-has-fact`, on a **pattern non-match** |
+| `W-R1` restated in `j4-execution-plan.md` with no link to the owner | **caught**, `restatement-is-linked` |
+| **`W-R1` inverted** — *"the arm need not wait … may be armed by a fetch that has not dispatched"*, token kept | **passes.** A name fact guards that a rule is **stated**, never what it says, and this is the sharpest instance the table has: the perturbed text is the exact behaviour the rule exists to forbid, and it reads as compliance |
+| `W-R1` narrowed to the ITLB install alone — *"the walk's TSB reads are unaffected"* — token **and** the transmitter count both kept | **passes**, and it is C2a's row repeated on a different subject. It is also the narrowing [security/threat-model.md §12](security/threat-model.md) now warns about explicitly, because W-R2 is the paragraph that exists to refuse it — a warning in prose, guarded by nothing |
+| a transmitter row deleted from the owner's table, the count left at **4** | **passes.** The value guard compares numbers between documents; it does not count rows |
+| the owner's quoted driver changed from `walk_install` to `dtlb_demand` | **caught**, `doc-matches-code`, on a **value disagreement** with `jcore-cpu:core/cpu.vhd@master`. This is the row C2a could not have: the guard consults the tree, not another document |
+| the binding's `Code pattern` changed to one the RTL does not contain | **caught**, `doc-matches-code`, on a **pattern non-match** — a binding that stops matching is a failure, not a silent pass, which is the property the `## Code bindings` preamble claims and this confirms |
+| ownership of `mmu.walk.spec` moved to `security/threat-model.md` | **caught by the cascade**: `owner-has-fact` passes (that document does state `W-R` tokens), and `restatement-is-linked` fails over the owner's own thirteen lines plus `ooo/j32ooo-spec.md` and `j4-execution-plan.md`. Same shape as C1c's and C2a's last rows |
+| the owner drops the count entirely — *"reaches several structures"* | **caught twice**: `owner-has-fact` on a **pattern non-match**, and `no-stale-value` reporting that the canonical pattern matches nothing in the owner, so there is no value to compare restatements against. Worth recording separately from the four-to-three case, because *deleting* a guarded number is the edit a writer makes when they are unsure of it |
+
+**A procedural failure is recorded here because it cost real work and will recur.**
+The first perturbation run was done with the registry rows still **uncommitted**,
+and the `git checkout -- docs/` that reverts each perturbation reverted the rows
+along with it. Two perturbations then reported `OK` against a tree that no longer
+contained the facts being tested — the same false green C2a recorded from a
+different cause, reached by a different route. The rule that follows is:
+**commit the facts before perturbing them**, and check `git diff` is non-empty
+after applying each perturbation, which is what caught it.
+
+The narrowing and inversion rows are what these facts do **not** buy, and no
+checker change was attempted for them, for C2a's reason: the mutation sweep that
+gates `scripts/check-doc-facts.py` is larger than this task. What C2b adds to
+C2a's honest summary is the other half of it — a **code binding** can tell you
+the document has stopped describing the tree, and still cannot tell you the
+document has stopped meaning what it said.
+
+C2b added no `## Image layouts` row: the `W-R` rules move no context state and
+specify no byte layout.
+
 C2a added no `## Code bindings` row: no GPU RTL exists in
 `jcore-cpu@origin/master` or `jcore-soc@origin/master` — a case-insensitive
 search for `gpu|shader|opencl|simt|warp|texel|rasteriz` returns two matches, both
