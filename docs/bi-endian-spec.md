@@ -15,7 +15,8 @@ them. It does **not** own the product's byte order, which is
 document.
 
 **Audience:** RTL implementers, hypervisor and VMM authors, and anyone about to
-write "J-Core is big-endian, so *X*" in a review.
+argue "J-Core is big-endian, so *X*" ([platform-baseline.md §2](platform-baseline.md))
+in a review. §1 is where that argument now has to stop.
 
 **Prerequisites:** [platform-baseline.md §2](platform-baseline.md) (the
 product's byte order), [sh4-guest-model.md](sh4-guest-model.md) (who the
@@ -561,8 +562,9 @@ owns.
 - **Build the mode.** §4.2's value permutations, §5.2's single instruction-word
   swap, and §6's two bits, with `LE` added to the per-vCPU and per-context state
   lists ([hypervisor/hardware-spec.md §2.9](hypervisor/hardware-spec.md),
-  [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md)). Cost is `unknown at this
-  stage — needs measurement`. **Owner: RTL / SoC integration**, jointly with
+  [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md)).
+  Cost: `unknown at this stage — needs measurement`.
+  **Owner: RTL / SoC integration**, jointly with
   [hypervisor/hardware-spec.md](hypervisor/hardware-spec.md).
 - **A test that can see §6.2's transition rule.** With `HLE` and `LE` both
   big-endian — the shipping configuration — no existing test distinguishes a
