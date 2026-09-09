@@ -110,7 +110,7 @@ minimize-loss step is settled.
 | C1a | SQ buffer residue scrub + defined-safe guest reads. **Design DONE 2026-09-09** — [sq/spec.md §6.5](sq/spec.md), [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md) item 7. **The implementation half is not dispatchable and this row's `docs → jcore-cpu` is wrong as written** — see below. | docs → jcore-cpu | Opus | *blocked on the queues existing* |
 | C1b | Eager (across-tenant) FP/SIMD switch + register scrub; 2-bit dirty tracking; movmu-style bulk save. **Design DONE 2026-09-09** — [fpu/spec.md §7.7](fpu/spec.md), [simd/spec.md §2.6.1](simd/spec.md), [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md) item 8. **The implementation half is not dispatchable in either repo** — see below. | docs → jcore-cpu + linux | Opus | *blocked on an FPU existing* |
 | C1c | Vertical-FP-SIMD FPSCR ownership fix + kernel-fpu discipline. **Design DONE 2026-09-09** — [simd/spec.md §2.4.1](simd/spec.md), [fpu/spec.md §6.3.1](fpu/spec.md), [simd/spec.md §2.6.2](simd/spec.md). **The defect is real and is *not* the bar item this row is filed under; the implementation half is not dispatchable in `linux`** — see below. | docs → linux | Opus | *blocked on an FPU existing* |
-| C2a | GPU memory protection (base+bounds or IOMMU/BMID) — launch blocker before user shaders. | docs → jcore-cpu | Opus | Opus |
+| C2a | GPU memory protection (base+bounds or IOMMU/BMID) — launch blocker before user shaders. **Design DONE 2026-09-09** — [simd/gpu/simd-gpu-spec.md §16](simd/gpu/simd-gpu-spec.md), [simd/gpu/architecture.md §5.4](simd/gpu/architecture.md). **The `or` is a false alternative, the "launch blocker" is not blocking any scheduled launch, and the implementation half is not dispatchable in any repo** — see below. | docs → jcore-cpu | Opus | *blocked on a GPU program existing* |
 | C2b | Speculation: delay-on-miss + frontend coverage (commit-time predictor updates, tenant-tagged BTB, degenerate-STT taint, delayed spec TLB/PTW). | docs → jcore-cpu | Opus | Opus |
 | C2c | FGMT single-tenant-core + fence.t-style microreset on realloc. | docs → jcore-cpu | Opus | Opus |
 | C2d | IOMMU default-deny + per-device block + no global-match IOTLB + coherent-DMA owner. | docs → jcore-cpu + jcore-soc + linux | Opus | Opus |
@@ -182,6 +182,59 @@ Three findings, in the order they matter.
    Sonnet to add. The rules are [fpu/spec.md §6.3.1](fpu/spec.md) and
    [simd/spec.md §2.6.2](simd/spec.md), and they bind the task that lands `CPU_HAS_FPU`, which this
    plan does not contain.
+
+**C2a reverses this row three ways, and the third one is about this plan rather than about the
+GPU.** *First, the mechanism.* The row offers "base+bounds **or** IOMMU/BMID". Those are not
+alternatives. [bus/fabric-spec.md §4.1–§4.2](bus/fabric-spec.md) makes BMID a constant held in the
+*fabric*, not in the master, which the fabric stamps onto every transaction "overwriting any
+BMID-like field the master itself might assert" — that unforgeability is the whole security value
+of BMID, and it means a GPU holding 4–8 warps resident
+([simd/gpu/architecture.md §1.1](simd/gpu/architecture.md)) cannot present a different BMID per
+tenant without one physical master port per tenant. An IOMMU keyed on BMID can stop the GPU
+reaching outside the GPU; it cannot stop warp A reading warp B's texture, because both requests
+carry the same BMID. So the design picks base+bounds for the inner boundary and keeps the IOMMU as
+the outer one, and the two rejected alternatives are recorded in
+[simd/gpu/simd-gpu-spec.md §16.4](simd/gpu/simd-gpu-spec.md).
+
+*Second, the C2d dependency, which turns out not to bind the chosen mechanism.* The IOMMU option
+would have depended on C2d, since the IOMMU resets with every master bypassing
+([iommu/hardware-spec.md §8](iommu/hardware-spec.md)) — and it is weaker than "unconfigured": no
+IOMMU RTL exists in `jcore-cpu@origin/master` or `jcore-soc@origin/master` either. Per-context
+base+bounds is self-contained and does not duplicate C2d, because C2d's granularity is the master
+port and the GPU is one master port hosting many tenants. The ordering constraint that survives is
+therefore not "C2d before C2a" but **"C2d before any GPU bring-up that runs more than one
+tenant"**, with a recorded single-tenant mode for the case where the GPU arrives first
+([simd/gpu/simd-gpu-spec.md §16.3](simd/gpu/simd-gpu-spec.md) G-R10). A precondition nobody has
+scheduled sits in front of even that: [bus/fabric-spec.md §4.4](bus/fabric-spec.md)'s normative
+allocation policy **has no GPU row**, so the GPU has no BMID to route.
+
+*Third, "launch blocker" is true as a gate and false as urgency.* This row's phrasing implies work
+in front of it. There is none. `jcore-ulx3s-service-plan.md` — the roadmap [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md)
+re-staged — contains no occurrence of *GPU*, *OpenCL*, *shader*, *SIMT*, *Mesa* or *graphics* in its
+entire length; it lists "framebuffer / desktop / video" under **non-goals** and the board's video
+connector as "unused in this plan". 0009 itself never mentions the GPU, and its numbered sequence
+runs 0 → 8.5 with no GPU phase before or after. The GPU's own documents agree: `no-gpu-dual-ecp5-asic.md`
+is "Status: Research note / parked analysis" and says the rig is worth doing "*if* the
+programmable-GPU program is ever un-parked; not a reason on its own to un-park it", and
+[simd/gpu/architecture.md §1](simd/gpu/architecture.md) targets a **single Artix-7 XC7A200T** —
+a different FPGA from the ECP5-85F the whole service plan is built on. So C2a is not a blocker on
+the critical path; it is an **entry condition on un-parking**, and the design is worth having now
+for the reason the rest of Wave 3 is: this is the cheapest moment, because nothing has been built
+wrong yet. Stating it as urgency would be the error, and stating it as unimportant would be the
+opposite error.
+
+**The implementation half is not dispatchable in any repo, and this row's `docs → jcore-cpu` is
+wrong twice.** There is no GPU in `jcore-cpu` or `jcore-soc` at `origin/master` — a
+case-insensitive search for `gpu|shader|opencl|simt|warp|texel|rasteriz` returns two matches, both
+false positives (`vpiSimTime` in `sim/sim/vpibridge.c`, the label `_movwarpr` in
+`testrom/tests/testmov.s`). That is the same shape as C1a, C1b and C1c, but with a harder edge:
+those three block on hardware some later task is expected to build, while C2a blocks on a program
+that appears in no wave and no phase. And when it is built, `jcore-cpu` is the wrong single repo:
+[simd/gpu/architecture.md §2, §5.1](simd/gpu/architecture.md) puts the command processor, the
+DDR-controller ports, the tile write-out DMA and the scanout on the SoC side, and the missing BMID
+row is `bus/fabric-spec.md`'s. The rules land **inside** whatever task builds the SM, for
+[sq/spec.md §6.4](sq/spec.md)'s reason: after the GPU runs its first user kernel there is no point
+at which a tenant would notice a missing check.
 
 One further plan item did not survive checking. §E.10 prices C1's fix as
 "movmu-style bulk save + per-register zero bit + background scrub", which reads as three cost
