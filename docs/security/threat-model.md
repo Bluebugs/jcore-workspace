@@ -435,8 +435,8 @@ install also drives a second, **speculative DTLB install** one cycle later —
 `core/cpu.vhd` registers `shadow_wr <= walk_install and walk_side_i` and re-drives
 the DTLB write port from it — so a squashed fetch reaches the D-side translation
 array as well as the I-side one. Counting the L1-I line the fetch itself filled,
-a fetch squashed before dispatch can leave state in four structures, and three of
-the four are conditional on the arm this section names. The enumeration, the rules
+a fetch squashed before dispatch reaches **4** transmitters ([mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md)), and three
+of them are conditional on the arm this section names. The enumeration, the rules
 that bound them, the one that is accepted rather than closed, and the experiment
 that prices the gate are [mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md).
 **Nothing in this widening moves the verdict** — it makes the exposure wider than
@@ -1165,7 +1165,7 @@ which bar they must clear.
 | **C1b** eager FP/SIMD switch *(design landed 2026-09-09; no RTL possible — see §7.8)* | **L3**, **L6**, **L1**'s added clause | L3's *no-saved-image* branch — an eager save/restore between two established owners passes without touching it (§7.8). The clause most likely to be missed **next** is that the branch is not the only one: `HEDR[3]`/`HEDR[24]` delegation hands the first-use trap to the guest, so a scrub written into that handler is switched off by configuration |
 | **C1c** FPSCR ownership *(design landed 2026-09-09; **the fix is above this bar, not on it** — see §8 L3)* | **L3**, and it turns out **none of L3** | That the defect is **not** cross-tenant. C1b's FP-R3 already scrubs `FPSCR`, so the exposure is between two tasks inside one guest: wrong rounding mode from the parked FPU owner's `FPSCR.RM`, sticky flags accumulated into it. The clause most likely to be missed **next** is [simd/spec.md §2.4.1](../simd/spec.md) **S-R2** — the natural optimisation is to require ownership only when `VCSR.IEE = 1`, since that is when `FPSCR` is *written*, and it leaves the `FPSCR.RM` read open in the **default** mode. The second is **S-R3**: §3.2's prefix encodes `H`/`ww`/`rrr`/`N` and nothing that says FP, so "checked at prefix decode" is unimplementable without scanning the block's governed opcodes |
 | **C2a** GPU protection *(design landed 2026-09-09; no RTL possible — no GPU exists in either repo)* | **L2**, **L6**, and a scoping question against **L1** | L2 is `N/A` only while no tenant-influenced DMA master exists. The GPU *is* one, so C2a flips L2 to blocking — and C2a does **not** move L2, because L2 is about the IOMMU and the GPU's windows are inside the GPU. The clause most likely to be missed **next** is that the row's single bar item was wrong in two directions. **L6:** [simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md) **G-R8** makes the tile buffer, texture cache and per-warp register files ownership-change sites, so L6 gains three *specified, unbuilt* structures; G-R7 adds no `undefined` site because it defines the blocked-access result. **L1:** see §8 L1's scoping note — L1's own text may already bar the multi-tenant GPU that C2a is written to enable, which is not C2a's to decide |
-| **C2b** speculation coverage *(design landed 2026-09-09; **the implementation half is dispatchable in part, which no earlier Wave-3 item was** — see §8 L4)* | **L4**, **L7** part 4 | The **TSB walk** is a frontend transmitter (§7.2), and the I-side arm is on the *in-order* core too. Also: §12's code-level trigger — making the walk uncacheable flips §7.1. The clause most likely to be missed **next** is that three of this row's four named mechanisms target structures no repository contains *and are already specified* for the paused design points, so an implementer who works the list in order builds nothing that runs; the fourth, delayed speculative TLB/PTW fill, is the whole of the live work. The second is that an abort path in `core/tlb_walk.vhd` looks like the same mitigation and is not — **W-R2**: it closes the two installs and leaves the cacheable TSB reads, which are §7.1's observable |
+| **C2b** speculation coverage *(design landed 2026-09-09; **the implementation half is dispatchable in part, which no earlier Wave-3 item was** — see §8 L4)* | **L4**, **L7** part 4 | The **TSB walk** is a frontend transmitter (§7.2), and the I-side arm is on the *in-order* core too. Also: §12's code-level trigger — making the walk uncacheable flips §7.1. The clause most likely to be missed **next** is that three of this row's four named mechanisms target structures no repository contains *and are already specified* for the paused design points, so an implementer who works the list in order builds nothing that runs; the fourth, delayed speculative TLB/PTW fill, is the whole of the live work. The second is that an abort path in `core/tlb_walk.vhd` looks like the same mitigation and is not — [mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) **W-R2**: it closes the two installs and leaves the cacheable TSB reads, which are §7.1's observable |
 | **C2c** FGMT microreset | **L1** | The detector. "An unenforceable rule with no detector is not a control" |
 | **C2d** IOMMU | **L2** | Two of the five clauses are inherited without C0 backing and owe a derivation (§7.7) |
 | **C2e** cache isolation | **L5**, **L6** | Five mechanisms, five tests. The MSHR one must target the **L2** pool, not the core-side pool that already has evidence |
@@ -1315,15 +1315,16 @@ close one is scope expansion, not compliance.
     C2b did not overturn either: a flush-on-switch filter cache is on
     [j4-remediation-plan.md §E.10](../j4-remediation-plan.md)'s **don't build** list, and a
     speculative fill buffer is [ooo/j32ooo-spec.md §20.7](../ooo/j32ooo-spec.md) rejection 1,
-    refused on live-patent grounds. [mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md)
-    **W-R4** names a third — discarding the returning line instead of committing its tag —
+    refused on live-patent grounds. [mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) **W-R4** names a third —
+    discarding the returning line instead of committing its tag —
     and declines to adopt it until the prior-art check §20.7 requires has been done and
     **W-E1** has measured how often the case arises.
 12. **[accepted]** **The I→D shadow fill's cross-structure disclosure, intra-tenant.**
     *(Added by C2b, 2026-09-09.)* An ITLB install drives a speculative DTLB install of the
     same page (§7.2), so a page that was only ever *executed* becomes D-side resident and
-    D-side timing reports I-side activity. **W-R1** removes its transient-execution half by
-    removing the arm; what is left is architectural and inside one tenant, which is where
+    D-side timing reports I-side activity. [mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) **W-R1** removes its
+    transient-execution half by removing the arm; what is left is architectural and inside one
+    tenant, which is where
     **L1** puts observer and victim — the same position item 7 above takes on the AnC
     primitive, and it is listed beside it deliberately, because that is now three intra-guest
     channels rather than two.
@@ -1423,11 +1424,11 @@ And for §7.2, which is what retires the "non-speculative core" premise:
   [mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) **W-R2** shows that an
   abort path closes the two TLB installs and leaves the walk's cacheable TSB
   reads — §7.1's whole observable — already issued. Only the dispatch dependence
-  (**W-R1**) is the trigger this bullet describes. An implementation that lands
+  ([mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) **W-R1**) is the trigger this bullet describes. An implementation that lands
   the abort path alone does **not** fire this trigger and must not be read as
   having done so.
 - **`walk_i_miss` gains a dispatch term — the same event, seen from the other
-  side.** When W-R1 lands, §10 items 12 and 13 shrink and item 11 does not, and
+  side.** When [mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) **W-R1** lands, §10 items 12 and 13 shrink and item 11 does not, and
   **W-E1**'s counter is the evidence for clause (b) of §8 **L4**. Re-publishing
   §10 at that moment is not optional tidying; it is the third clause of that
   item.

@@ -310,7 +310,7 @@ was left with the design point that would build it.
 since C0 and it needs no hardware, only the repository. It has also grown: the same sentence claims
 "no prefetcher" and "no data/target speculation" while **§4.1 of that same file calls the I→D
 shadow fill a "speculative install" in four places**, so the document contradicts itself across two
-sections. (b) The W-R1 gate itself is real RTL against hardware that exists — a dispatch term on
+sections. (b) The [mmu/hardware-spec.md §5.0a](mmu/hardware-spec.md) **W-R1** gate itself is real RTL against hardware that exists — a dispatch term on
 `walk_i_miss` in `core/cpu.vhd`, plus the counter **W-E1** describes, which is what makes the
 non-vacuity clause of **L4** dischargeable for this transmitter at all. What is *not* dispatchable
 is everything in [ooo/j32ooo-spec.md §11.1a](ooo/j32ooo-spec.md) and the paused specs' rules: no

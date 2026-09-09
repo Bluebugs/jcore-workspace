@@ -109,6 +109,8 @@ are the substitute for a check that cannot be written cleanly — see
 | `fpu.kernelfpu` | Kernel-mode FP/SIMD rules `K-R1`–`K-R5`; the exit scrub is `K-R3` | [fpu/spec.md §6.3.1](fpu/spec.md) | `\bK-R[1-5]\b` |
 | `gpu.protect.producers` | GPU address producers under the window check: **6** (`P1`–`P6`) | [simd/gpu/simd-gpu-spec.md §16.2](simd/gpu/simd-gpu-spec.md) | `\*\*6\*\* address producers` |
 | `gpu.protect.rules` | GPU memory-protection rules `G-R1`–`G-R10`; the handover scrub is `G-R8` | [simd/gpu/simd-gpu-spec.md §16.3](simd/gpu/simd-gpu-spec.md) | `\bG-R(?:10\|[1-9])\b` |
+| `mmu.walk.transmitters` | Transmitters a fetch squashed before dispatch reaches: **4** | [mmu/hardware-spec.md §5.0a](mmu/hardware-spec.md) | `\*\*4\*\* transmitters` |
+| `mmu.walk.spec` | I-side walk speculation rules `W-R1`–`W-R5`; the arm delay is `W-R1` | [mmu/hardware-spec.md §5.0a](mmu/hardware-spec.md) | `\bW-R[1-5]\b` |
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
@@ -325,6 +327,7 @@ formatting.
 | `sh4guest.stsfpul` | `annotation on sts FPUL,Rn names ([a-z]+)` | `jcore-cpu:docs/insns.json` | `"collides": \["(sts)\\tFPUL,Rn"\]` | `eq-text` |
 | `biendian.dside.bytelane` | `` onto `we = "([01]+)"` — bit 3 `` | `jcore-cpu:core/datapath.vhm` | `when "00" =>\s+r\.we := "([01]+)"` | `eq-text` |
 | `biendian.ifetch.select` | `` `instr_o\.a\((\d+)\)` — an address bit `` | `jcore-soc:targets/data_bus_pkg.vhd` | `if instr_o\.a\((\d+)\) = '0' then` | `eq` |
+| `mmu.walk.spec` | `` `shadow_wr <= (\w+) and walk_side_i` `` | `jcore-cpu:core/cpu.vhd` | `shadow_wr\s*<=\s*(\w+) and walk_side_i;` | `eq-text` |
 
 Notes on what is deliberately **not** here, so the gaps are visible rather than
 inferred from silence:
@@ -575,6 +578,7 @@ Two escapes, and they are different things:
 | `hyp.gangswitch.items` | `[\|]\s*(\d+)\s*[\|] Restore the incoming guest` | `\*\*(\d+)\*\* (?:numbered )?items` |
 | `security.l6.undefined` | `\*\*(\d+)\*\* open .undefined. sites?` | `\*\*(\d+)\*\* open .undefined. sites?` |
 | `gpu.protect.producers` | `\*\*(\d+)\*\* address producers` | `\*\*(\d+)\*\* address producers` |
+| `mmu.walk.transmitters` | `\*\*(\d+)\*\* transmitters` | `\*\*(\d+)\*\* transmitters` |
 
 ## Image layouts
 
