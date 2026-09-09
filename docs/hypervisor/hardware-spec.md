@@ -847,7 +847,7 @@ offset too, and this table is updated to name it.
 
 ### 4.3 EXPEVT values
 
-The hyperprivileged-mode extension adds five new EXPEVT codes on top of the existing SH-4 set. The full per-cause delegation routing — including which bit of HEDR controls each cause — is specified normatively in [§2.3.1](#231-expevt-to-hedr-bit-mapping-normative). Summary of the new codes:
+The hyperprivileged-mode extension adds **six** new EXPEVT codes on top of the existing SH-4 set. *(This sentence read "five" while the table below carried six rows, every one of them marked "(new)"; corrected 2026-09-09 by Wave-3 **C2c**, which counted them while looking for a free code point and then did not need one — [§4.7.2](#472-the-tenancy-check-normative-wave-3-c2c) refuses an `HRTE` rather than raising an exception, so it adds no seventh. The count is deliberately **not** registered in [../fact-ownership.md](../fact-ownership.md): the EXPEVT worklist is an open row in that file's "Unresolved" table and belongs to the hypervisor/priv-arch reconciliation, not to this task.)* The full per-cause delegation routing — including which bit of HEDR controls each cause — is specified normatively in [§2.3.1](#231-expevt-to-hedr-bit-mapping-normative). Summary of the new codes:
 
 | Code  | Cause                                                          | HEDR bit | Delegatable? |
 |-------|----------------------------------------------------------------|---------:|:------------:|

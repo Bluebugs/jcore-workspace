@@ -111,6 +111,8 @@ are the substitute for a check that cannot be written cleanly — see
 | `gpu.protect.rules` | GPU memory-protection rules `G-R1`–`G-R10`; the handover scrub is `G-R8` | [simd/gpu/simd-gpu-spec.md §16.3](simd/gpu/simd-gpu-spec.md) | `\bG-R(?:10\|[1-9])\b` |
 | `mmu.walk.transmitters` | Transmitters a fetch squashed before dispatch reaches: **4** | [mmu/hardware-spec.md §5.0a](mmu/hardware-spec.md) | `\*\*4\*\* transmitters` |
 | `mmu.walk.spec` | I-side walk speculation rules `W-R1`–`W-R5`; the arm delay is `W-R1` | [mmu/hardware-spec.md §5.0a](mmu/hardware-spec.md) | `\bW-R[1-5]\b` |
+| `hyp.microreset.classes` | Structure classes the microreset clears: **4** | [hypervisor/hardware-spec.md §4.7.1a](hypervisor/hardware-spec.md) | `\*\*4\*\* structure classes` |
+| `hyp.tenancy.rules` | Tenancy-check rules `T-R1`–`T-R5`; the refusal is `T-R2` | [hypervisor/hardware-spec.md §4.7.2](hypervisor/hardware-spec.md) | `\bT-R[1-5]\b` |
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
@@ -622,6 +624,7 @@ Two escapes, and they are different things:
 | `security.l6.undefined` | `\*\*(\d+)\*\* open .undefined. sites?` | `\*\*(\d+)\*\* open .undefined. sites?` |
 | `gpu.protect.producers` | `\*\*(\d+)\*\* address producers` | `\*\*(\d+)\*\* address producers` |
 | `mmu.walk.transmitters` | `\*\*(\d+)\*\* transmitters` | `\*\*(\d+)\*\* transmitters` |
+| `hyp.microreset.classes` | `\*\*(\d+)\*\* structure classes` | `\*\*(\d+)\*\* structure classes` |
 
 ## Image layouts
 

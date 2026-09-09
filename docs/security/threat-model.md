@@ -858,9 +858,10 @@ different MSHR pools:
 
 C2c's item 9 covers the second and explicitly not the first
 ([hypervisor/hardware-spec.md §4.7.1a](../hypervisor/hardware-spec.md)), together
-with three further classes that had the same problem: L1/TLB **replacement-policy
+with three further classes that had the same problem — L1/TLB **replacement-policy
 state**, the **FGMT thread-select state**, and any **write buffer** below a
-write-through L1-D. Item 9 exists because *"there is a control for it"* was doing
+write-through L1-D — for
+**4** structure classes ([hypervisor/hardware-spec.md §4.7.1a](../hypervisor/hardware-spec.md)) in all. Item 9 exists because *"there is a control for it"* was doing
 the work of *"it is on the list"*, and every structure the list reached had a
 control for a different reason.
 
@@ -873,8 +874,8 @@ control.
 
 **The detector is specified, 2026-09-09, Wave-3 C2c** —
 [hypervisor/hardware-spec.md §4.7.2](../hypervisor/hardware-spec.md), rules
-**T-R1**–**T-R5**, on a new per-thread-context hyperprivileged register `HTCR`
-(§2.10 there). It turns on a distinction §4.7 did not draw: hardware cannot know
+rules **T-R1**–**T-R5** of [hypervisor/hardware-spec.md §4.7.2](../hypervisor/hardware-spec.md),
+on a new per-thread-context hyperprivileged register `HTCR` (§2.10 there). It turns on a distinction §4.7 did not draw: hardware cannot know
 *which* tenant a context belongs to — §4.7 says so and is right — but it can be
 told that two contexts belong to *different* ones, and disagreement is the whole
 of the property. The check is evaluated at `HRTE`, which is the only transition
@@ -888,8 +889,9 @@ proposed"* is listed there as a condition that reopens this document, and it has
 now happened. What it changes is narrower than the trigger's wording suggests and
 the narrowing is the point: L1's *placement* half becomes a control, so §10 item 8
 and the C2e row's reliance on "the scheduler is right" are backed by hardware for
-the virtualized case. L1's *flush* half does not change — §4.7.2 **T-R3** clears
-nothing, deliberately, and the reason is
+the virtualized case. L1's *flush* half does not change:
+**T-R3** of [hypervisor/hardware-spec.md §4.7.2](../hypervisor/hardware-spec.md) clears nothing,
+deliberately, and the reason is
 [ooo/j32ooo-spec.md §20.7](../ooo/j32ooo-spec.md) rejection 2. And three cases
 stay pure policy: an unvirtualized multi-tenant system has no `HRTE` to check, a
 hypervisor may still hand two tenants the same number, and the GPU's SM is not
@@ -1515,7 +1517,9 @@ now the implementation half of C2b.
   **This trigger fired on 2026-09-09** — Wave-3 **C2c**,
   [hypervisor/hardware-spec.md §4.7.2](../hypervisor/hardware-spec.md). It converts
   the **placement** half for the virtualized case only and leaves the **flush** half
-  untouched by design (**T-R3**: the check scrubs nothing). Three cases stay policy:
+  untouched by design:
+  **T-R3** of [hypervisor/hardware-spec.md §4.7.2](../hypervisor/hardware-spec.md) scrubs nothing.
+  Three cases stay policy:
   an unvirtualized multi-tenant system, which executes no `HRTE`; a hypervisor that
   issues two tenants the same `HTCR.TENANT`, which hardware cannot see; and the GPU's
   SM, which §8 L1 now rules *is* a core for this item and for which no equivalent
