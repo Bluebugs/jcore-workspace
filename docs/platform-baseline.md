@@ -46,26 +46,48 @@ The decision, the evidence it rests on, and the little-endian alternative it
 rejects are [decisions/0006](decisions/0006-endianness-is-big-endian.md).
 In one line: the kernel is configured big-endian, the toolchain target is
 `sh2eb-linux-muslfdpic`, the SH-2A encodings the density extension targets have
-no little-endian form, and the instruction-fetch halfword selection in the RTL
-is big-endian with no mode bit to change it.
+no little-endian form, and **both bits of the byte-order mode reset to
+big-endian**.
+
+*That last clause is new as of 2026-09-08 and it replaces one that has been
+retired: "the instruction-fetch halfword selection in the RTL is big-endian with
+no mode bit to change it". The RTL description is still accurate — see
+[decisions/0006 §What the code says](decisions/0006-endianness-is-big-endian.md)
+— but it is no longer an argument for this section's verdict, because
+[bi-endian-spec.md](bi-endian-spec.md) specifies a mode bit. The verdict did not
+change; one of the four things holding it up was swapped for a stronger one, and
+saying so is the point of writing arguments down separately from verdicts.*
 
 The value is bound to `linux@jcore`'s `arch/sh/configs/jcore_defconfig` by
 `platform.endianness` in [fact-ownership.md](fact-ownership.md) §Code bindings,
 so this section and the kernel configuration cannot drift apart silently.
 
 **What this says, and what it does not.** It is a statement about the
-**product**: what the kernel is configured for, what the toolchain targets, and
-what instruction fetch does. It is *not* a statement that the hardware can only
-ever be big-endian.
+**product**: what the kernel is configured for, what the toolchain targets, what
+every artifact this project builds is built as, and what the machine does out of
+reset. It is *not* a statement that the hardware can only ever be big-endian —
+and as of [bi-endian-spec.md](bi-endian-spec.md) that caveat has teeth rather
+than being a formality, because a J-Core core running a little-endian guest is
+executing little-endian instructions on little-endian data. The product is
+big-endian; the machine is bi-endian, and those are different claims about
+different things.
 
-Project direction is that the **data path** gains a little-endian mode, owned by
-the hypervisor and selected per guest —
-[sh4-guest-model.md §3.1](sh4-guest-model.md), Decision B2-1. Instruction fetch
-stays big-endian, so a big-endian-compiled guest may run with little-endian
-data, while a stock little-endian binary still cannot run natively. None of this
-exists in `jcore-cpu` yet. The value bound below is the kernel configuration and
-it is unaffected: J32 and J64 ship big-endian, and the mode is a per-guest
-software configuration rather than a second product point. Nor does it say anything about SIMD *lane* order, which is
+Project direction is that the machine gains a **byte-invariant bi-endian mode**
+covering the data path **and** instruction fetch, owned by the hypervisor and
+selected per context — [bi-endian-spec.md §1](bi-endian-spec.md), Decision BE-1.
+A stock little-endian SH-4 binary therefore becomes executable as a guest. None
+of this exists in `jcore-cpu` yet, and both control bits reset to big-endian.
+The value bound below is the kernel configuration and it is unaffected: J32 and
+J64 ship big-endian, and the mode is a software configuration rather than a
+second product point.
+
+*This paragraph previously read that the **data path** gains the mode while
+instruction fetch stays big-endian, per Decision B2-1, "so a big-endian-compiled
+guest may run with little-endian data, while a stock little-endian binary still
+cannot run natively". B2-1 is superseded and both halves of that sentence are
+now wrong.*
+
+None of this says anything about SIMD *lane* order, which is
 little-endian within a vector register regardless of memory byte order and is
 owned by [simd/spec.md §2.2](simd/spec.md).
 
