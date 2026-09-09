@@ -789,7 +789,19 @@ that was restated.*
 
 **Requirement.** A Tier-1 FPU on an implementation that has the byte-order mode
 **must** implement the half-pair order described in points 1 and 2
-below, selected by that same mode. Neither the mode nor a Tier-1 FPU exists
+below, selected by that same mode.
+
+**This rule is SH-4's documented behaviour, not a J-Core invention**, and that
+is worth knowing before implementing it. The SH-4 software manual's note under
+its figure 2.5 states that SH-4 does not support endian conversion for the
+64-bit data format, so a double-precision access in little-endian mode has its
+upper and lower 32 bits reversed — which is exactly points 1 and 2. It is the
+one documented exception to SH-4's otherwise byte-invariant data format, and
+[../bi-endian-spec.md §3.1](../bi-endian-spec.md) records it as such. Two
+consequences: the requirement below is a **compatibility** obligation with a
+citable source rather than a derived one, and it does **not** generalise — no
+other access width on this machine has a half-pair rule, because no other
+access width is 64 bits wide. Neither the mode nor a Tier-1 FPU exists
 today, and whichever lands second inherits this requirement. Nothing observes it
 in the meantime, because guest FP is trapped and emulated
 ([../sh4-guest-model.md §4](../sh4-guest-model.md)) — that is a reason it is not
