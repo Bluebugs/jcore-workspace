@@ -395,14 +395,25 @@ floating point through a trap per instruction. That is expensive, and
 if such a guest ever becomes a real workload this decision is the thing to
 revisit — with a measurement, not an argument.
 
-**What would reopen it.** All three, not any:
+**What would reopen it.** All four, not any:
 
 1. A Tier-1 FPU exists in `jcore-cpu` and is enabled on a hypervisor-bearing
    variant.
 2. That FPU implements a trappable FP-disable control, so the hypervisor can
    still take ownership per [fpu/spec.md §7](fpu/spec.md)'s lazy model — native
    FP without a disable control is native FP the hypervisor cannot virtualize.
-3. A measurement on a real guest workload shows the trap cost is material.
+3. **That FPU implements the cross-tenant scrub of
+   [fpu/spec.md §7.7](fpu/spec.md), and the SIMD file implements
+   [simd/spec.md §2.6.1](simd/spec.md)'s.** *(Added 2026-09-09 by Wave-3 C1b.)*
+   Condition 2 is not sufficient and the difference is the whole of that task:
+   a disable control gives the hypervisor a trap, and
+   [security/threat-model.md §7.8](security/threat-model.md) shows the
+   trap's own no-saved-image branch hands the incoming guest the previous
+   tenant's registers. Turning native guest FP on without the scrub converts a
+   *latent* specification defect into a live cross-tenant channel on the first
+   gang-scheduled board, which is why it is a reopening condition and not an
+   implementation note.
+4. A measurement on a real guest workload shows the trap cost is material.
 
 ### 4.1 Dreamcast, and the consequences for `decisions/0006`
 
