@@ -771,7 +771,7 @@ project has that generic designs don't:
 | Speculation: delay-on-miss + frontend coverage (C2) | lost MLP / stalls | Bare DoM (no filter cache, **no value prediction**); FGMT overlap + ~2–6-cycle in-order shadow → target ~1%, likely net-positive energy. Frontend: predictor-updates-at-commit + 2–3-bit tenant-tagged BTB + degenerate-STT taint. Gang-scheduling removes the cross-tenant FGMT channel. |
 | Eager FP/SIMD switch + scrub (C1) | ~520 B V-file + FPU per switch | Eager+scrub **only at cross-tenant boundary**, dirty-bit lazy within tenant; 2-bit init/clean/dirty per block skips untouched state; movmu-style bulk save + per-register zero bit + background scrub → <0.9% @40 MHz. |
 | Cache isolation beyond ways (C2) | partition perf loss | DAWG-semantics ways (hit+fill masks + partitioned replacement metadata) ≤2%; hypervisor UCP epochs *beat* free sharing; per-thread MSHR reservation ≈0 on in-order. |
-| Core=single-tenant + flush on realloc (C2) | gang-switch flush (~15k cyc cold) | Tenant-tagged predictors (nothing to flush) + fence.t-style multi-cycle microreset of untagged transient state; **write-through L1 collapses the flush** to ~10² cyc; <1% at ms timeslices. |
+| Core=single-tenant + flush on realloc (C2) | gang-switch flush (~15k cyc cold) | Tenant-tagged predictors (nothing to flush) + a multi-cycle **microreset** of the untagged transient state, specified by Wave-3 C2c as [hypervisor/hardware-spec.md §4.7.1a](hypervisor/hardware-spec.md) and grounded pre-2006 there; **write-through L1 means there is no dirty write-back to flush** — a structural advantage, keep it. Cost: unknown at this stage — needs measurement (§4.7.1b, T-E2). |
 | Scrub SQ / registers on ownership change (C1) | zeroing cost on switch | Per-register/valid zero bit (1-cycle); background overlapped scrub under the hypervisor switch code; cross-tenant only; constant-time padded. |
 
 ---
@@ -1005,7 +1005,14 @@ software regulation recovers.
   missing address, redirect fetch, resolve a branch, or train a predictor);
   delayed speculative TLB/PTW fills. ProSpeCT shows the taint unit fits a small
   FPGA core (+17% LUT, +2% critical path).
-- **Tenant switch:** fence.t-style microreset, <1% at ms timeslices; tagged
+- **Tenant switch:** a **microreset** of the on-core state that has no other
+  control — [hypervisor/hardware-spec.md §4.7.1a](hypervisor/hardware-spec.md),
+  item 9 of the gang-switch list.
+  Cost: unknown at this stage — needs measurement.
+  *(This bullet named `fence.t` and gave "<1% at ms timeslices".
+  The name is a 2020 instruction and cannot be this project's authority under
+  [glossary.md §2](glossary.md); the figure is that paper's, for its core.)*
+  Tagged
   predictors survive. **Gang-scheduling by tenant** makes the cross-tenant FGMT
   contention channel structurally absent *and* legitimizes the sibling-thread
   recovery. **Don't build:** value prediction, MuonTrap filter caches (fallback),
@@ -1018,14 +1025,32 @@ software regulation recovers.
   (2-bit per block, like RISC-V FS/VS) makes the save ~0 when the unit was
   untouched; **eager across tenant boundary, dirty-bit lazy within a tenant**
   (Linux/KVM already do this).
-- **Scrub:** fence.t full on-core scrub is <1% perf / 0.13% area. **The
-  write-through L1 collapses the flush** from ~21,755 cycles (dirty-writeback
-  dominated) to a ~16-cycle reset — a structural advantage, keep it. Measured
-  gotchas to honor: a **single-cycle flush pulse leaks** (assert reset several
-  cycles); you must also reset the **replacement LFSR, arbiters, and miss
-  handler**. Per-register zero bit = 1-cycle zeroing; background scrub overlaps the
+- **Scrub:** the cost of a full on-core scrub on either of this project's targets
+  is **unknown at this stage — needs measurement**, and
+  [hypervisor/hardware-spec.md §4.7.1b](hypervisor/hardware-spec.md) **T-E2** is
+  the experiment. **The write-through L1 means there is no dirty write-back to
+  flush** — that is structural rather than a measurement, and it is the one claim
+  in this bullet that survives; keep it.
+  Two design consequences are adopted as **requirements** regardless of any
+  figure, because each is cheap and each fails silently:
+  a **single-cycle flush pulse leaks**, so the assert is multi-cycle with
+  observable completion (§4.7.1a constraint 4); and the **replacement state,
+  arbiters and miss handler** must be reset too, which is §4.7.1a's scope classes
+  1–3. Per-register zero bit = 1-cycle zeroing; background scrub overlaps the
   hypervisor's switch code; scrub **only on cross-tenant**; pad the switch to
   constant latency so it leaks nothing.
+
+  *(This bullet previously read "fence.t full on-core scrub is <1% perf / 0.13%
+  area" and "collapses the flush from ~21,755 cycles … to a ~16-cycle reset".
+  Every one of those four numbers is removed rather than annotated, per
+  [decisions/0005](decisions/0005-unmeasured-figures-are-removed.md), and Wave-3
+  **C2c** could not reproduce any of them from the source the sentence pointed
+  at: Wistoff et al. 2020 report **320 cycles** for `fence.t` on Ariane, of which
+  **256** are the write-through invalidate at one set per cycle, and "the number
+  of deployed LUTs remains within 1% of the original size" on **FPGA** — not
+  0.13% area. The mechanism is kept and re-grounded pre-2006 in
+  [hypervisor/hardware-spec.md §4.7.1a](hypervisor/hardware-spec.md); the numbers
+  were never this design's and two of them appear to be nobody's.)*
 
 **Cache isolation beyond ways — metadata bits, not cycles:**
 - **DAWG** (isolate hits + misses + replacement metadata) is ≤2% at half-cache,
