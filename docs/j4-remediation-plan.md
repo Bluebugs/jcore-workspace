@@ -771,7 +771,7 @@ project has that generic designs don't:
 | Speculation: delay-on-miss + frontend coverage (C2) | lost MLP / stalls | Bare DoM (no filter cache, **no value prediction**); FGMT overlap + ~2–6-cycle in-order shadow → target ~1%, likely net-positive energy. Frontend: predictor-updates-at-commit + 2–3-bit tenant-tagged BTB + degenerate-STT taint. Gang-scheduling removes the cross-tenant FGMT channel. |
 | Eager FP/SIMD switch + scrub (C1) | ~520 B V-file + FPU per switch | Eager+scrub **only at cross-tenant boundary**, dirty-bit lazy within tenant; 2-bit init/clean/dirty per block skips untouched state; movmu-style bulk save + per-register zero bit + background scrub → <0.9% @40 MHz. |
 | Cache isolation beyond ways (C2) | partition perf loss | DAWG-semantics ways (hit+fill masks + partitioned replacement metadata) ≤2%; hypervisor UCP epochs *beat* free sharing; per-thread MSHR reservation ≈0 on in-order. |
-| Core=single-tenant + flush on realloc (C2) | gang-switch flush (~15k cyc cold) | Tenant-tagged predictors (nothing to flush) + a multi-cycle **microreset** of the untagged transient state, specified by Wave-3 C2c as [hypervisor/hardware-spec.md §4.7.1a](hypervisor/hardware-spec.md) and grounded pre-2006 there; **write-through L1 means there is no dirty write-back to flush** — a structural advantage, keep it. Cost: unknown at this stage — needs measurement (§4.7.1b, T-E2). |
+| Core=single-tenant + flush on realloc (C2) | gang-switch flush (~15k cyc cold) | Tenant-tagged predictors (nothing to flush) + a multi-cycle **microreset** of the untagged transient state, specified by Wave-3 C2c as [hypervisor/hardware-spec.md §4.7.1a](hypervisor/hardware-spec.md) and grounded pre-2006 there; **write-through L1 means there is no dirty write-back to flush** — a structural advantage, keep it. Cost: unknown at this stage — needs measurement (§4.7.3, T-E2). |
 | Scrub SQ / registers on ownership change (C1) | zeroing cost on switch | Per-register/valid zero bit (1-cycle); background overlapped scrub under the hypervisor switch code; cross-tenant only; constant-time padded. |
 
 ---
@@ -1027,7 +1027,7 @@ software regulation recovers.
   (Linux/KVM already do this).
 - **Scrub:** the cost of a full on-core scrub on either of this project's targets
   is **unknown at this stage — needs measurement**, and
-  [hypervisor/hardware-spec.md §4.7.1b](hypervisor/hardware-spec.md) **T-E2** is
+  [hypervisor/hardware-spec.md §4.7.3](hypervisor/hardware-spec.md) **T-E2** is
   the experiment. **The write-through L1 means there is no dirty write-back to
   flush** — that is structural rather than a measurement, and it is the one claim
   in this bullet that survives; keep it.

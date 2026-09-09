@@ -292,7 +292,7 @@ where there is no code**: `hyp.tenancy.rules` guards a token in a document
 describing hardware that does not exist, so neither a binding nor a residue test
 can contradict it, and the inverted `T-R2` above would survive until the RTL is
 written. The mitigation is not a checker change; it is
-[hypervisor/hardware-spec.md §4.7.1b](hypervisor/hardware-spec.md)'s **T-E1**,
+[hypervisor/hardware-spec.md §4.7.3](hypervisor/hardware-spec.md)'s **T-E1**,
 which must fail before the check exists and pass after — and whose kill criterion
 is that a model with one thread context must report *not runnable* rather than
 passing vacuously.
