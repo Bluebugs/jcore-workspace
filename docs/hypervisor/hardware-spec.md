@@ -1432,6 +1432,58 @@ check does not notice — the check is about who is resident, not about what was
 per-structure residue tests [../security/threat-model.md §8](../security/threat-model.md) L1
 requires for `MET` are what would notice, and none of them can run yet.
 
+**Prior art (pre-2006), and the name this section deliberately does not use.**
+[../j4-remediation-plan.md §E.10](../j4-remediation-plan.md) called this mechanism
+"`fence.t`-style". `fence.t` is Wistoff, Schneider, Gürkaynak, Benini and Heiser, *Prevention of
+Microarchitectural Covert Channels on an Open-Source 64-bit RISC-V Core* (2020) and its DATE 2021
+successor — comfortably **post-2006**, so under [../glossary.md §2](../glossary.md) it cannot be
+this design's authority and its name is not adopted. §2's escape (a) applies instead: the
+mechanism is pre-2006 and is adapted, at three levels.
+
+- **The rule** is *object reuse*, TCSEC / DoD 5200.28-STD (1985): *"All authorizations to the
+  information contained within a storage object shall be revoked prior to initial assignment,
+  allocation or reallocation to a subject from the TCB's pool of unused storage objects. No
+  information, including encrypted representations of information, produced by a prior subject's
+  actions is to be available to any subject that obtains access to an object that has been released
+  back to the system."* NCSC-TG-018, *A Guide to Understanding Object Reuse in Trusted Systems*
+  (July 1992), adds that the clearing may be done either at deallocation or at allocation — item 9
+  chooses allocation. What §4.7.1a adds to 1985 is the observation that a replacement-policy state
+  machine and an MSHR are storage objects in this sense, which the criteria did not contemplate.
+- **The mechanism, on a cache specifically**, is Wei-Ming Hu, *Lattice scheduling and covert
+  channels*, Proc. 1992 IEEE Symposium on Security and Privacy, Oakland CA, pp. 52–61 (IEEE
+  Computer Society Press; DOI 10.1109/RISP.1992.213271). It describes the shared main-memory cache
+  as a covert channel, its exploitation on the VAX security kernel (Karger, Zurko, Bonin, Mason and
+  Kahn, *A VMM security kernel for the VAX architecture*, Proc. 1990 IEEE S&P), **how the channel
+  is closed and what closing it costs**, and introduces the lattice scheduler to reduce that cost.
+  The 2020 paper above cites this same work for the channel being known "for decades".
+- **The control** is SH-4 `CCR.ICI` / `CCR.OCI` (SH-4 hardware manual, 1998): an entire cache
+  invalidated by one privileged control-register write. `HMRC.SCRUB` is that shape applied to a
+  different set of arrays, which is exactly the argument
+  [../ooo/j32ooo-spec.md §20.4](../ooo/j32ooo-spec.md) already makes for the predictor invalidate.
+
+**What was verified, and what was not.** Hu 1992's venue, year and pages were checked against three
+independent records (the IEEE DOI entry, the ACM Digital Library entry `10.5555/882488.884165`, and
+the reference lists of two later papers); its *content* is from the publisher's abstract and from
+Fred B. Schneider's *Unexpected Communications Channels* ch. 13, which credits Hu with showing "how
+a shared main-memory cache could become a covert channel", **not** from the full text. A second
+candidate was checked and **rejected**: Hu's *Reducing timing channels with fuzzy time* (Proc. 1991
+IEEE S&P, pp. 8–20) is clock fuzzing, not state clearing, and is the wrong citation for this
+mechanism however well its title reads.
+
+**Rule-2 check, which [../glossary.md §2.1](../glossary.md) requires and which is why constraints 1
+and 2 are written as requirements.** A pre-2006 *structure* is not sufficient where the
+purpose-specific *combination* is separately claimed. The nearest recorded claim is the one
+[../ooo/j32ooo-spec.md §20.7](../ooo/j32ooo-spec.md) rejection 2 already names — SiFive
+US11429392, priority 2018: hardware detection of a domain transition **combined with** a
+multi-mode, progressively re-enabled reset. Constraint 1 (software-triggered) and constraint 2 (one
+mode, no progressive re-enabling) are the two halves of that combination, refused. A later designer
+who "improves" this by letting hardware notice a tenant change, or by bringing structures back
+online in stages as the scrub proceeds, re-assembles it. The post-cutoff literature contains at
+least one design that does exactly the first — Escouteloup et al. (2021) change a *Dome ID* and
+flush microarchitectural state implicitly — which is a warning rather than a citation. As
+§20.7 says of its own two findings, this is a documentation exercise and not a freedom-to-operate
+opinion; it warrants a professional search before RTL commits.
+
 ### 4.7.2 The tenancy check (normative, Wave-3 C2c)
 
 §4.7 states the placement rule and says plainly why it is the hypervisor's to enforce: "hardware
@@ -1524,6 +1576,32 @@ built on it would be absent on exactly the microarchitecture
 [../decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md) makes the default path.
 And `PDID`'s privilege was, until this task, stated three different ways in three sections (§2.8),
 one of which licensed a guest to write it. A check is only as trustworthy as the register it reads.
+
+**Prior art (pre-2006).** Every part of this check is an old mechanism used for a new reason,
+which [../glossary.md §2.1](../glossary.md) rule 1 says is the level the match is made at.
+
+- **The register.** A short, hyperprivileged, software-written domain number held per hardware
+  context is sun4v's `PRIMARY_CONTEXT` / `SECONDARY_CONTEXT` with a distinct hyperprivileged
+  nucleus context (UltraSPARC Architecture 2005, hyperprivileged edition) — the citation §2.8
+  already uses for `PDID`.
+- **The comparison.** Hardware comparing a software-written per-context domain number against a
+  stored one, and **not performing the operation** when they differ, is an ASID-tagged TLB: MIPS
+  R4000 (1991) and SH-4 (1998), both already cited by §2.8. T-R1 is that comparison with both
+  operands being contexts of one core instead of a context and a tag.
+- **The refusal.** An instruction that declines to take effect, records the fact, raises no
+  exception, and lets execution fall through to the next instruction is Alpha's `STx_C`: with the
+  lock flag clear, "the store to memory does not occur" and zero is returned in `Ra` (Alpha
+  Architecture Handbook, Digital EC-H1689-10, 1992). T-R2 is that shape applied to `HRTE`, with
+  `HTCR.VIOL` in place of the destination register. J-Core already ships the same shape in `CAS.L`.
+- **The policy the check backs.** Scheduling mutually distrusting principals so they do not share
+  cached state concurrently is Hu 1992's lattice scheduler and Ousterhout's coscheduling (ICDCS
+  1982), both cited by §4.7.1 already.
+
+**Rule-2 check.** The purpose-specific combination here is *refusing a return-to-guest because two
+thread contexts of one core hold different tenant numbers*. No claim on that combination was found,
+pre- or post-2006, and the absence of a find is weaker evidence than a find; the same
+professional-search caveat §4.7.1a and [../ooo/j32ooo-spec.md §20.7](../ooo/j32ooo-spec.md) carry
+applies here unchanged.
 
 ### 4.7.1b What §4.7.1a and §4.7.2 cost, and the experiments that price them
 
