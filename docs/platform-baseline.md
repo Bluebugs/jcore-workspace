@@ -116,6 +116,38 @@ actually in the netlist"* when the J4 leg stopped building with the J2 decoder
 and `yosys` stopped pruning the TLB. That is a scope change, not erosion — but
 it is the number a J4 throughput estimate has to use.
 
+**How much margin the J4 row has, because a roadmap that quotes it should not
+imply the gate is tight.** The gate reads **one** `nextpnr` seed, and the
+workflow's own sweep on the J4 netlist records the distribution behind that one
+sample: seed-to-seed `sd` is ~1.2 MHz, and the arm CI runs
+(`--placer-heap-timingweight 100`) measured 32.51 ± 0.41 MHz over 16 seeds with
+a 16-seed **minimum of 31.15**. At `nextpnr`'s default weighting the same
+netlist measured 30.97 ± 0.61 with a 16-seed minimum of **28.69 — below the
+floor** — which is why the non-default weighting was chosen: a narrower band is
+worth as much to a one-sample gate as a higher mean. So the floor sits roughly
+two standard deviations under the mean, and the observed worst seed clears it by
+about one `sd`. That is a real margin and a thin one, and it is the margin any
+microarchitectural addition to J4 spends.
+
+*The workflow states the corollary in capitals, and it is repeated here because
+it bears on every roadmap estimate: the placement gain is netlist-specific. On
+an older netlist the same flag measures a null (36.15 ± 0.87 against
+35.90 ± 0.40, 12 seeds each), so a floor for a future core has to be re-derived
+from its own sweep rather than shifted by a constant.*
+
+**"~40 MHz" is not a J4 number and is not this project's `[FPGA]` target.** The
+figure entered [j4-remediation-plan.md](j4-remediation-plan.md) guiding
+principle 1 as "Phase-1 is the ULX3S / ECP5 FPGA at ~40 MHz" and propagated from
+there into [decisions/0004](decisions/0004-platform-tag-convention.md) rule 3,
+[decisions/0005](decisions/0005-unmeasured-figures-are-removed.md) rule 4 and
+two SIMD implementation guides. Against this table it is J2's row — the
+shipping, MMU-less baseline — and J2 is not what the roadmap is building. There
+is no measurement, floor or goal for a J4 equal to 40 MHz anywhere in
+`jcore-cpu@master`; the only 40 in that workflow is J2's `ECP5_FMIN_MHZ`. The
+framing is retired by
+[decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md), which
+restates the Phase-1 deliverable against this table instead.
+
 **Why the harness and not the bare core.** `jcore-cpu`'s `synth/README.md`
 explains it: the bare `cpu` exposes ~348 ports as pads, which on the sparse 85F
 scatters the core and inflates routing, so its reported `Fmax` is a measurement
@@ -132,6 +164,14 @@ the regfile-read/MAC-accumulate datapath"*, so reaching 50 MHz needs
 microarchitectural work (pipelining), not tuning. The `[ASIC]` ambition of
 ~400 MHz+ is a different target on different silicon and is not derived from
 any of this.
+
+This is the **only** `[FPGA]` frequency goal the project has, and as of
+2026-09-08 it is code-bound: `platform.fmax.target` in
+[fact-ownership.md](fact-ownership.md) §Code bindings ties this line to the
+workflow's `env:` block, so a goal stated here that the workflow does not hold
+is a red run. It is bound because the paragraph above needed it to be — a
+second, lower "target" circulated in five documents with nothing to compare it
+against.
 
 **80 MHz was never measured and is gone.** The figure appeared in
 [jcore-ulx3s-service-plan.md](jcore-ulx3s-service-plan.md) as an in-order J32

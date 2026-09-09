@@ -27,6 +27,18 @@ because what *it* decides is a product-line property with no owning subsystem �
 which is why it needed a new owning document ([platform-baseline.md](../platform-baseline.md))
 to be created for the value in the first place.
 
+**A second worked application, 2026-09-08, and the one that shows the rule's
+sharpest edge.** [0009](0009-in-order-fgmt-is-the-default-path.md) makes
+dual-issue in-order + 2-thread FGMT the default microarchitecture and pauses the
+out-of-order path. It is here, and the test that decides it is not "does it span
+several specs" — plenty of inline decisions do — but **"is there a spec that owns
+the thing decided"**. There is not: the microarchitecture 0009 makes the default
+is specified in no document in this workspace, so there is no inline to be
+inline *in*. The two documents it most affects are the two it pauses, and a
+record pausing a spec, hosted in that spec, is invisible to a reader of the
+other one. Read together with the bi-endian case above, the pair says the rule
+turns on ownership of the *subject*, not on how many files the decision touches.
+
 ## Format
 
 One file per decision, `NNNN-kebab-case-title.md`, numbered in landing order.
@@ -56,3 +68,4 @@ Each record carries, in this order:
 | [0006](0006-endianness-is-big-endian.md) | J-Core ships big-endian; byte order is a per-context mode, not a product-point property | Accepted 2026-09-07, re-scoped twice 2026-09-08; fetch half superseded by [bi-endian-spec.md](../bi-endian-spec.md) |
 | [0007](0007-l1d-write-policy-under-msi.md) | The L1-D is write-through at T0 and write-back under MSI at T1/T2 | Accepted 2026-09-07 |
 | [0008](0008-documented-but-unimplemented-encodings.md) | A documented-but-unimplemented instruction is a reservation row, not a decoder entry | Accepted 2026-09-08 |
+| [0009](0009-in-order-fgmt-is-the-default-path.md) | Dual-issue in-order + 2-thread FGMT is the default path; OoO RTL pauses | Accepted 2026-09-08 |
