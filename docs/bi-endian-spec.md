@@ -322,7 +322,10 @@ prefer it; this document does not otherwise mandate a site.
 ### 5.3 Literal pools are data, and that is correct
 
 SH's PC-relative loads — `MOV.W @(disp,PC),Rn` and `MOV.L @(disp,PC),Rn` — are
-**data** accesses and are swapped by §4, not by §5. That is the right answer
+**data** accesses and are swapped by §4, not by §5. That is checkable rather
+than assumed: `jcore-cpu@origin/master` `decode/gen-go/spec/mov.toml` gives both
+`ma_op = "READ"`, with `ma_size = "16"` and `"32"` respectively, so they issue
+on the memory-access port and land in `align_read_data` like any other load. That is the right answer
 and not an accident of where the swap sits: a little-endian image's literal
 pool is little-endian *data*, laid down by a little-endian assembler, and it
 must be read as such. An implementation that routed literal loads through the
@@ -384,6 +387,16 @@ because `SR.HPRIV` is already restored by `HRTE`. The mechanism — *the handler
 byte order is a separate architectural bit, applied by hardware at the privilege
 transition* — is the same one.
 
+**The third trap destination needs no rule, and checking that is what makes the
+scheme complete.** [hypervisor/hardware-spec.md §4.1](hypervisor/hardware-spec.md)'s
+trap-entry logic has three arms, and only two of them enter hyperprivileged
+mode. The middle arm — an exception delegated to the guest kernel via `HEDR` —
+sets `SR.MD`, `SR.BL` and `SR.RB` and vectors to the guest's own `VBR`, leaving
+`SR.HPRIV` at 0. So a delegated exception runs its handler at `LE`, which is
+correct: that handler is the guest's own code, built in the guest's byte order.
+The two bits cover all three arms with no third case, and a guest's internal
+exception handling needs no byte-order rule of its own.
+
 **A hypervisor entry sequence must not straddle the change.** This is a
 requirement on the RTL, not on software: the byte order applies to the
 instruction *fetched at* `VBR_HYP + offset`, not to the one after it. Stated as
@@ -405,10 +418,16 @@ byte order, with no bit anywhere in its architectural state that says so.
 `LE` is a reserved bit of `SR`, beside `SR.HPRIV`, because `SR` is already saved
 to `HSSR` and restored by `HRTE` atomically with the privilege transition. That
 is *almost* right and is rejected: `SR` is guest-readable via `STC SR,Rn`, and
-SH-4 defines the bits in question as reserved and read-as-zero, so a guest would
-read a set bit where its architecture promises a clear one — a divergence the
-observer can see, which is what
-[sh4-guest-model.md §1](sh4-guest-model.md) is about. A hyperprivileged register
+the canonical `SR` layout in
+[hypervisor/hardware-spec.md §2.1](hypervisor/hardware-spec.md) — which states
+that it matches the SH-4 hardware manual for every bit J-Core inherits — marks
+every unallocated bit *reserved, read-as-zero, write-ignored*. A guest would
+therefore read a set bit where its architecture promises a clear one: a
+divergence the observer can see, which is what
+[sh4-guest-model.md §1](sh4-guest-model.md) is about. `SR.HPRIV` sits in that
+same register and raises no such problem, because a guest only ever reads it as
+0; `LE` is different precisely because it reads as 1 for exactly the guests that
+can look. A hyperprivileged register
 has no such problem, because the guest cannot read it at all
 ([hypervisor/hardware-spec.md §3.4](hypervisor/hardware-spec.md) traps the whole
 family). An implementation that wants the `SR` placement anyway must mask the bit
