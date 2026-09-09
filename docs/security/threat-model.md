@@ -639,7 +639,26 @@ address of its own choosing.
 > has no store queue, no SQ region decode and no SH-4 `PREF` — so the site moves
 > from *a specified "undefined"* to *a specified scrub*, and L6's evidence bar,
 > which is a residue test demonstrated red before the fix, has nothing to run on.
-> The other two instances in this paragraph's list are untouched.
+
+> **The FP/SIMD instance: specified 2026-09-09 by Wave-3 C1b, and not thereby
+> met either.** [fpu/spec.md §7.7](../fpu/spec.md) withdraws the word "undefined"
+> from the branch quoted above and gives the file a scrub value; the SIMD half is
+> [simd/spec.md §2.6.1](../simd/spec.md); [hypervisor/hardware-spec.md
+> §4.7.1](../hypervisor/hardware-spec.md) item 8 puts both on the gang-switch
+> list. **There is no FPU and no SIMD unit in `jcore-cpu@origin/master`** — no
+> `entity fpu`, no `FPSCR`, no `VCSR`, checked case-insensitively — and
+> `linux@origin/jcore` cannot even set `CONFIG_SH_FPU` on this target, because
+> `CPU_SUBTYPE_JCORE` does not select `CPU_HAS_FPU`. Same verdict as the store
+> queue: *specified "undefined"* becomes *specified scrub*, with nothing to run
+> the residue tests on.
+>
+> **One branch this paragraph did not list**, found by C1b while writing that
+> section: `HEDR[3] = 1` (and `HEDR[24] = 1` for SIMD) delegates the first-use
+> trap to the **guest's** handler, so the hypervisor's ownership transition never
+> runs at all. The lazy model is not merely incomplete on the no-image path; a
+> per-vCPU configuration bit can remove it from the hypervisor entirely. That is
+> why [fpu/spec.md §7.7](../fpu/spec.md) anchors its fix at the gang switch
+> rather than in the trap handler.
 
 And a third instance nobody had listed: `movca.l R0,@Rn` allocates an L2 line
 "with only the written word defined and the remainder **undefined** until
@@ -772,12 +791,15 @@ gang-switch sequence must be extended, and L1 is not `MET` until it is** —
 otherwise **L1** and **L6** each assume the other covers this, which is how a gap
 survives two reviews.
 
-**Half done, 2026-09-09.** The list now has **8** items ([hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)),
-of which item 7 is the store-queue scrub, added by Wave-3 **C1a**. **The FP/SIMD register files are
-still absent from it** and are owed by **C1b**, so this clause is not discharged
-and L1 remains `NOT MET` on it — as well as on the detector, which is C2c's. The
-half that is done is recorded here rather than in C1a's own document, because a
-task that reads only its own spec is exactly how the other half gets forgotten.
+**Discharged as a specification, 2026-09-09.** The list now has **9** items ([hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)),
+of which item 7 is the store-queue scrub (Wave-3 **C1a**) and item 8 the FP/SIMD
+register-file scrub (Wave-3 **C1b**). Both structures this clause names are on
+the list, so **the clause itself is discharged**. L1 is still `NOT MET`, on the
+two things the clause was never about: the **detector**, which is C2c's, and the
+per-structure residue tests below, none of which can be run because none of the
+nine items has hardware to run them on. Recording the two halves here rather than
+in C1a's and C1b's own documents is deliberate — a task that reads only its own
+spec is exactly how the other half gets forgotten.
 
 **Second clause, weaker but recorded:** the rule has no hardware backstop, and
 [ooo/j32ooo-spec.md §18](../ooo/j32ooo-spec.md) calls it the model's weakest
@@ -863,6 +885,16 @@ and finds defined values. **The no-saved-image branch must be its own case** —
 that is the specific defect §7.8 identifies, and a test that only exercises
 save/restore between two *established* owners passes without touching it.
 
+**Specified 2026-09-09 by C1b, and still `NOT MET`.**
+[fpu/spec.md §7.7](../fpu/spec.md) and [simd/spec.md §2.6.1](../simd/spec.md)
+put the boundary where this item asks for it — eager across tenants, lazy within
+one — and make the no-saved-image branch the *same* write as the ordinary one
+rather than a second path, which is what stops a save/restore test between two
+established owners from passing over it. Five residue tests are specified and
+none has been run: there is no FPU and no SIMD unit in `jcore-cpu@origin/master`.
+The item also still carries C1c's half, the `FPSCR` ownership fix and the
+kernel-`fpu` discipline, which C1b does not touch.
+
 **Gated Wave-3 items:** C1b, C1c.
 
 ### L4 — Speculation covers loads **and** the frontend
@@ -941,13 +973,18 @@ anywhere may resolve "undefined" to residual state from a previous owner.**
 `movca.l`'s partially-defined L2 line, and the no-saved-image branch of the
 lazy-FPU restore (§7.8). Both are user-mode-reachable.
 
-**One of the three is now specified away, 2026-09-09.** The store-queue instance
-is C1a's, and [sq/spec.md §6.5](../sq/spec.md) replaces it: the buffer is zeroed
-at reset, on burst completion and on the hyperprivileged `HSQCR` write that ends
-a restore, and a guest load of the region returns zero rather than "undefined".
-The two that remain are [fpu/spec.md §7.3](../fpu/spec.md)'s no-saved-image
-branch (**C1b**) and [cache/l2-spec.md §17.5](../cache/l2-spec.md)'s `movca.l`
-line (**C2e**). **Specified is not met**: there is no store-queue RTL at all in
+**Two of the three are now specified away, 2026-09-09**, which leaves
+**1** open `undefined` site. The store-queue instance is C1a's, and
+[sq/spec.md §6.5](../sq/spec.md) replaces it: the buffer is zeroed at reset, on
+burst completion and on the hyperprivileged `HSQCR` write that ends a restore,
+and a guest load of the region returns zero rather than "undefined". The FP/SIMD
+instance is C1b's, and [fpu/spec.md §7.7](../fpu/spec.md) with
+[simd/spec.md §2.6.1](../simd/spec.md) replaces it: every architectural bit of
+both files takes a defined scrub value at a change of tenant, and the word
+"undefined" is withdrawn from [fpu/spec.md §7.3](../fpu/spec.md)'s restore
+branch. The one that remains is
+[cache/l2-spec.md §17.5](../cache/l2-spec.md)'s `movca.l` line (**C2e**).
+**Specified is not met**: there is no store queue, no FPU and no SIMD unit in
 `jcore-cpu@origin/master`, so the residue tests below cannot be run red, let
 alone green.
 
@@ -1013,7 +1050,7 @@ which bar they must clear.
 | Wave-3 task | Bar items it must satisfy | The clause most likely to be missed |
 |---|---|---|
 | **C1a** SQ residue *(design landed 2026-09-09; no RTL possible — see §7.8)* | **L6**, and **L1**'s added clause | The gang-switch list of [hypervisor §4.7.1](../hypervisor/hardware-spec.md) did not mention the store queue; adding the scrub without adding it to *that list* would have left L1 unmet. It is item 7 there now. The clause most likely to be missed **next** is that neither bar item moved to `MET`: there is no store-queue RTL to test |
-| **C1b** eager FP/SIMD switch | **L3**, **L6**, **L1**'s added clause | L3's *no-saved-image* branch — an eager save/restore between two established owners passes without touching it (§7.8) |
+| **C1b** eager FP/SIMD switch *(design landed 2026-09-09; no RTL possible — see §7.8)* | **L3**, **L6**, **L1**'s added clause | L3's *no-saved-image* branch — an eager save/restore between two established owners passes without touching it (§7.8). The clause most likely to be missed **next** is that the branch is not the only one: `HEDR[3]`/`HEDR[24]` delegation hands the first-use trap to the guest, so a scrub written into that handler is switched off by configuration |
 | **C1c** FPSCR ownership | **L3** | — |
 | **C2a** GPU protection | **L2** | L2 is `N/A` only while no tenant-influenced DMA master exists. The GPU *is* one, so C2a flips L2 to blocking |
 | **C2b** speculation coverage | **L4**, **L7** part 4 | The **TSB walk** is a frontend transmitter (§7.2), and the I-side arm is on the *in-order* core too. Also: §12's code-level trigger — making the walk uncacheable flips §7.1 |
@@ -1026,12 +1063,12 @@ which bar they must clear.
 
 | Item | Status | Blocking |
 |---|---|---|
-| L1 | **NOT MET** — rule specified; gang-switch list **still** incomplete (store-queue scrub added by C1a, FP/SIMD files still absent); no detector | C2c, C1b |
+| L1 | **NOT MET** — rule specified; gang-switch list complete as a specification (item 7 C1a, item 8 C1b); no detector, and no item on the list demonstrated | C2c |
 | L2 | **NOT MET** — reset is all-bypass | C2d |
-| L3 | **NOT MET** — lazy model is the specified one | C1b, C1c |
+| L3 | **NOT MET** — eager-across-tenants specified by C1b; *specified, unbuilt* — no FPU and no SIMD unit exists to run the five residue tests on | C1c, and the RTL that builds an FPU |
 | L4 | **NOT MET** — specified for cores that do not exist; I-side walk arm uncovered on the core that does | C2b |
 | L5 | **NOT MET** — way-partitioning specified; metadata, L2 MSHRs, bandwidth, KSM, flush-op gating all open | C2e |
-| L6 | **NOT MET** — **two** specified "undefined"s, was three; the store-queue site is *specified, unbuilt* — [sq/spec.md §6.5](../sq/spec.md) states the scrub and `jcore-cpu` has no store queue to run the residue tests on | C1b, C2e, and the RTL that builds the queues |
+| L6 | **NOT MET** — **1** open `undefined` site, was three; the store-queue and FP/SIMD sites are *specified, unbuilt* — the scrubs are stated and `jcore-cpu` has neither queues nor an FPU to run the residue tests on | C2e, and the RTL that builds the queues and the FPU |
 | L7 | **NOT MET** — both preconditions absent; walker already merged | hypervisor Phase 3 |
 
 Seven of seven. That is the correct reading of the current state and it is not a

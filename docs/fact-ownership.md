@@ -101,15 +101,35 @@ are the substitute for a check that cannot be written cleanly — see
 | `biendian.dside.bytelane` | Byte store to `…00` drives `we = "1000"`; the byte-order mode does not change it | [bi-endian-spec.md §4.1](bi-endian-spec.md) | `we = "1000"` |
 | `biendian.ifetch.select` | Fetch halfword selection is driven by `instr_o.a(1)`, an address bit | [bi-endian-spec.md §5.1](bi-endian-spec.md) | `instr_o\.a\(1\)` |
 | `sq.context.bytes` | Store-queue per-context image: **72 bytes** (2 × 32 B buffers + `QACR0`/`QACR1`, not `HSQCR`) | [sq/spec.md §7.2](sq/spec.md) | `\b72[- ](?:bytes?\b\|B\b)` |
-| `hyp.gangswitch.items` | Gang-switch flush sequence: **8** numbered items; item 7 is the store-queue scrub | [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md) | `\*\*8\*\* (?:numbered )?items` |
+| `hyp.gangswitch.items` | Gang-switch flush sequence: **9** numbered items; 7 scrubs the store queue, 8 the FP/SIMD files | [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md) | `\*\*9\*\* (?:numbered )?items` |
+| `fpu.fpds` | `FPDS`: 2-bit FP dirty state, per thread context, hyperprivileged-only, **not** in the FPU image | [fpu/spec.md §7.7](fpu/spec.md) | `\bFPDS\b` |
+| `simd.vds` | `VDS`: 2-bit SIMD dirty state, per thread context, hyperprivileged-only, **not** `SR.VD` | [simd/spec.md §2.6.1](simd/spec.md) | `\bVDS\b` |
+| `security.l6.undefined` | **1** open `undefined` site under bar item L6: `movca.l`'s L2 line (C2e) | [security/threat-model.md §8](security/threat-model.md) | `\*\*1\*\* open .undefined. site` |
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
-Wave-3 **C1a** added the last two, and neither can be code-bound: there is no
+Wave-3 **C1a** added `sq.context.bytes` and `hyp.gangswitch.items`, and neither
+can be code-bound: there is no
 store queue in `jcore-cpu` and a gang switch is hypervisor software, so both are
 `## Value guards` rows instead, and `sq.context.bytes` is additionally an
 `## Image layouts` row because its total is the sum of a field table that had
 disagreed with its own enumeration by exactly one `HSQCR`.
+Wave-3 **C1b** added `fpu.fpds`, `simd.vds` and `security.l6.undefined`, and
+changed `hyp.gangswitch.items` to read the table rather than the prose (below).
+The first two are name facts of the [0001](decisions/0001-one-authority-per-fact.md)
+kind `simd.vfpul` already is — they carry no number, and what they buy is that a
+document mentioning `FPDS` or `VDS` must link the spec that defines it, which is
+the only defence against a second definition of a two-bit field appearing in the
+hypervisor spec. `security.l6.undefined` is a **count that three documents
+quote**: it is the number of tenant-visible "undefined"s bar item **L6** still
+has open, it went from three to two to one over two Wave-3 tasks, and each of
+those transitions had to be written into `security/threat-model.md`,
+`sq/spec.md` and now `fpu/spec.md` at once. There is **no** FP or SIMD image row
+in `## Image layouts` from C1b, deliberately: the design adds no bytes to either
+image, and saying so is the check —
+[fpu/spec.md §7.7](fpu/spec.md) argues why its two dirty bits are not context
+state, and if that argument were wrong the FPU image's field table would have to
+change and `context-image-sums` would see it.
 B1 added `ooo.uops.rte`, `platform.endianness`, `platform.fmax.floor`,
 `platform.fmax.j4.floor`, `platform.j4`, `mmu.l1.pipt`, `cache.l1d.write`,
 `cache.l1.index`, `cache.l2.ebr`, `ooo.gates.core`, `mmu.p4.segment`,
@@ -347,20 +367,30 @@ inferred from silence:
   the owning document drifting from the header it claims to follow — because
   each of these facts is code-bound.
 
-- **`hyp.gangswitch.items` guards prose against prose, and not against the table
-  it counts.** It was added by Wave-3 **C1a** because
-  [security/threat-model.md §8](security/threat-model.md) quotes the length of
+- **`hyp.gangswitch.items` now guards the §4.7.1 table against the prose that
+  counts it, and that changed on 2026-09-09.** It was added by Wave-3 **C1a**
+  because [security/threat-model.md §8](security/threat-model.md) quotes the
+  length of
   [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md)'s gang-switch
-  list as evidence, and that quotation had to survive C1a adding an item to the
-  list. It does: nine perturbations were run and each failed, four of them on the
-  cross-document arm this row exists for. **A tenth did not.** Adding a ninth row
-  to the §4.7.1 table while leaving the prose reading `**8** numbered items`
-  passes with exit 0 — the checker compares the owner's *sentence* to other
-  documents' *sentences*, and nothing reads the table. So this row catches a
-  document quoting a stale count and does not catch a list that grew. Closing
-  that needs a table-row count in the checker, which is the shape
-  `p4-offsets-match-rtl` already has and is **B0c**'s to write, not a row's to
-  imply. Recorded because a green run should not be read as more than it is.
+  list as evidence, and that quotation had to survive an item being added to the
+  list. As C1a left it, the row had a hole it recorded rather than closed:
+  canonical and scan were the *same* prose pattern, so adding a row to the table
+  while leaving the prose one short of the table's length passed with exit 0 —
+  nothing read the table. Wave-3 **C1b**, which had to add the ninth row, closed
+  it without touching the checker: the **canonical** pattern is now anchored on
+  the table's own last row (`| 9 | Restore the incoming guest…`), so the value the
+  owner licenses is read out of the table and the owner's own sentence is scanned
+  against it like every other document's. Grow the table and renumber, and the
+  prose in **both** documents fails until it is updated.
+
+  **What it still does not catch**, stated because a green run should not be read
+  as more than it is: a row inserted *without* renumbering, which leaves the last
+  row's number unchanged and produces a duplicate or skipped index that no check
+  sees. Catching that needs a contiguity check over the table's index column,
+  which is the shape `p4-offsets-match-rtl` already has and is **B0c**'s to
+  write, not a row's to imply. The failure it now catches is the one that
+  actually happened twice in two waves; the one it does not catch has not
+  happened yet.
 
 - **`sq.context.bytes` is doc-internal arithmetic, like the two image facts above
   it.** There is no store queue in `jcore-cpu` at all — no SQ region decode, no
@@ -452,7 +482,8 @@ Two escapes, and they are different things:
 | `ooo.gates.core` | `core \+ caches\*\*\s*[\|]\s*\*\*([\d,]+)\*\*` | `(?:OoO budget\|core \+ caches)[^\n]{0,60}?([\d,]+)k? gates` |
 | `isa.movi20s.sext` | `sign-extend(?:ed)?\s+from\s+bit\s+\*\*(\d+)\*\*\s+of\s+the\s+shifted\s+value` | `sign-extend(?:ed)?\s+from\s+bit\s+\*\*(\d+)\*\*\s+of\s+the\s+shifted\s+value` |
 | `sq.context.bytes` | `(\d+)[-\s]byte store-queue image` | `(\d+)[-\s]byte store-queue image` |
-| `hyp.gangswitch.items` | `\*\*(\d+)\*\* (?:numbered )?items` | `\*\*(\d+)\*\* (?:numbered )?items` |
+| `hyp.gangswitch.items` | `[\|]\s*(\d+)\s*[\|] Restore the incoming guest` | `\*\*(\d+)\*\* (?:numbered )?items` |
+| `security.l6.undefined` | `\*\*(\d+)\*\* open .undefined. sites?` | `\*\*(\d+)\*\* open .undefined. sites?` |
 
 ## Image layouts
 
