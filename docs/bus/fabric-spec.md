@@ -155,8 +155,35 @@ This is the property [hypervisor/](../hypervisor/) and [iommu/hardware-spec.md �
 
 ### 4.3 Reserved values `[T1/T2/T3]`
 
-- **BMID `0x00` is reserved.** It means "untagged / bypass." The fabric MUST NOT assign BMID `0x00` to any normal master port. The only legitimate use of BMID `0x00` on the wire is by a transaction that the IOMMU sees with `BMID_BYPASS` set for source `0x00` ([iommu/hardware-spec.md §3.9](../iommu/hardware-spec.md)) — and even then only for boot-time DMA prior to IOMMU initialisation.
-- **BMID `0xFF` is reserved** for diagnostic / scan-chain traffic that must never trigger an IOMMU translation. Fabric-injected debug transactions (if any) use this ID; software cannot. The IOMMU treats BMID `0xFF` as a permanent bypass.
+- **BMID `0x00` is reserved.** It means "untagged." The fabric MUST NOT assign BMID
+  `0x00` to any normal master port. **A transaction arriving at the IOMMU with BMID
+  `0x00` is blocked**, not bypassed
+  ([iommu/hardware-spec.md §3.10](../iommu/hardware-spec.md) `I-R6`).
+- **BMID `0xFF` is reserved** for diagnostic / scan-chain traffic. **The fabric MUST
+  NOT assign BMID `0xFF` to any normal master port**, and a transaction arriving at
+  the IOMMU with BMID `0xFF` is **blocked** (`I-R6`).
+
+> **These two bullets were revised 2026-09-09 by Wave-3 task C2d, and the `0xFF` one
+> was reversed.** `0x00` previously read *"the only legitimate use … is by a
+> transaction that the IOMMU sees with `BMID_BYPASS` set for source `0x00` — and even
+> then only for boot-time DMA prior to IOMMU initialisation"*; there is no such
+> pre-initialisation window any more
+> ([iommu/hardware-spec.md §8](../iommu/hardware-spec.md)).
+>
+> `0xFF` previously read *"…must never trigger an IOMMU translation. Fabric-injected
+> debug transactions (if any) use this ID; software cannot. The IOMMU treats BMID
+> `0xFF` as a permanent bypass."* Two defects, and the second is the one nobody had
+> written down. First, a **permanent** bypass is a bypass no reset polarity can close
+> — it is `BMID_BYPASS[0xFF]` wired to 1 in hardware, and it survives every control
+> §3.10 adds. Second, the `0x00` bullet carried an explicit *"MUST NOT assign … to any
+> normal master port"* and **the `0xFF` bullet carried no counterpart**, so an
+> integrator following this section literally could assign `0xFF` to a master port and
+> obtain, in one step, a master with unconditional physical DMA. "Software cannot" use
+> the ID is a statement about software, not about integration. On a board with an
+> exposed JTAG connector the diagnostic path is also a physically-reachable DMA path.
+>
+> Diagnostic traffic that needs to reach memory now does so the same way any other
+> master does: with a BMID the IOMMU has been programmed for.
 
 ### 4.4 BMID allocation policy `[T1/T2/T3]`
 
@@ -371,7 +398,10 @@ On hardware reset:
 
 - **CPU 0 wakes** at the reset vector (typically `0xA0000000` = P2 entry, uncached; per [mmu/hardware-spec.md §9](../mmu/hardware-spec.md)).
 - **CPU 1..N-1 are held in reset.** The fabric MUST NOT deliver any bus traffic — neither data nor snoops nor interrupts — to a held-reset core. Specifically, the master port for a held core is gated off (no requests accepted from it; no snoops driven to its L1-D; no interrupt vector fetches routed back to it).
-- CPU 0 initialises the SoC (SDRAM controller, IOMMU bypass map, AIC2) and then writes the **SMP release register** at `0xFF00FF00` (per [mmu/hardware-spec.md §8.2](../mmu/hardware-spec.md)) to release secondary cores. Writing bit *n* releases core *n*.
+- CPU 0 initialises the SoC (SDRAM controller, AIC2, and — on a board with a boot-time
+  DMA engine — the IOMMU mappings that engine needs, since
+  [iommu/hardware-spec.md §8](../iommu/hardware-spec.md) leaves every BMID blocked out
+  of reset; this previously read "IOMMU bypass map") and then writes the **SMP release register** at `0xFF00FF00` (per [mmu/hardware-spec.md §8.2](../mmu/hardware-spec.md)) to release secondary cores. Writing bit *n* releases core *n*.
 - The release is a **fabric-visible event**: when bit *n* transitions from 0 to 1, the fabric un-gates master port *n* and the snoop bus begins delivering messages to core *n*'s L1-D. The fabric MUST NOT release a core that the SMP release register has not yet released.
 
 > Cross-reference: [mmu/hardware-spec.md §8.2](../mmu/hardware-spec.md) defines the register layout (`[N-1:0] CPU_RELEASE`, write-1-to-release). This fabric spec defines the fabric-side semantics that the register triggers.
@@ -417,6 +447,12 @@ A SoC integration claiming conformance to a tier MUST satisfy all of the followi
 - (T1-2) BMID allocation policy per §4.4 (or a documented per-SoC exception, captured in the SoC's integration manifest).
 - (T1-3) IOMMU slave-side interface receives BMID in time for IOTLB lookup ([iommu/hardware-spec.md §2.1, §4](../iommu/hardware-spec.md)).
 - (T1-4) Held-reset cores receive no fabric traffic (§9.2).
+- (T1-5) No master port is assigned BMID `0x00` or `0xFF` (§4.3), and no non-CPU
+  master reaches memory by a path that does not traverse the IOMMU
+  ([iommu/hardware-spec.md §3.10](../iommu/hardware-spec.md) `I-R1a`, bypass path 7).
+  An integration with such a path — `jcore-soc:components/misc/flash_boot_reader.vhd`'s
+  private SPRAM write port is the existing example — declares it in its manifest; it
+  is outside the IOMMU's guarantee and must be inside somebody's.
 
 **T2** = T1 +:
 
