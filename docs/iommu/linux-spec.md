@@ -5,6 +5,18 @@
 **Audience:** Kernel developer implementing the IOMMU driver  
 **Prerequisites:** Phase 1 Linux spec (`03-linux-spec.md`), Phase 2 design spec, Phase 2 hardware spec
 
+> **Revised for default-deny and re-checked against the kernel — 2026-09-09, Wave-3
+> task C2d.** The hardware this driver targets now denies by default
+> ([iommu/hardware-spec.md §3.10](hardware-spec.md), `I-R1`–`I-R10`), which changes
+> the probe path, the attach path, the teardown path that did not exist, and the boot
+> sequence. §2a and §4.3a are new and are the more urgent read: **the driver sketch
+> below is written against a kernel API that no longer exists**, and the framework
+> has since grown the two mechanisms §5.4a needs.
+>
+> No `jcore` IOMMU driver exists in `linux@origin/jcore`
+> (`drivers/iommu` contains no `jcore*` file and a case-insensitive grep for `jcore`
+> over that directory returns nothing), and no IOMMU hardware exists to drive.
+
 ---
 
 ## 1. Scope and Strategy
@@ -45,10 +57,57 @@ In `arch/sh/Kconfig`, add:
 ```kconfig
 config ARCH_HAS_IOMMU
     def_bool y if CPU_SUBTYPE_JCORE
-
-config IOMMU_DMA
-    def_bool y if JCORE_IOMMU
 ```
+
+### 2a. What the kernel actually says, and why the Kconfig above cannot work as written
+
+Checked against `linux@origin/jcore`:
+
+- **`IOMMU_DMA` cannot be defined in `arch/sh/Kconfig`.** It already exists, at
+  `drivers/iommu/Kconfig:153-154`, as `def_bool ARM64 || X86 || S390`. A second
+  `config IOMMU_DMA` in `arch/sh/Kconfig` is a redefinition, and `select IOMMU_DMA`
+  from `JCORE_IOMMU` selects a symbol whose value is pinned by that `def_bool` —
+  **SH is not in the list**, so the `dma-iommu.c` glue this whole document assumes is
+  not buildable on SH. The change belongs in `drivers/iommu/Kconfig`, adding `SUPERH`
+  (or, better, converting the `def_bool` to something a driver may `select`), and it
+  is a patch to a shared file that the *"No other files in `drivers/iommu/` are
+  touched"* claim in §4.1 does not cover.
+- **`arch/sh` selects no IOMMU symbol at all today** — a case-insensitive grep for
+  `IOMMU` over `arch/sh/**Kconfig*` returns nothing.
+- `IOMMU_SUPPORT` itself (`drivers/iommu/Kconfig:14-17`) is `depends on MMU`,
+  `default y`, so a J4 with the MMU can enable it.
+- The default-domain choice is `IOMMU_DEFAULT_DMA_STRICT` /
+  `IOMMU_DEFAULT_DMA_LAZY` / `IOMMU_DEFAULT_PASSTHROUGH`
+  (`drivers/iommu/Kconfig:96-146`); there is no plain `IOMMU_DEFAULT_DMA`. **J-Core
+  must not ship `IOMMU_DEFAULT_PASSTHROUGH`**, and must be aware that
+  `iommu.passthrough=` on the command line (`drivers/iommu/iommu.c:806`) reaches the
+  same place at runtime — a boot parameter that turns every device's default domain
+  into an identity domain is a software `SUPER_BYPASS`, and unlike the hardware one
+  ([hardware-spec.md §3.10](hardware-spec.md) `I-R4`) it has no lock. An integration
+  that cares should refuse to build with it or refuse to honour it.
+
+### 2b. The OF path fails **open**, and hardware default-deny is what covers it
+
+A device whose DT node has no `iommus` property gets `-ENODEV` from
+`of_iommu_configure()` (`drivers/iommu/of_iommu.c:60-77`, whose loop over
+`of_parse_phandle_with_args(…, "iommus", …)` never executes and returns the
+`err = -ENODEV` it was initialised with). Its caller
+`of_dma_configure_id()` (`drivers/of/device.c:151-167`) then **swallows the error**,
+under a comment reading *"Take all other IOMMU errors to mean we'll just carry on
+without it"*, sets up plain `dma-direct` ops and returns 0.
+
+So a DMA-capable device that someone forgot to give an `iommus` property to is
+silently configured for **raw physical DMA**, with no warning and no failed probe.
+This is the "unclaimed devices stay unprotected" clause of bar item **L2** arriving
+from the software side, and no amount of driver care fixes it — the decision is made
+in the OF layer before this driver is consulted.
+
+**It is also the third independent argument for `I-R1`**, and the strongest, because
+it is the one that does not depend on anyone's diligence: under a default-deny
+IOMMU the forgotten device simply does not work, loudly, on its first DMA. Under the
+retired all-bypass reset it works perfectly and is unprotected for the life of the
+system. §9.1's checklist step 1 is the process control for the same problem, and a
+process control is not a control.
 
 ### 2.2 Build integration
 
@@ -127,7 +186,19 @@ soc {
 };
 ```
 
-A device without an `iommus` property is treated as bypass-only: it can DMA with physical addresses but receives no IOMMU services. This is appropriate for trusted devices and during early boot.
+A device without an `iommus` property gets **no IOMMU services and no BMID**, and
+under [hardware-spec.md §3.10](hardware-spec.md) `I-R1` its DMA is therefore
+**blocked**, not passed through. §2b is what happens on the kernel side.
+
+> **This paragraph previously read** *"A device without an `iommus` property is
+> treated as bypass-only: it can DMA with physical addresses but receives no IOMMU
+> services. This is appropriate for trusted devices and during early boot."* Both
+> halves are retired. There is no "bypass-only" treatment any more, and "appropriate
+> for trusted devices" is a claim about a trust decision that a *missing property*
+> cannot express — an omission and a deliberate exemption look identical in DT.
+> A device that genuinely must run unprotected says so positively, by having its BMID's
+> `BMID_BYPASS` bit set from a board file that names it, and that act is auditable
+> where an absent property is not.
 
 ## 4. Driver Architecture
 
@@ -158,6 +229,16 @@ struct jcore_iommu {
     
     /* Track which IOTLB entries are in use. Protected by lock. */
     DECLARE_BITMAP(entry_used, JCORE_IOMMU_MAX_ENTRIES);
+
+    /* I-R8 quota. q_reserved[] sums to <= num_entries; q_used[] is per-BMID.
+     * A .map for BMID B fails if q_used[B] == q_cap[B], or if granting it
+     * would leave fewer free entries than the reservations not yet drawn
+     * on. The second test is the one that stops starvation; a first-fit
+     * walk of entry_used has neither. */
+    u8                       q_reserved[JCORE_IOMMU_MAX_BMID];
+    u8                       q_cap[JCORE_IOMMU_MAX_BMID];
+    u8                       q_used[JCORE_IOMMU_MAX_BMID];
+    unsigned int             q_undrawn;
     
     /* Map BMID -> jcore_iommu_master (one per device using this IOMMU) */
     struct jcore_iommu_master *masters[JCORE_IOMMU_MAX_BMID];
@@ -215,6 +296,58 @@ static const struct iommu_ops jcore_iommu_ops = {
 
 The framework calls these as devices probe, drivers attach, and `dma_map_*` calls flow through. Most callbacks are 20-50 lines; the interesting ones are `.map`, `.unmap`, and the probe path.
 
+### 4.3a The vtable above will not compile, and the reasons are load-bearing
+
+Checked against `include/linux/iommu.h` at `linux@origin/jcore`. Six of the names
+used above have been removed or restricted, and the corrections are not cosmetic —
+**two of the replacements are the mechanism this task needs**, which is why this
+subsection belongs in a security-driven revision rather than in a later tidy-up.
+
+| Named above | Reality at `origin/jcore` |
+|---|---|
+| `.detach_dev` | **Removed.** `struct iommu_domain_ops` (`include/linux/iommu.h:747-776`) has no such member. Detach is now expressed as *attaching a different domain* |
+| `.map` / `.unmap` | **Removed.** Only `map_pages` / `unmap_pages` (`:754-760`) exist |
+| `.attach_dev` | Signature changed: `int (*attach_dev)(struct iommu_domain *domain, struct device *dev, struct iommu_domain *old)` (`:748-749`) — the *previous* domain is now an argument, which is exactly what `I-R7`'s ordering needs |
+| `.domain_alloc` | Restricted: it exists only under `#if IS_ENABLED(CONFIG_FSL_PAMU)` (`:701-703`) and is documented at `:640` as *"Do not use in new drivers"*. New drivers use `domain_alloc_paging()` (`:708`), `domain_alloc_paging_flags()` (`:705-707`) or `domain_alloc_identity()` (`:704`) |
+| `bus_set_iommu()` (§5.1) | **Removed.** A whole-tree grep returns zero matches. Registration is `iommu_device_register()` alone |
+| `struct iommu_fault_event` (§5.5) | **Removed.** `iommu_report_device_fault()` survives at `:1704` but now returns `int` and takes `struct iopf_fault *` (`:124`) |
+
+**And the two additions the deny design needs already exist:**
+
+```c
+struct iommu_domain *identity_domain;   /* include/linux/iommu.h:740 */
+struct iommu_domain *blocked_domain;    /* :741 */
+struct iommu_domain *release_domain;    /* :742 */
+```
+
+with `#define IOMMU_DOMAIN_BLOCKED (0U)` at `:211`. **A blocked domain is a
+first-class kernel concept**, and `release_domain` is the domain the core installs
+when a device goes away. Together they are the framework half of `I-R7`, and the
+driver's obligation is to publish both rather than to invent a teardown path:
+
+```c
+static const struct iommu_ops jcore_iommu_ops = {
+    /* ... */
+    .blocked_domain = &jcore_iommu_blocked_domain,
+    .release_domain = &jcore_iommu_blocked_domain,
+};
+```
+
+This is the same shape as the hardware finding in
+[security/threat-model.md §7.7](../security/threat-model.md): the "per-device deny
+state" the remediation plan asked for is **not a new state** on either side of the
+interface. In hardware it is the existing miss behaviour; in the kernel it is
+`IOMMU_DOMAIN_BLOCKED`. What C2d supplies is the polarity and the wiring, not a
+mechanism.
+
+**Why a stale vtable is a security finding and not a chore.** A driver written to the
+sketch above cannot express teardown at all — `.detach_dev` is where its author would
+have put the re-protection `I-R7` requires, and that member no longer exists. The
+implementer would have discovered the API drift at the first compile and *invented* a
+teardown path, most plausibly by restoring the bypass bit, which is precisely the
+inversion §10.1's test asks for. The API the kernel actually offers makes the correct
+answer the easy one.
+
 ## 5. Key Operations in Detail
 
 ### 5.1 Driver probe
@@ -257,20 +390,37 @@ static int jcore_iommu_probe(struct platform_device *pdev)
     if (ret)
         return ret;
     
-    /* Reset state: clear IOTLB, disable all bypasses we'll manage,
-     * enable IOMMU, enable fault IRQ */
-    writel(IOMMU_CTRL_INVALIDATE_ALL, iommu->base + IOMMU_CTRL);
-    /* Wait for INVALIDATE_BUSY to clear */
+    /* The IOMMU is already enabled and already denying (I-R1). Nothing
+     * below turns protection on; it re-establishes a known IOTLB, arms the
+     * fault IRQ, and locks SUPER_BYPASS.
+     *
+     * Read-modify-write, never a bare word: under I-R3 a write of 0 to
+     * ENABLE is ignored, but SB_LOCK and FAULT_IRQ_EN are ordinary bits
+     * and a whole-word write would clear them. */
+    ctrl = readl(iommu->base + IOMMU_CTRL);
+    writel(ctrl | IOMMU_CTRL_INVALIDATE_ALL, iommu->base + IOMMU_CTRL);
     while (readl(iommu->base + IOMMU_STATUS) & STATUS_INVALIDATE_BUSY)
         cpu_relax();
-    
-    /* Enable IOMMU + fault IRQ. Bypass mask still all-set; we'll clear
-     * per BMID as devices attach. */
-    writel(IOMMU_CTRL_ENABLE | IOMMU_CTRL_FAULT_IRQ_EN |
-           IOMMU_CTRL_DEFAULT_PERM_RW,
+
+    /* Arm the fault IRQ only now that the handler is installed -- the
+     * hardware resets it masked for exactly this reason, and blocking has
+     * never depended on it (I-R2). */
+    ctrl = readl(iommu->base + IOMMU_CTRL);
+    writel(ctrl | IOMMU_CTRL_FAULT_IRQ_EN | IOMMU_CTRL_SB_LOCK,
            iommu->base + IOMMU_CTRL);
+
+    /* I-E2's assertion, made by the driver rather than only by a test:
+     * if SUPER_BYPASS is set here, something set it before we ran and the
+     * lock we just took is a lock on an open door. */
+    if (readl(iommu->base + IOMMU_CTRL) & IOMMU_CTRL_SUPER_BYPASS) {
+        dev_err(&pdev->dev, "SUPER_BYPASS set at probe; refusing\n");
+        return -EIO;
+    }
+
+    jcore_iommu_quota_init(iommu);   /* I-R8 */
     
-    /* Register with the generic IOMMU framework */
+    /* Register with the generic IOMMU framework. bus_set_iommu() no longer
+     * exists (§4.3a); iommu_device_register() is the whole of it. */
     ret = iommu_device_sysfs_add(&iommu->iommu, &pdev->dev, NULL,
                                  "jcore-iommu");
     if (ret)
@@ -281,9 +431,6 @@ static int jcore_iommu_probe(struct platform_device *pdev)
         iommu_device_sysfs_remove(&iommu->iommu);
         return ret;
     }
-    
-    /* Add to platform bus so device probing routes through us */
-    bus_set_iommu(&platform_bus_type, &jcore_iommu_ops);
     
     platform_set_drvdata(pdev, iommu);
     dev_info(&pdev->dev, "J-Core IOMMU registered, %u IOTLB entries\n",
@@ -311,10 +458,18 @@ static int jcore_iommu_map(struct iommu_domain *iommu_domain,
     /* Convert page size to PageMask encoding (log4 of size/4KB) */
     page_mask = ilog2(pgsize / SZ_4K) / 2;
     
-    /* Allocate an IOTLB entry */
+    /* Allocate an IOTLB entry, subject to the I-R8 quota. The quota test
+     * comes first and is per-BMID; find_first_zero_bit() on its own is a
+     * global free-list, and a global free-list is what lets one tenant's
+     * device make another tenant's dma_map fail. */
     spin_lock_irqsave(&iommu->lock, flags);
+    if (!jcore_iommu_quota_take(iommu, bmid_of(domain))) {
+        spin_unlock_irqrestore(&iommu->lock, flags);
+        return -ENOSPC;
+    }
     entry_idx = find_first_zero_bit(iommu->entry_used, iommu->num_entries);
     if (entry_idx >= iommu->num_entries) {
+        jcore_iommu_quota_give_back(iommu, bmid_of(domain));
         spin_unlock_irqrestore(&iommu->lock, flags);
         return -ENOSPC;
     }
@@ -354,6 +509,21 @@ static int jcore_iommu_map(struct iommu_domain *iommu_domain,
 ```
 
 **Note on multiple BMIDs:** in practice almost all domains have exactly one attached BMID (one device per domain). Linux's generic framework groups devices into domains based on `device_group` callback; we return a unique group per device unless the device tree explicitly groups them. So the inner loop iterates once typically.
+
+**This loop is also the replacement for the `GLOBAL` bit.** A buffer genuinely shared
+between *k* masters is expressed by attaching their BMIDs to one domain and letting
+this loop write *k* entries — which names the sharers, where `GLOBAL` named none. The
+quota accounting above must charge **each** BMID it writes an entry for, or a shared
+domain becomes a way to spend another BMID's reservation. See
+[hardware-spec.md §3.10](hardware-spec.md) `I-R5` and `I-R8`.
+
+**One bug in the loop above, recorded because it is invisible under either polarity:**
+it allocates **one** `entry_idx` and then writes it once per BMID, so the second
+iteration overwrites the first BMID's entry rather than adding a second. A multi-BMID
+domain therefore ends up with exactly one working mapping — the last BMID's — and the
+others fault. With `GLOBAL` available an implementer's likely fix is to set `GLOBAL`
+and write one entry, which is why this and `I-R5` have to land together. The correct
+fix is one `entry_idx` per BMID.
 
 ### 5.3 Unmapping (.unmap)
 
@@ -408,16 +578,111 @@ static int jcore_iommu_attach_dev(struct iommu_domain *iommu_domain,
     master->domain = domain;
     iommu->masters[master->bmid] = master;
     
-    /* Clear the bypass bit for this BMID, so it goes through IOTLB */
-    reg = readl(iommu->base + BMID_BYPASS_BASE + (master->bmid / 8));
-    mask = ~BIT(master->bmid % 32);
-    reg &= mask;
-    writel(reg, iommu->base + BMID_BYPASS_BASE + (master->bmid / 8));
-    
+    /* Nothing to do to the bypass bitmap: under I-R1 this BMID's bit is
+     * already 0 and has been since reset, so the device is already going
+     * through the IOTLB and is already blocked until .map runs. Assert it
+     * rather than assume it -- a set bit here means somebody handed this
+     * master an unprotected path, and attaching a domain on top of that
+     * would silently produce a device that looks protected and is not. */
+    reg = readl(iommu->base + BMID_BYPASS_REG(master->bmid));
+    if (reg & BIT(master->bmid % 32)) {
+        spin_unlock_irqrestore(&iommu->lock, flags);
+        dev_err(iommu->dev, "BMID %u is in bypass at attach\n", master->bmid);
+        return -EIO;
+    }
+
     spin_unlock_irqrestore(&iommu->lock, flags);
     return 0;
 }
 ```
+
+> **The retired body read** `reg = readl(iommu->base + BMID_BYPASS_BASE + (master->bmid / 8));`
+> **and cleared** `BIT(master->bmid % 32)` **in it.** The two do not agree: the
+> register index divides the BMID by 8 while the bit index takes it modulo 32, so for
+> every BMID above 7 this reads the wrong register *and* clears a bit belonging to a
+> different master. The correct arithmetic is one register per 32 BMIDs, four bytes
+> apart —
+> `#define BMID_BYPASS_REG(b) (BMID_BYPASS_BASE + 4 * ((b) / 32))`, bit `(b) % 32`,
+> which [hardware-spec.md §3.9](hardware-spec.md) now states because this happened.
+>
+> **The bug's failure mode is the argument for `I-R1` in miniature.** Under the
+> retired all-bypass reset it clears a *different* device's bypass bit and leaves the
+> attaching device in bypass: the attaching device works perfectly and unprotected,
+> the innocent device starts faulting, and the symptom appears somewhere other than
+> the cause. Under default-deny the same bug can only set a bit nobody asked for or do
+> nothing at all, and the device that fails is the one being attached. A polarity that
+> converts a silent-open bug into a loud-closed one is worth more than the bug it
+> would have caught.
+
+### 5.4a Detach, release and teardown — `I-R7`
+
+There was no `.detach_dev` in this document and there is none in the kernel
+(§4.3a). The teardown obligation is discharged by publishing a blocked domain and
+by the ordering below, which is normative:
+
+```c
+/* The domain every detached, released or reset device lands in. */
+static const struct iommu_domain_ops jcore_iommu_blocked_ops = {
+    .attach_dev = jcore_iommu_attach_blocked,
+};
+static struct iommu_domain jcore_iommu_blocked_domain = {
+    .type = IOMMU_DOMAIN_BLOCKED,
+    .ops  = &jcore_iommu_blocked_ops,
+};
+
+static int jcore_iommu_attach_blocked(struct iommu_domain *d,
+                                      struct device *dev,
+                                      struct iommu_domain *old)
+{
+    struct jcore_iommu_master *master = dev_iommu_priv_get(dev);
+    struct jcore_iommu *iommu = master->iommu;
+    unsigned long flags;
+
+    spin_lock_irqsave(&iommu->lock, flags);
+
+    /* 1. Revoke first. INVALIDATE_BMID clears every entry carrying this
+     *    BMID in one command and takes num_entries cycles. */
+    writel((IOTLB_CMD_INVALIDATE_BMID << 28) | master->bmid,
+           iommu->base + IOTLB_CMD);
+    while (readl(iommu->base + IOMMU_STATUS) & STATUS_INVALIDATE_BUSY)
+        cpu_relax();
+
+    /* 2. Then confirm the bypass bit is clear. Order matters: with the
+     *    bit clear and entries still live the device still reaches its
+     *    old buffers; with the entries gone it reaches nothing. */
+    WARN_ON(readl(iommu->base + BMID_BYPASS_REG(master->bmid)) &
+            BIT(master->bmid % 32));
+
+    /* 3. Only now give the slots and the quota back. */
+    jcore_iommu_release_entries(iommu, master->bmid);
+
+    master->domain = NULL;
+    spin_unlock_irqrestore(&iommu->lock, flags);
+    return 0;
+}
+```
+
+**Steps 1 and 2 must both complete before the call returns**, because the call
+returning is what the core treats as the device being detached. `release_domain` is
+set to the same object so that a device that disappears — hot-unplug, driver unbind,
+a `VFIO` handover — takes the identical path; the framework installs
+`release_domain` on release precisely so that a driver does not have to remember to.
+
+**What this closes.** Between "the device is released" and "the device is
+re-protected" the device is a fully-privileged DMA master whose driver has stopped
+watching it. That is the Thunderclap window, opened at the *end* of a device's life
+rather than at the start, and it is the more dangerous end because handing a device
+to a different tenant is exactly when it happens.
+
+**What it does not close, named rather than implied.** A transaction already in
+flight when step 1 runs is governed by [hardware-spec.md §10](hardware-spec.md)
+verification point 9, which leaves the mid-flight case to the implementer *provided
+it is documented*. For a teardown that is not good enough, and the implementation
+choice is therefore constrained here: the mid-flight transaction must **not** complete
+with the old translation. Draining the master's port first
+([bus/fabric-spec.md §9.3](../bus/fabric-spec.md) already requires the fabric to
+quiesce a master's port before resetting it) is the clean way, and an integration that
+cannot drain must abort in-flight transactions instead.
 
 ### 5.5 Fault interrupt handler
 
@@ -479,14 +744,41 @@ The result: a driver written against the standard DMA-API works on j-core with I
 
 ## 7. Boot Sequence
 
+0. **Power-on: every BMID is already blocked.** No software has run and no DMA
+   succeeds. [hardware-spec.md §3.10](hardware-spec.md) `I-R1`.
 1. IOMMU device tree node is parsed; `jcore_iommu_probe` runs.
-2. IOMMU registers initialize: invalidate IOTLB, enable, enable fault IRQ. All BMID bypasses still set.
+2. The driver invalidates the IOTLB, arms the fault IRQ now that its handler exists,
+   locks `SUPER_BYPASS`, and initialises the quota. **It does not enable anything** —
+   protection was already on.
 3. As DMA-capable devices probe, their device tree `iommus` property triggers `of_xlate` callback, which creates a `jcore_iommu_master` and binds it to the device.
 4. The generic framework allocates a default domain for each device (or per-group).
-5. On first DMA operation, the framework calls `.attach_dev` (clearing bypass for this BMID), then `.map` (installing IOTLB entries).
+5. On first DMA operation, the framework calls `.attach_dev` — which now *checks* the
+   bypass bit rather than clearing it — then `.map` (installing IOTLB entries).
 6. Steady-state DMA flows through the IOMMU.
 
-Devices that need DMA *before* the IOMMU is probed (rare: maybe an early-init DMA from bootrom) work because the IOMMU starts with all bypasses enabled. Only after attach are bypasses cleared, requiring proper mapping.
+> **Step 2 previously read** *"invalidate IOTLB, enable, enable fault IRQ. All BMID
+> bypasses still set"*, and the section previously ended *"Devices that need DMA
+> before the IOMMU is probed … work because the IOMMU starts with all bypasses
+> enabled. Only after attach are bypasses cleared, requiring proper mapping."*
+> Both are retired. There is no window in which a device works unprotected, and a
+> device that needs DMA before its driver has mapped anything now fails.
+
+**A device that genuinely must DMA before the kernel is up** — a boot-time DMA engine
+loading a kernel image, which no board this project builds currently has — is served
+by the bootrom programming the IOMMU before that DMA, alongside the SDRAM controller
+and AIC2 initialisation it already performs
+([bus/fabric-spec.md §9.2](../bus/fabric-spec.md)), or by that engine using PIO. The
+cost is real; [hardware-spec.md §8](hardware-spec.md) prices it and it is the
+requirement, not an argument against it.
+
+**kexec is the case default-deny makes *harder*, and it is worth being explicit.**
+Reset polarity does not apply across a kexec: the new kernel inherits a **running**
+IOMMU with the old kernel's IOTLB entries live and its `SB_LOCK` still set. The
+inherited entries are the hazard — a device still DMAing into memory the new kernel
+has repurposed — so `jcore_iommu_probe`'s `INVALIDATE_ALL` (step 2) is not a
+formality on that path, it is the re-protection. It runs before any device attaches,
+which is the ordering that makes it sufficient. The inherited `SB_LOCK` is benign: it
+is locked *off*, and the new kernel would set it anyway.
 
 ## 8. PM and SMP Considerations
 
@@ -517,9 +809,14 @@ static void jcore_iommu_pm_resume(void)
     struct jcore_iommu *iommu = the_iommu;
     int i;
     
-    /* IOTLB is empty after S2RAM. Restore by walking each domain's
-     * mapping list and reprogramming. */
-    writel(IOMMU_CTRL_INVALIDATE_ALL, iommu->base + IOMMU_CTRL);
+    /* IOTLB is empty after S2RAM and the block is back in its reset
+     * state, i.e. denying (I-R1). Restore by walking each domain's
+     * mapping list and reprogramming.
+     *
+     * Read-modify-write, as in probe: a bare word here would clear
+     * FAULT_IRQ_EN and SB_LOCK. */
+    writel(readl(iommu->base + IOMMU_CTRL) | IOMMU_CTRL_INVALIDATE_ALL,
+           iommu->base + IOMMU_CTRL);
     while (readl(iommu->base + IOMMU_STATUS) & STATUS_INVALIDATE_BUSY)
         cpu_relax();
     
@@ -537,8 +834,12 @@ static void jcore_iommu_pm_resume(void)
         }
     }
     
-    /* Restore control register last */
-    writel(pm_state.ctrl, iommu->base + IOMMU_CTRL);
+    /* Re-arm the fault IRQ and re-lock SUPER_BYPASS last. pm_state.ctrl is
+     * deliberately not written back wholesale -- see below. */
+    writel(readl(iommu->base + IOMMU_CTRL) |
+           (pm_state.ctrl & IOMMU_CTRL_FAULT_IRQ_EN) |
+           IOMMU_CTRL_SB_LOCK,
+           iommu->base + IOMMU_CTRL);
 }
 
 static struct syscore_ops jcore_iommu_syscore_ops = {
@@ -548,6 +849,19 @@ static struct syscore_ops jcore_iommu_syscore_ops = {
 ```
 
 The reconstruction approach (vs. saving every IOTLB entry to memory) is more code but avoids issues if the IOTLB layout changes between save and restore. In practice the IOMMU is small enough that both approaches work.
+
+**The resume ordering is safe and it is worth saying why, because it looks wrong.**
+The bypass mask is restored before the IOTLB is reprogrammed, so there is a window in
+which devices are non-bypassed with an empty IOTLB. Under `I-R1` that window is
+**fail-closed**: every device in it is blocked, and the worst outcome is a fault
+latched against a device that resumed early. Restoring the IOTLB first and the bypass
+mask second would be the fail-open ordering, and it is the one an implementer
+optimising for "no faults in the resume log" would reach for.
+
+**What must not be restored: `SUPER_BYPASS` and `SB_LOCK`.** Saving `IOMMU_CTRL` and
+writing it back wholesale — which the retired code above did — treats a lock as
+saveable state, and restores a bypass that may have been set for debugging before the
+suspend. A lock cleared by reset is *re-taken*, never restored.
 
 ### 8.2 SMP
 
@@ -579,7 +893,12 @@ For each device that should be IOMMU-protected:
 - Domain allocation and free; no leaks under repeated cycles.
 - `.map` and `.unmap` install and remove IOTLB entries correctly.
 - `.iova_to_phys` returns the right PA.
-- Attach and detach toggle the BMID_BYPASS bit correctly.
+- Attach **asserts** `BMID_BYPASS[BMID] == 0` and fails if it is set; detach installs
+  the blocked domain. *(This line previously read "Attach and detach toggle the
+  BMID_BYPASS bit correctly." A toggle back to 1 on detach releases the device into
+  unrestricted DMA — it is the inversion `I-R7` exists to forbid, written down as the
+  thing to verify.)*
+- Quota: BMID *A* at its cap does not prevent BMID *B* from mapping (`I-E5`).
 
 ### 10.2 Functional tests
 
@@ -588,10 +907,16 @@ For each device that should be IOMMU-protected:
 - Run `dma_map_sg` on a scatter list spanning 32 fragments; verify all visible to device.
 - Repeatedly `dma_alloc_coherent` / `dma_free_coherent` over 100k cycles; verify no IOTLB leaks.
 
-### 10.3 Fault tests
+### 10.3 Fault and deny tests
 
 - Manually corrupt a device's DMA descriptor to point at unmapped IOVA; verify fault is logged with correct BMID and IOVA.
 - Stress with high IOTLB pressure (allocate many small buffers to exhaust IOTLB); verify graceful `-ENOSPC` rather than silent corruption.
+- **A device with no `iommus` property in DT does not DMA.** This is §2b's fail-open
+  OF path meeting `I-R1`; the test asserts that the hardware catches what the kernel
+  does not.
+- **The negative tests `I-E0`–`I-E6`** in
+  [hardware-spec.md §10.1](hardware-spec.md) are the ones bar item **L2** requires,
+  and three of them (`I-E1`, `I-E3`, `I-E5`) are driven from this driver.
 
 ### 10.4 Performance tests
 
@@ -609,7 +934,22 @@ For each device that should be IOMMU-protected:
 
 - Should we expose IOTLB statistics (hit/miss counters) via debugfs? Helpful for tuning but adds RTL complexity. **Recommendation:** add in Phase 2b after Phase 2a stabilizes.
 - Should each device get its own domain by default, or should related devices (e.g., Ethernet RX and TX channels of the same MAC) share? **Recommendation:** unique per-device by default; let device tree group via `iommu-map` if needed.
-- What's the right behavior when IOTLB fills? Currently we return `-ENOSPC` to the framework. **Recommendation:** could implement an "evict LRU" policy in software if this becomes common; profile first.
+- What's the right behavior when IOTLB fills? Currently we return `-ENOSPC` to the
+  framework. **This is no longer an open question in the direction it was asked.** An
+  LRU eviction policy over a *shared* pool would make one BMID's pressure evict
+  another BMID's live mapping, turning a starvation problem into a fault-and-disable
+  problem — the shared pool has to be quota'd (`I-R8`) before any eviction policy over
+  it is safe. Eviction *within* a BMID's own quota is a legitimate future option and
+  needs profiling; eviction across BMIDs is now excluded.
+- **Where do the quota numbers come from?** `q_reserved` and `q_cap` per BMID are a
+  policy this document does not set, because the right values depend on the board's
+  device mix and §5.3 of [design-spec.md](design-spec.md) gives per-workload entry
+  counts, not a partition. The defensible default is an equal reservation across
+  claimed BMIDs with a cap of the whole pool, which prevents starvation without
+  capping a single-device board; a board with a known mix should override it in DT.
+  **unknown at this stage — needs measurement**: the entry counts a real J-Core
+  workload mix holds concurrently. What would produce them is an instrumented run on
+  the ULX3S once a DMA master exists.
 - Should we attempt zero-copy from user-space allocated memory (i.e., let userspace allocations be directly DMA-able via IOMMU)? **Recommendation:** defer to Phase 3; requires more thought about lifetime and security.
 
 ## 12. Upstream Merge Plan
