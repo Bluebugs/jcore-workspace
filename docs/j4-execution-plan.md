@@ -111,7 +111,7 @@ minimize-loss step is settled.
 | C1b | Eager (across-tenant) FP/SIMD switch + register scrub; 2-bit dirty tracking; movmu-style bulk save. **Design DONE 2026-09-09** — [fpu/spec.md §7.7](fpu/spec.md), [simd/spec.md §2.6.1](simd/spec.md), [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md) item 8. **The implementation half is not dispatchable in either repo** — see below. | docs → jcore-cpu + linux | Opus | *blocked on an FPU existing* |
 | C1c | Vertical-FP-SIMD FPSCR ownership fix + kernel-fpu discipline. **Design DONE 2026-09-09** — [simd/spec.md §2.4.1](simd/spec.md), [fpu/spec.md §6.3.1](fpu/spec.md), [simd/spec.md §2.6.2](simd/spec.md). **The defect is real and is *not* the bar item this row is filed under; the implementation half is not dispatchable in `linux`** — see below. | docs → linux | Opus | *blocked on an FPU existing* |
 | C2a | GPU memory protection (base+bounds or IOMMU/BMID) — launch blocker before user shaders. **Design DONE 2026-09-09** — [simd/gpu/simd-gpu-spec.md §16](simd/gpu/simd-gpu-spec.md), [simd/gpu/architecture.md §5.4](simd/gpu/architecture.md). **The `or` is a false alternative, the "launch blocker" is not blocking any scheduled launch, and the implementation half is not dispatchable in any repo** — see below. | docs → jcore-cpu | Opus | *blocked on a GPU program existing* |
-| C2b | Speculation: delay-on-miss + frontend coverage (commit-time predictor updates, tenant-tagged BTB, degenerate-STT taint, delayed spec TLB/PTW). | docs → jcore-cpu | Opus | Opus |
+| C2b | Speculation: delay-on-miss + frontend coverage (commit-time predictor updates, tenant-tagged BTB, degenerate-STT taint, delayed spec TLB/PTW). **Design DONE 2026-09-09** — [mmu/hardware-spec.md §5.0a](mmu/hardware-spec.md) W-R1–W-R5, [ooo/j32ooo-spec.md §8.2a, §11.1a](ooo/j32ooo-spec.md), [ooo/j32lt-spec.md §7.4a, §7.5a](ooo/j32lt-spec.md), [security/threat-model.md §7.2, §7.3, §8 L4, §10](security/threat-model.md). **Three of the four named mechanisms target structures no repository contains and were already specified; the implementation half is dispatchable in part, and it is the first Wave-3 row of which that is true** — see below. | docs → jcore-cpu | Opus | Opus |
 | C2c | FGMT single-tenant-core + fence.t-style microreset on realloc. | docs → jcore-cpu | Opus | Opus |
 | C2d | IOMMU default-deny + per-device block + no global-match IOTLB + coherent-DMA owner. | docs → jcore-cpu + jcore-soc + linux | Opus | Opus |
 | C2e | Cache isolation beyond ways (DAWG-semantics metadata + MSHR reservation + bandwidth QoS + per-tenant KSM + privileged flush ops). | docs → jcore-cpu + linux | Opus | Opus |
@@ -245,6 +245,82 @@ datapath — one 32-bit memory operation per step, the same number of bus cycles
 sequence. It buys instruction fetch and atomicity, not data movement, and data movement is what an
 eager switch costs. The lever that removes the copy is the 2-bit dirty state, and
 [fpu/spec.md §7.7](fpu/spec.md) orders them accordingly and allocates no encoding.
+
+**C2b reverses this row too, and it reverses it in the opposite direction from C1a, C1b, C1c and
+C2a.** Those four found that the hardware their fix names does not exist. C2b found that *some of
+its hardware ships* — and that the row's own list of mechanisms points almost entirely at the half
+that does not.
+
+*First, the split, which is the design's spine.* **Commit-time predictor updates**,
+a **tenant-tagged BTB** and **degenerate-STT taint** are three of the four named mechanisms, and
+all three describe structures `jcore-cpu@origin/master` does not contain: a case-insensitive search
+for `branch_pred`, `btb`, `bimodal`, `gshare`, `ras` or `predictor` returns six hits, none of them
+a predictor and none of them RTL logic — the closest thing in the core is the decoder's
+one-cycle ROM read-ahead, checked and squashed in the same cycle. All three are also **already
+specified**, for the design points [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md)
+paused: [ooo/j32ooo-spec.md §3.2](ooo/j32ooo-spec.md) already trains every predictor structure at
+commit only from a domain captured at rename, already tags the BTB with the full domain field —
+which is *wider* than the 2–3-bit ARM-CSV2 shape §E.10 recommends, not narrower — and §9.4 rule 3
+is already the degenerate taint. C2b added no clause to any of them. The fourth mechanism,
+**delayed speculative TLB/PTW fill**, is the entire live workstream, and
+[mmu/hardware-spec.md §5.0a](mmu/hardware-spec.md) is where it lands. A wave that had worked the
+list in order would have produced a defence for a paused path and left the shipping arm exactly
+where the bar's own status line said it was.
+
+*Second, two of the row's transmitters do not exist and two it does not name do.*
+[j4-remediation-plan.md §C2](j4-remediation-plan.md) states the surface as "wrong-path fetch **+
+the always-on I-prefetcher** fill **the shared L2**". Neither of the emphasised structures is in
+`jcore-cpu@origin/master`: there is no L2 at all — no second-level entity, and a case-insensitive
+search for `mshr` returns nothing repository-wide — and the only `prefetch` token in the L1-I RTL
+is a one-bit half-word indicator inside a 32-bit RAM read, while the optional `prefetch` unit the
+testbenches reference has no entity anywhere in the tree and is off by default. Both are properties
+of [ooo/j32ooo-spec.md §11](ooo/j32ooo-spec.md), where the rule for them now is. What the shipping
+core *does* have, and the plan does not name, is the **ITLB install** and the **speculative DTLB
+install** that a squashed fetch's walk performs — two of the four transmitters §5.0a enumerates.
+
+*Third, the pLRU contradiction is real, is in the place the plan implies it is not, and is not the
+pLRU channel the plan mentions two bullets later.* There is no pLRU in RTL — a case-insensitive
+search for `plru` or `pseudo-lru` over `jcore-cpu@origin/master` returns zero matches, and the
+shipping L1-I and L1-D are **direct-mapped** — so it can only be a specification defect, and it is:
+[ooo/j32ooo-spec.md §8.2a](ooo/j32ooo-spec.md) said in one bullet that speculative L1-D hits
+proceed at full speed and in the bullet after it that no load which fails to commit updates
+replacement state, over L1s the same document makes pseudo-LRU. It is **not** the pLRU channel
+named under *Cache partition honesty* in the same §C2 — that one is a victim's architectural hit
+crossing an L2 way partition, belongs to **L5** and **C2e**, and the two share a word rather than a
+mechanism. Filing them together would have handed C2e's work to C2b and left the self-contradiction
+unresolved.
+
+*Fourth, §E's menu, and the one place it has nothing.* The defence is §E.10's **delayed speculative
+TLB/PTW fill**, taken as a dispatch dependence on the walk arm. The alternative on the table —
+an abort path in `core/tlb_walk.vhd` — loses for a structural reason, not a cost one: by the time a
+squash can be signalled the walk has issued its TSB reads, and those reads are §7.1's whole
+observable, so the abort closes the two installs and leaves the channel. Value prediction is
+skipped, as §E.10 directs. **MuonTrap-style filter caches and speculative fill buffers are refused
+twice over** — §E.10's *don't build* list and [ooo/j32ooo-spec.md §20.7](ooo/j32ooo-spec.md)
+rejection 1 — which is why the L1-I wrong-path fill is recorded as an accepted residual rather than
+closed. And §E.10 has **no line at all** for the one mechanism that would close the speculative-hit
+metadata channel: its replacement-metadata entry prices DAWG, which partitions metadata between
+tenants and does nothing about a squashed path inside one. Nothing was borrowed to stand in for it,
+on [decisions/0005](decisions/0005-unmeasured-figures-are-removed.md)'s grounds, and the decision
+was left with the design point that would build it.
+
+**The implementation half is dispatchable in part — the first time in Wave 3 — and the row's
+`docs → jcore-cpu` is right for once.** Two pieces can be dispatched now. (a) `jcore-cpu/docs/architecture/tlb.md`
+§7 needs correcting; [security/threat-model.md §11](security/threat-model.md) has owned that row
+since C0 and it needs no hardware, only the repository. It has also grown: the same sentence claims
+"no prefetcher" and "no data/target speculation" while **§4.1 of that same file calls the I→D
+shadow fill a "speculative install" in four places**, so the document contradicts itself across two
+sections. (b) The W-R1 gate itself is real RTL against hardware that exists — a dispatch term on
+`walk_i_miss` in `core/cpu.vhd`, plus the counter **W-E1** describes, which is what makes the
+non-vacuity clause of **L4** dischargeable for this transmitter at all. What is *not* dispatchable
+is everything in [ooo/j32ooo-spec.md §11.1a](ooo/j32ooo-spec.md) and the paused specs' rules: no
+predictor, no prefetcher and no L2 exist to write them against, and [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md)
+D2 stops RTL being written against those specs regardless.
+
+**L4 does not move.** It stays `NOT MET`, and the reason it stays unmet is different in kind from
+L2, L3 and L6: those three wait for hardware to be built, and L4's transmitters are on
+`origin/master` today. Nothing in Wave 3 has moved a bar item to `MET`, and this row does not
+either.
 
 ### Final
 
