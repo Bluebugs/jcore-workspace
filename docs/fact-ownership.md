@@ -252,6 +252,55 @@ document has stopped meaning what it said.
 C2b added no `## Image layouts` row: the `W-R` rules move no context state and
 specify no byte layout.
 
+Wave-3 **C2c** added `hyp.microreset.classes` and `hyp.tenancy.rules` — one of
+each kind again, and **no `## Code bindings` row**, for C2a's reason rather than
+C2b's: `jcore-cpu@origin/master` has neither the FGMT hardware nor the hypervisor
+these facts describe. Case-insensitive searches over `*.vhd`/`*.vhm` for `fgmt`,
+`thread_id` and `multithread` return nothing; `barrel` returns only
+`core/shifter.vhd`, `core/shifter_seq.vhd` and `tests/shifter_seq_tap.vhd`, which
+are the barrel *shifter* and not barrel threading; and `hpriv`, `hcall`, `hrte`,
+`vbr_hyp`, `pdid` and `hedr` return nothing at all. **Eleven** perturbations were
+run, of which **four** pass:
+
+| Perturbation | Result |
+|---|---|
+| the owner's class count changed from four to three | **caught twice**: `owner-has-fact` on a **pattern non-match** (the registry pattern pins the literal count), and `no-stale-value` on a **value disagreement** in `security/threat-model.md` |
+| the count changed to three in `security/threat-model.md` only, owner still four, link intact | **caught**, `no-stale-value`, on a **value disagreement** — the link does not license the number |
+| `hyp.microreset.classes`'s `Constant` cell set to **3**, contradicting its own owner | **passes** — the cell is prose no check reads. **Fourth** time this table has recorded it; see C1c, C2a and C2b. Four waves is no longer a curiosity, and the fix (compare the cell against the value guard's canonical capture) is a checker change, which is still larger than any one task's scope |
+| the owner drops the count entirely — *"the following structure classes"* | **caught twice**: `owner-has-fact` on a **pattern non-match**, and `no-stale-value` reporting that the canonical pattern matches nothing in the owner, so there is no value to compare restatements against |
+| a class row deleted from the owner's scope table, the count left at **4** | **passes.** The value guard compares numbers between documents; it does not count rows. Same as C2b's transmitter row, and it matters more here: §4.7.1a constraint 2 says the scrub is complete *over its scope*, so deleting a row silently narrows what "complete" means |
+| every `T-R`*n* token removed from the owner (all **9** occurrences rewritten to `Rule `*n*) | **caught**, `owner-has-fact`, on a **pattern non-match** |
+| `T-R2` restated in `j4-execution-plan.md` with no link to the owner | **caught**, `restatement-is-linked` |
+| **`T-R2` inverted** — *"the `HRTE` **completes normally**"* where the rule says **refused**, token kept | **passes.** A name fact guards that a rule is stated, never what it says. C2b recorded the same shape on `W-R1`; this instance is worse in one respect, because the inverted text still reads as a rule *about* refusal — the bullet is titled "refusal, not a trap" — so a reviewer skimming headings sees compliance twice |
+| **`T-R1` narrowed** — *"and is not halted"* added to the definition of *S*, token and class count intact | **passes**, and this is the narrowing with a live consequence rather than a hypothetical one. "halted or not" is in T-R1 precisely because a context that wakes from `SLEEP` re-enters *S* without executing an `HRTE`; excluding halted siblings reopens that hole, and the closure argument in §4.7.2's prose is the only thing that would catch it. Prose, guarded by nothing — C2a's row, on a rule where the missing arm is nameable |
+| ownership of `hyp.tenancy.rules` moved to `security/threat-model.md` | **caught by the cascade**: `owner-has-fact` passes (that document does state `T-R` tokens), and `restatement-is-linked` fails over the real owner's nine lines plus `j4-execution-plan.md`. Same shape as C1c's, C2a's and C2b's last rows |
+| **`hyp.gangswitch.items` 10 → 9 in the owner** — not a C2c fact, run because C2c *moved* it | **caught twice**, `owner-has-fact` and `no-stale-value`. Recorded because C2c is the first task to land in the escape the C1b note below predicts. That note says the anchor is load-bearing "only while it is genuinely the last row and the author renumbers it", and names two silent passes: inserting before the anchor **without** renumbering, and appending after it. C2c's microreset could have taken either position. It was inserted **before** `Restore the incoming guest` **and the anchor renumbered to 10**, which is the one arrangement the guard can see — and the guard then fired on all three prose sites, exactly as C1b's row predicts. The two silent positions are still silent; nothing here narrows them, and the row count and contiguity check that would is still **B0c**'s |
+
+**Procedure.** The rows were committed before being perturbed, and each
+perturbation asserted a non-empty `git diff` before the checker ran — C2b's
+procedural failure, applied as a rule. One perturbation (`T-R` token removal) was
+**rejected by that assertion on its first attempt**: the literal string it edited
+did not exist, the script reported `EDIT FAILED` rather than `OK`, and it was
+re-run as a regular-expression substitution over all nine occurrences. That is
+the same class of error C2a filed — an edit that missed most of its targets —
+caught before it could report green.
+
+What C2c adds to C2a's and C2b's honest summaries is a third limit. C2a's was
+that a name fact cannot see a narrowing; C2b's was that a code binding sees the
+tree diverge but not the meaning change. C2c's is that **the two limits compose
+where there is no code**: `hyp.tenancy.rules` guards a token in a document
+describing hardware that does not exist, so neither a binding nor a residue test
+can contradict it, and the inverted `T-R2` above would survive until the RTL is
+written. The mitigation is not a checker change; it is
+[hypervisor/hardware-spec.md §4.7.1b](hypervisor/hardware-spec.md)'s **T-E1**,
+which must fail before the check exists and pass after — and whose kill criterion
+is that a model with one thread context must report *not runnable* rather than
+passing vacuously.
+
+C2c added no `## Image layouts` row: `HTCR` and `HMRC` are per-context and
+per-core control registers whose bytes are §2.9's save/restore contract, not a
+context image this file owns a total for.
+
 C2a added no `## Code bindings` row: no GPU RTL exists in
 `jcore-cpu@origin/master` or `jcore-soc@origin/master` — a case-insensitive
 search for `gpu|shader|opencl|simt|warp|texel|rasteriz` returns two matches, both
