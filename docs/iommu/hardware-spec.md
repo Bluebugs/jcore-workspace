@@ -39,7 +39,11 @@ What's specified:
 - Reset state
 
 What's not specified:
-- Bus fabric implementation (assumes AXI or compatible; BMID-tagging at the master ports)
+- Bus fabric implementation (assumes AXI or compatible; BMID-tagging at the master ports).
+  **This assumption is not met by anything that exists**: there is no AXI in either
+  repository and the J-Core data bus carries no transaction ID and no master ID at all
+  ([security-review.md §3](security-review.md) **IH-1**). The AXI-flavoured `SIZE`,
+  `LEN` and `ID` rows in §2.1 describe an intended target interface, not a present one
 - DRAM controller implementation
 - IOTLB physical implementation (CAM, SRAM-and-comparator, or hybrid — implementer's choice)
 
@@ -354,8 +358,9 @@ The register offset arithmetic is stated here because
 
 This section owns the IOMMU's deny behaviour. It is the answer to bar item **L2**
 in [security/threat-model.md §8](../security/threat-model.md), and it is written as
-rules rather than as prose because §8's five clauses each need a place an
-implementer can be held to.
+rules rather than as prose because §8's clauses — its original five, plus the five
+[§7.7a](../security/threat-model.md) adds — each need a place an implementer can be
+held to.
 
 **The starting point, which is not a new mechanism.**
 [security/threat-model.md §7.7](../security/threat-model.md) sharpened the bar in
@@ -471,8 +476,9 @@ guarantee is scoped to masters that reach memory through it and to nothing else.
   what [linux-spec.md §5.2](linux-spec.md)'s `.map` already does, looping
   `for_each_set_bit(bmid, domain->bmids, …)`. That form *names* its sharers where
   `GLOBAL` names none, and it costs *k* of the IOTLB's entries for a *k*-way shared
-  buffer instead of one. Under §4.1's 64-entry geometry and §5's working-set
-  estimates (~16 entries for the four concurrent workloads) that is affordable, and
+  buffer instead of one. Under §4.1's 64-entry geometry and
+  [design-spec.md §5.3](design-spec.md)'s working-set estimates (~16 entries for the
+  four concurrent workloads it models) that is affordable, and
   `I-R8`'s quota is what stops it being affordable *at another BMID's expense*.
 
 - **`I-R6` — the reserved BMIDs are blocked, not bypassed.** BMID `0x00` and BMID

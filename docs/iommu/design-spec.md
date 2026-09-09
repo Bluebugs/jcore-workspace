@@ -90,7 +90,7 @@ This also means the IOMMU has no concept of a "page-table base register" or doma
 
 ### 3.5 Block-and-report on miss
 
-**Decision:** When the IOTLB misses, the IOMMU blocks the transaction (returns bus error to the master), latches fault information in a status register, and raises an interrupt.
+**Decision:** When the IOTLB misses, the IOMMU blocks the transaction, latches fault information in a status register, and raises an interrupt. *(This previously read "returns bus error to the master"; the J-Core bus has no error response, so the block **completes** the transaction with read data zero and the write discarded — [hardware-spec.md §2.2](hardware-spec.md) and [`I-R2`](hardware-spec.md).)*
 
 **Rationale:** The miss case is a kernel bug or misbehaving device, not a routine event. Blocking is the secure default: any other behavior either leaks data (passthrough on miss) or silently corrupts memory (default-write-to-scratchpad). The interrupt lets Linux log the fault and take action — typically logging to dmesg and disabling the offending device.
 
