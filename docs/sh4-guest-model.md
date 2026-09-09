@@ -741,8 +741,8 @@ always carries the §5 obligation.
   search. Owner: **project owner**, per that section.
 - **The store queue inherits the byte-order requirement** (§3.3): queue data
   stores are a data path, they are *native* under the guest P4 carve-out, and a
-  little-endian guest writing through big-endian lanes is exactly what Decision
-  B2-5 outlaws — on the one guest path that is deliberately untrapped. Written
+  little-endian guest whose stores were laid down in the host's byte order is
+  exactly what Decision B2-5 outlaws — on the one guest path that is deliberately untrapped. Written
   up as [sq/spec.md §6.4](sq/spec.md) (normative), and **narrowed** by byte
   invariance: the 32-byte burst is a byte copy and has no byte order of its own,
   so only the stores into the queue follow the mode. Owner: that spec, jointly

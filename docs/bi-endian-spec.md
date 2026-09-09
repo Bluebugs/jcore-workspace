@@ -434,6 +434,18 @@ little-endian guest's legal instruction would be tested as some other opcode.
 The `cpu.vhd` site avoids that hazard by construction, which is the reason to
 prefer it; this document does not otherwise mandate a site.
 
+**One instruction source must *not* be swapped, and a `cpu.vhd`-sited swap
+excludes it for free.** `datapath.vhm`'s debug `INSERT` command writes
+`this.if_dr_next := debug_i.ir` and runs the same two illegal checks on it — a
+second, independent writer of the instruction register that never passes through
+`inst_i`. That is correct behaviour and not an oversight in the placement: a
+debug-inserted instruction is handed to the CPU as a 16-bit opcode by the
+debugger, not fetched from memory, so it has no memory byte order to convert and
+applying the mode to it would corrupt it. A swap at `cpu.vhd`'s
+`dp_inst_i.d <= inst_i.d` misses this path automatically; a swap placed inside
+the `datapath.vhm` capture must be careful to cover the `inst_i.ack` arm only.
+That asymmetry is a second reason to prefer the `cpu.vhd` site.
+
 ### 5.3 Literal pools are data, and that is correct
 
 SH's PC-relative loads — `MOV.W @(disp,PC),Rn` and `MOV.L @(disp,PC),Rn` — are
@@ -495,7 +507,8 @@ clears `SR.HPRIV` and the byte order reverts to `LE` in that same step.
 
 **This two-bit pattern is adopted from prior art, not invented here**, and §11
 gives two independent pre-2006 instances of it. PA-RISC pairs `PSW[E]` with a
-software-writable *default endian bit* that "controls whether the PSW E-bit is
+software-writable (and implementation-dependent) *default endian bit* that
+"controls whether the PSW E-bit is
 set to 0 or 1 on interruptions"; PowerPC pairs `MSR[LE]` with `MSR[ILE]`, which
 "is copied into `MSR[LE]` to select the Endian mode for the context established
 by the interrupt". Both realise it by **copying** the second bit into the first
@@ -726,7 +739,7 @@ is a guess with a document number attached.
 | The taxonomy itself, and the demonstration that the alternative was abandoned | **ARM DDI 0100I §A2.7.2** names `BE-8`, `BE-32` and `LE`, defines byte invariance as "the address of a byte in memory is the same irrespective of whether that byte is being accessed in a big endian or little endian manner", and §A2.7.3 makes `BE-8` mandatory at ARMv6 with `BE-32` IMPLEMENTATION DEFINED |
 | **Per-context, privileged** byte-order control | **PA-RISC** `PSW[E]` (1994) — in the PSW, saved to `IPSW` on interruption, restorable only by privileged `RFI`. **PowerPC** `MSR[LE]` (*PowerPC Architecture*, First Edition, May 1993, IBM SR28-5124-00, §10.2.3), privileged via `mtmsr`. **MIPS** `Status[RE]` bit 25 (R4000 User's Manual, 1992/1994), which reverses **user** mode's endianness relative to the kernel's |
 | Byte order applying to **instruction fetch** as well as data, under that same per-context bit | **PA-RISC 1.1** (1994), §2 *Byte Ordering*: "**The E-bit also affects instruction fetch.**" This is the only pre-2006 source found that does so — see §11.3 |
-| A **second** privileged bit fixing the byte order the trap handler runs in, applied by hardware at the transition | **PA-RISC 1.1** (1994) *default endian bit*: "controls whether the PSW E-bit is set to 0 or 1 on interruptions". **PowerPC** `MSR[ILE]` (1993, §10.2.3): "When an interrupt is taken, this bit is copied into MSR_LE to select the Endian mode for the context established by the interrupt", tabulated for every interrupt type in Figure 68 |
+| A **second** privileged bit fixing the byte order the trap handler runs in, applied by hardware at the transition | **PA-RISC 1.1** (1994) *default endian bit*: "controls whether the PSW E-bit is set to 0 or 1 on interruptions" — described as **implementation-dependent** and software-writable, with no architected register named, so this document names none either. **PowerPC** `MSR[ILE]` (1993, §10.2.3): "When an interrupt is taken, this bit is copied into MSR_LE to select the Endian mode for the context established by the interrupt", tabulated for every interrupt type in Figure 68 |
 | The hypervisor owning a guest-visible mode the guest cannot write | IBM VM/370 (1972); Popek & Goldberg, CACM 17(7), 1974 — already cited by [sh4-guest-model.md §9](sh4-guest-model.md) |
 
 ### 11.2 Applying §2.1's first rule — mechanism, not motivation
@@ -750,12 +763,17 @@ the corrections matter to which reference supports which clause:
 
 1. **PowerPC `MSR[LE]` is address munging, not byte invariance**, so it must
    **not** be cited for the byte-invariance clause. *PowerPC Architecture*
-   (1993) Appendix D.3.2 is explicit: "PowerPC systems do not do such swapping,
-   but instead achieve the effect of Little-Endian byte ordering by modifying
-   the low-order three bits of the effective address… Individual scalars
-   actually appear in storage in Big-Endian byte order." Because it XORs the low
-   **three** bits, it is *doubleword*-invariant rather than word-invariant — a
-   third point on the axis of §2.1, not one of the two. It is a correct citation
+   (First Edition, 1993) Appendix D.3.2 is explicit: "PowerPC systems do not do
+   such swapping, but instead achieve the effect of Little-Endian byte ordering
+   by modifying the low-order three bits of the effective address… Individual
+   scalars actually appear in storage in Big-Endian byte order." Because it XORs
+   the low **three** bits, it is *doubleword*-invariant rather than
+   word-invariant — a third point on the axis of §2.1, not one of the two — and
+   the equivalence holds **for aligned scalars** (App. D.4.2.1); misaligned
+   little-endian accesses are a separate case the architecture handles by trap.
+   *Cite Appendix D to the 1993 First Edition specifically: by Book I 2.01/2.02
+   this material had moved into the main chapters, so "Appendix D" resolves only
+   against the edition named here.* It is a correct citation
    for **per-context privileged control** and for **`ILE`**, and it is cited for
    exactly those and nothing else. (Byte-invariant PowerPC exists — the MPC8xx
    "true little-endian" mode, 1998, and Book E's per-page `E` attribute, 2002 —

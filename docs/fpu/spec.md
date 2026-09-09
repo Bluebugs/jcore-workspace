@@ -783,7 +783,11 @@ data path **and** instruction fetch
 ([../bi-endian-spec.md §1](../bi-endian-spec.md), Decision BE-1;
 [../decisions/0006](../decisions/0006-endianness-is-big-endian.md) §Second
 re-scope). A double-`FMOV`'s half-pair order is a **data**-path property, so it
-follows that mode's `LE` bit.
+follows the **effective byte order** of the context performing the access.
+*Not the `LE` bit specifically, which this paragraph previously named:
+[../bi-endian-spec.md §6.1](../bi-endian-spec.md) defines the effective order as
+`HLE` when `SR.HPRIV = 1` and `LE` otherwise, so naming `LE` would give the
+wrong answer for a double-`FMOV` executed by hyperprivileged code.*
 
 *This paragraph previously described the mode as little-endian **data** only,
 with instruction fetch staying big-endian, citing Decision B2-1. B2-1 is
@@ -857,9 +861,10 @@ arithmetic blocks and the FIPR / FTRV / FSCA / FSRRA datapaths are
 endian-neutral, per points 3–5. *(This note previously described the parameter
 as selecting between a Tier-0 big-endian and a Tier-1 little-endian **build**.
 That framing went with the withdrawn migration: the selector is the per-context
-byte-order mode's `LE` bit ([../bi-endian-spec.md §6](../bi-endian-spec.md)), not
+byte-order mode ([../bi-endian-spec.md §6](../bi-endian-spec.md)), not
 the tier, and it must therefore be switchable at run time rather than fixed at
-elaboration.)*
+elaboration. The selector is the **effective** byte order, not `LE` as such —
+see §6.2.1.)*
 
 #### 6.2.2 The withdrawn migration statement. [T0 → T1]
 

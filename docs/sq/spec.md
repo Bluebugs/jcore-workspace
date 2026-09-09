@@ -214,9 +214,18 @@ is considered consumed and clears `HSQCR` accordingly before resuming the guest.
 > restated below.
 
 **Decision:** queue-data stores are **data** accesses, so they follow the
-guest's byte-order mode: the byte lanes a guest store lands in follow the
-guest's setting and not the host's. **The 32-byte burst has no byte order of
-its own** and needs no rule.
+guest's byte-order mode: the **byte order in which a guest's stored value is
+laid down** in the queue buffer follows the guest's setting and not the host's.
+**The 32-byte burst has no byte order of its own** and needs no rule.
+
+*Stated that way deliberately: it is **not** about lanes.* Under byte invariance
+the lanes a store occupies are a function of its address and size and do not
+move with the mode at all — [../bi-endian-spec.md §4.3](../bi-endian-spec.md)
+says there is no lane remapping in the design. The retained half of this
+requirement previously read "the byte lanes a guest store lands in", which is
+the superseded word-invariant vocabulary describing the right conclusion; the
+thing that actually varies is the order of the bytes within the value, permuted
+at the register boundary before it reaches any lane.
 
 Per [../bi-endian-spec.md §1](../bi-endian-spec.md), Decision BE-1, J-Core is to
 gain a byte-invariant per-context byte-order mode covering the data path and
@@ -247,15 +256,17 @@ requirement.
 **Rationale, and why it is not optional politeness.** §4.4.3 of
 [../hypervisor/hardware-spec.md](../hypervisor/hardware-spec.md) carves the SQ
 region out of the guest P4 trap precisely so these stores run **untrapped**. A
-little-endian guest writing through big-endian lanes would therefore be silently
-wrong on the one guest path nothing inspects — exactly the outcome
+little-endian guest whose stores were laid down in the host's byte order would
+therefore be silently wrong on the one guest path nothing inspects — exactly the outcome
 [../sh4-guest-model.md §5](../sh4-guest-model.md), Decision B2-5, outlaws.
 Neither the mode nor the queues exist yet; both must arrive with this property
 already in them, because there is no later point at which a guest would notice
 it was missing.
 
-**Interaction with §7.** The mode's `LE` bit is per-vCPU context like everything
-else in §7, and like `HSQCR` it must be restored before the guest resumes. *This
+**Interaction with §7.** The mode's `LE` bit — the one that applies to a guest,
+since a guest runs at `SR.HPRIV = 0` and the effective order is `LE` there
+([../bi-endian-spec.md §6.1](../bi-endian-spec.md)) — is per-vCPU context like
+everything else in §7, and like `HSQCR` it must be restored before the guest resumes. *This
 paragraph previously gave the failure as "a vCPU resumed under the wrong byte
 order bursts a buffer whose bytes were laid down under the other one", which is
 the withdrawn burst claim in another form and is false under byte invariance:
