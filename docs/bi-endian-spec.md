@@ -122,16 +122,26 @@ The last two are the ones that would otherwise land as unbudgeted work in
 and [iommu/hardware-spec.md](iommu/hardware-spec.md) rather than here.
 
 **Attribution, because it would be easy to read this list as ARM's and it is
-not.** ARM's own stated reason for introducing byte invariance is narrower and
-is quoted in §11: fine-grain mixed-endian **shared data structures**, and
-conformance to IEEE Std 1596.5-1993. The nearest ARM comes to the argument above
-is a statement that the difference between the schemes "is only visible when
-communicating between big endian and little endian agents using memory", where
-the agents are "different processors or programs running with different
-endianness settings on the same processor". **The DMA and cache-line bullets are
-this project's extension of that**, applied to a system where the other agents
-are not processors at all. They are sound and they are ours; ARM is cited for
-the taxonomy and the transition, not for these four bullets.
+not.** ARM's own stated reason for introducing byte invariance is narrower than
+the four bullets above: the introduction to §A2.7 of the ARM ARM (DDI 0100I,
+p. A2-30) motivates it by fine-grain **big-endian and little-endian shared data
+structures** and by conformance to IEEE Std 1596.5-1993. **The four bullets
+above are this project's own argument**, not ARM's — the cache-line and
+bus-master consequences in particular are consequences *we* draw for *this*
+machine, where the other agents on the bus are not processors at all. They are
+sound and they are ours; ARM is cited in §11 for the taxonomy and for the
+transition, and for nothing else.
+
+*An earlier revision of this paragraph quoted ARM as saying the difference
+between the schemes "is only visible when communicating between big endian and
+little endian agents using memory". **That quotation was misattributed and is
+withdrawn.** It is not in DDI 0100I — the word "agents" does not occur in that
+manual — and its actual source is a later ARM document, post-2006, discussing
+the word-invariant BE-32 scheme: the wrong manual, the wrong side of the
+prior-art cutoff, and the opposite scheme to the one specified here. It is
+recorded rather than silently removed because it appeared in the one paragraph
+of this document whose entire purpose is scrupulous attribution, which is the
+least excusable place for it and the most instructive.*
 
 ### 2.3 The empirical argument
 
@@ -168,26 +178,44 @@ prior-art table.
 
 ### 3.1 SH-4's data format is byte-invariant, and J-Core inherits that
 
-The SH-4 Software Manual §2.5 *Data Formats in Memory* specifies both byte
-orders for the data format, and its figure 2.5 places byte 0 at bits 31:24 under
-big-endian and at bits 7:0 under little-endian, with the row's address label
-unchanged. **The address does not move; the significance does.** That is what a
-stock SH-4 binary's memory image depends on, and it is the half of SH-4 that
-J-Core inherits: it fixes what a guest's data structures look like in memory.
+The **SH-4 Programming Manual** (Renesas/Hitachi, Rev. 5.0, 04/2001,
+ADE-602-156D) §2.5 *Data Formats in Memory* specifies both byte orders for the
+data format, and its figure 2.5 draws the same three longwords under each.
+
+**What the figure shows, stated precisely, because the inference rests on it.**
+Figure 2.5 is drawn as a *mirror*: the big-endian half runs its base addresses
+`A`, `A+4`, `A+8` down the page while the little-endian half runs `A+8`, `A+4`,
+`A` down the page, and the byte columns reverse with them. So **no single row
+label appears identically on both halves**, and anyone checking this document
+against the figure should expect not to find one. What the two halves do show is
+the byte at address `A` occupying bits 31:24 on the big-endian side and bits 7:0
+on the little-endian side — the same byte, the same address, a different
+position within the longword. **The address does not move; the significance
+does.** That is what a stock SH-4 binary's memory image depends on, and it is
+the half of SH-4 that J-Core inherits: it fixes what a guest's data structures
+look like in memory.
+
+*An earlier revision of this paragraph said the figure showed "the row's address
+label unchanged", which is not how it is drawn and would have sent a checker
+looking for something that is not there. The conclusion is unaffected; the
+evidence for it is the byte-position reversal at a fixed address, not a repeated
+label.*
 
 **"Byte-invariant" is this project's classification, not Renesas's word.** The
-term appears nowhere in the SH-4 software manual, the SH7750 hardware manual or
-the SH-4A software manual; Renesas never places SH-4 in the byte-invariant /
+term appears nowhere in the SH-4 Programming Manual, the SH7750 hardware manual
+or the SH-4A software manual; Renesas never places SH-4 in the byte-invariant /
 word-invariant taxonomy at all, because that taxonomy is ARM's (§2.1) and
 postdates the parts. The classification is an inference from figure 2.5 and from
-the hardware manual's 8-bit-device transfer tables, in which a longword access
+the SH7750 hardware manual's 8-bit-device transfer tables, in which a longword access
 issues four sequential byte transfers whose first carries register bits 31:24 in
 big-endian and bits 7:0 in little-endian, with no address transformation
 documented anywhere. It is a sound inference and it is ours; §11 cites the
 figure, not a Renesas verdict.
 
 **And SH-4's byte invariance has a documented exception at 64 bits, which
-J-Core must not inherit by accident.** The note under figure 2.5 states that
+J-Core must not inherit by accident.** The note under figure 2.5 of that same
+Programming Manual — and **only** there; the SH-4A software manual carries no
+such note, so do not cite it for this — states that
 SH-4 does not support endian conversion for the 64-bit data format, so a
 double-precision floating-point access in little-endian mode has its upper and
 lower 32 bits reversed. That is a real hole in a clean byte-invariance claim and
@@ -218,8 +246,9 @@ Two consequences follow, and the second is the one that matters here:
 1. **SH-4's manuals say nothing about endianness in connection with instruction
    fetch.** There was nothing to say: a strap sampled before the first fetch
    makes the fetch path's byte order a property of the board, not of the
-   architecture. Four manuals were searched in full — the SH-4 software manual,
-   two revisions of the SH7750 hardware manual, and the SH-4A software manual —
+   architecture. Four manuals were searched in full — the SH-4 Programming
+   Manual, two revisions of the SH7750 hardware manual, and the SH-4A software
+   manual —
    and every occurrence of "endian" across them is a data-format, mode-pin,
    `BCR1.ENDIAN`, bus-alignment, `FMOV`/`FPSCR.SZ`, PCMCIA or SDRAM byte-lane
    reference. Not one is tied to instruction fetch, the instruction cache or
@@ -362,8 +391,26 @@ bi-endianness cheap enough to be worth having.
 calls the same `splice_instr_data_bus` procedure and adds no selection of its
 own.
 
-**Not one of these conditions reads instruction data.** Every one is an address
-bit, or an equality between two addresses. So under byte invariance —
+**And the same pattern holds on the slave side of the instruction bus**, in four
+`jcore-soc@origin/master` memories that answer fetches directly. Each registers
+`ibus_i.a(1)` and uses it to pick the halfword; none reads instruction data:
+
+| Site (`jcore-soc@origin/master`) | Selection |
+|---|---|
+| `components/memory/bootram_infer.vhd:82` | `i_word(31 downto 16)` vs `(15 downto 0)`, on `i_half` — registered from `ibus_i.a(1)` at line 68 |
+| `components/memory/bootram_infer_coremark.vhd:90` | the same, on `i_half` registered at line 76 |
+| `components/memory/dev_ddr_spram.vhd:64` | `sp_dr(31 downto 16)` vs `(15 downto 0)`, on `r_instr_hi` — registered from `ibus_i.a(1)` at line 54 |
+| `components/memory/dev_ddr_spram_boot.vhd:93` | the same, on `r_instr_hi` registered at line 83 |
+
+*These were absent from the first revision of this section, which presented the
+five rows above as the complete set. They **strengthen** the claim rather than
+qualify it — four more selections, all address-derived, all therefore
+unchanged — but the section had said "every" and did not mean it. Nine sites,
+and the pattern is uniform: on this machine an instruction halfword is chosen by
+an address bit everywhere it is chosen at all.*
+
+**Not one of these conditions reads instruction data.** Every one of the nine is
+an address bit, or an equality between two addresses. So under byte invariance —
 which by Decision BE-2 changes no address — **the icache, the line-fill packing,
 the bus glue and the uncached bypass are all untouched**, and so are the dcache
 and the L2, which never see the fetch path at all.
@@ -675,7 +722,7 @@ is a guess with a document number attached.
 
 | Mechanism | Prior art |
 |---|---|
-| **Byte-invariant** bi-endian data format — the same byte address in both modes, only the assembly into register values changing | **PA-RISC 1.1**, `PSW[E]`, Third Edition, February 1994 (HP 09740-90039), §2 *Byte Ordering*: byte loads and stores are **unaffected** by `E`, while halfword and word operands reverse within their own addresses. **SH-4** software manual §2.5 / figure 2.5 (Rev. 5.0, 04/2001, ADE-602-156D) — the classification is ours, see §3.1. **ARM BE-8**, ARM ARM DDI 0100I, July 2005, §A2.7.2 |
+| **Byte-invariant** bi-endian data format — the same byte address in both modes, only the assembly into register values changing | **PA-RISC 1.1**, `PSW[E]`, Third Edition, February 1994 (HP 09740-90039), §2 *Byte Ordering*: byte loads and stores are **unaffected** by `E`, while halfword and word operands reverse within their own addresses. **SH-4 Programming Manual** §2.5 / figure 2.5 (Renesas/Hitachi Rev. 5.0, 04/2001, ADE-602-156D) — the classification is ours, see §3.1. *The 2001 Programming Manual is cited and not the later Renesas SH-4 **Software** Manual (Rev. 6.00, REJ09B0318-0600), whose §2.5, figure 2.5 and 64-bit note are byte-identical: that edition is dated September **2006** and would breach [glossary §2](glossary.md)'s cutoff. Same words, wrong side of the line.* **ARM BE-8**, ARM ARM DDI 0100I, July 2005, §A2.7.2 |
 | The taxonomy itself, and the demonstration that the alternative was abandoned | **ARM DDI 0100I §A2.7.2** names `BE-8`, `BE-32` and `LE`, defines byte invariance as "the address of a byte in memory is the same irrespective of whether that byte is being accessed in a big endian or little endian manner", and §A2.7.3 makes `BE-8` mandatory at ARMv6 with `BE-32` IMPLEMENTATION DEFINED |
 | **Per-context, privileged** byte-order control | **PA-RISC** `PSW[E]` (1994) — in the PSW, saved to `IPSW` on interruption, restorable only by privileged `RFI`. **PowerPC** `MSR[LE]` (*PowerPC Architecture*, First Edition, May 1993, IBM SR28-5124-00, §10.2.3), privileged via `mtmsr`. **MIPS** `Status[RE]` bit 25 (R4000 User's Manual, 1992/1994), which reverses **user** mode's endianness relative to the kernel's |
 | Byte order applying to **instruction fetch** as well as data, under that same per-context bit | **PA-RISC 1.1** (1994), §2 *Byte Ordering*: "**The E-bit also affects instruction fetch.**" This is the only pre-2006 source found that does so — see §11.3 |

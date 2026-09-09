@@ -12,8 +12,12 @@ preserved verbatim in the archive directory). All Tier 0 content in
 this document is a faithful recast of the J2 baseline FPU spec; the
 Tier 0 hardware decisions and protocol mechanics are unchanged. Tier 1
 and Tier 2 are new in this revision.
-**ISA reference:** SH-4 FPU (Renesas SH-4 Software Manual,
+**ISA reference:** SH-4 FPU (Renesas/Hitachi SH-4 **Programming** Manual,
 Rev. 5.0, ADE-602-156D, 2001) and SH-4A FPU (REJ09B0003-0150Z, 2004).
+*`ADE-602-156D` is the Programming Manual; this document previously called it
+the "Software Manual", which is a different Renesas publication
+(`REJ09B0318-0600`, Rev. 6.00) whose content for the sections cited here is
+identical but which is dated 2006 and so cannot serve as prior art.*
 **Cross-references:**
 - [../glossary.md](../glossary.md) — product naming, prior-art policy.
 - [../platform-baseline.md §2](../platform-baseline.md) — byte order (the
@@ -792,7 +796,7 @@ that was restated.*
 below, selected by that same mode.
 
 **This rule is SH-4's documented behaviour, not a J-Core invention**, and that
-is worth knowing before implementing it. The SH-4 software manual's note under
+is worth knowing before implementing it. The SH-4 Programming Manual's note under
 its figure 2.5 states that SH-4 does not support endian conversion for the
 64-bit data format, so a double-precision access in little-endian mode has its
 upper and lower 32 bits reversed — which is exactly points 1 and 2. It is the
@@ -2010,7 +2014,7 @@ instruction; lazy-FPU and trap-on-first-use predate 1990.
 The Tier 0 archived spec's Appendix A is the canonical reference
 catalogue; reproduced here in summary form.
 
-1. **Renesas SH-4 Software Manual, Rev. 5.0 (ADE-602-156D)**,
+1. **Renesas/Hitachi SH-4 Programming Manual, Rev. 5.0 (ADE-602-156D)**,
    April 2001. Canonical ISA reference. Section 2.2.3, section 6,
    section 9.
 2. **Renesas SH-4A Software Manual, Rev. 1.50

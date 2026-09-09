@@ -655,8 +655,12 @@ matches [fpu/spec.md §1.5](fpu/spec.md)'s non-goal and is the same choice.
 with no way to decide a disputed case is a requirement that will be decided by
 whoever writes the code first. The precedence order is:
 
-1. The **SH-4 hardware manual** (Renesas / Hitachi, 1998; SH-4 Software Manual
-   Rev. 5.0, 2001) — normative wherever it is unambiguous.
+1. The **SH-4 hardware manual** (Renesas / Hitachi, 1998; SH-4 **Programming**
+   Manual Rev. 5.0, ADE-602-156D, 2001) — normative wherever it is unambiguous.
+   *`ADE-602-156D` was previously called the "Software Manual" here; that is a
+   separate Renesas publication (`REJ09B0318-0600`, Rev. 6.00, 2006). The
+   content this workspace cites is identical, but the identifier and the title
+   belong to different documents on different sides of the prior-art cutoff.*
 2. **qemu's `target/sh4`** — the tiebreaker where the manual is ambiguous or
    implementation-defined. [fpu/spec.md §1.3](fpu/spec.md) already adopts this
    for the FPU and this document extends it to the emulated register surface.
