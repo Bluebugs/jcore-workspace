@@ -601,8 +601,14 @@ These are **projections from cycle counts**, not measurements: no Tier 2
 hardware exists on either target. Cycle counts are architectural and hold on
 any implementation; wherever a figure below is quoted in seconds it assumes the
 `[ASIC]` design target of 400–500 MHz ([hardware-impl.md §11.1](hardware-impl.md)),
-which is a goal, not an achieved clock. The Phase-1 `[FPGA]` target is ~40 MHz,
-an order of magnitude away, so no wall-clock figure here transfers to it.
+which is a goal, not an achieved clock. The Phase-1 `[FPGA]` platform runs
+**an order of magnitude slower** than that, so no wall-clock figure here
+transfers to it; the measured per-variant figures are owned by
+[platform-baseline.md §3](../platform-baseline.md). *This sentence previously
+put "the Phase-1 `[FPGA]` target" at ~40 MHz. That figure is retired by
+[decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md) — it is
+J2's measured row, not a J4 target, and J2 has no MMU. The order-of-magnitude
+point is unaffected and gets stronger, since the J4 row is lower still.*
 
 ### 10.2 Cycle counting methodology
 

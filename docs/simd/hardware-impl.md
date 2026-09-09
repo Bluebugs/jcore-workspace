@@ -560,8 +560,15 @@ vehicle `[ASIC]`. Area and frequency are therefore stated as unknown, per
 
 **Goal, not a result:** the `[ASIC]` frequency target for this project is
 ~400 MHz+ ([j4-remediation-plan.md](../j4-remediation-plan.md) guiding
-principle 1); the Phase-1 `[FPGA]` goal is fit and correctness at ~40 MHz, with
-area (LUT4 / EBR) the budgeted quantity and energy out of scope.
+principle 1); the Phase-1 `[FPGA]` goal is **fit and correctness**, with area
+(LUT4 / EBR) the budgeted quantity and energy out of scope. *This line
+previously read "fit and correctness at ~40 MHz". That figure is retired — it
+is J2's row, and the core this project builds is J4; the measured per-variant
+baseline and the one real `[FPGA]` frequency goal are owned by
+[platform-baseline.md §3](../platform-baseline.md), per
+[decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md).
+Nothing in this section was derived from the 40, which is why removing it
+changes no number below.*
 
 **What would produce the numbers:** `yosys` + `nextpnr-ecp5` targeting the
 ULX3S 85F for the `[FPGA]` columns; a gf180 gate-level run (Track D0) for the
