@@ -143,7 +143,7 @@ revision of this decision and a reader is owed the difference:
   says why it is wrong.
 - **Wrong, and reversed:** excluding the fetch path. B2-1 read the big-endian
   halfword selection in `splice_instr_data_bus` as committing the fetch path to
-  a byte order. That selection is driven by `instr_o.a(1)`, an address bit, and
+  a byte order. That selection is driven by `instr_o.a(1)` ([bi-endian-spec.md §5.1](bi-endian-spec.md)), an address bit, and
   under byte invariance address-derived selections are exactly what does not
   change ([bi-endian-spec.md §5.1](bi-endian-spec.md)).
 
