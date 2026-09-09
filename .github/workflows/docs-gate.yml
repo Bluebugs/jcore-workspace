@@ -60,10 +60,14 @@ jobs:
       # ---------------------------------------------------------------------
       # WHY NOT `submodules: recursive`, and why that is not a loophole.
       #
-      # The checks read exactly two submodules: `jcore-cpu` (34 RESOLVED
-      # markers, 15 artifact citations, three code bindings, the P4 decode and
-      # the canonical encoding database) and `linux` (22 RESOLVED markers, two
-      # code bindings). `recursive` would additionally clone `gcc` and
+      # The checks read exactly three submodules: `jcore-cpu` (34 RESOLVED
+      # markers, 15 artifact citations, most code bindings, the P4 decode and
+      # the canonical encoding database), `linux` (22 RESOLVED markers, two
+      # code bindings), and `jcore-soc` (one code binding: the instruction
+      # fetch splice in `targets/data_bus_pkg.vhd`, which is the copy
+      # `jcore-cpu synth/cpu_synth.sh` elaborates -- the `jcore-cpu sim/` copy
+      # of the same function is NOT the synthesised one). `recursive` would
+      # additionally clone `gcc` and
       # `llvm-project`, which are multi-gigabyte and which no check touches. A
       # gate that spends twenty minutes cloning compilers it does not read is a
       # gate that gets disabled, and this task's whole subject is checks that
@@ -77,6 +81,12 @@ jobs:
       # asserted by fixtures, not assumed: `test-check-doc-facts.py` has a pair
       # of cases proving an absent submodule exits 0 WITHOUT `--strict` and
       # non-zero WITH it.
+      #
+      # That is not hypothetical. `jcore-soc` is in the list above BECAUSE the
+      # case this comment named -- "a new marker naming `jcore-soc`" -- then
+      # happened: the bi-endian spec bound the fetch splice, and gate 1 failed
+      # with "jcore-soc is not checked out" rather than skipping it quietly.
+      # The under-provisioning was caught by the property, not by review.
       #
       # --filter=tree:0, and NOT --depth. Two separate points:
       #
@@ -97,7 +107,7 @@ jobs:
       # few dozen paths. Both keep full commit history, which is the part that
       # is not optional.
       # ---------------------------------------------------------------------
-      - name: Check out the two submodules the checks actually read
+      - name: Check out the three submodules the checks actually read
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -108,7 +118,7 @@ jobs:
           git config --global \
             "url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf" \
             "git@github.com:"
-          git submodule update --init --filter=tree:0 -- jcore-cpu linux
+          git submodule update --init --filter=tree:0 -- jcore-cpu linux jcore-soc
 
       # The submodule POINTER is not what the checks read. 0002 section 2 is
       # explicit that a pointer is not evidence of merge -- it lags the
@@ -122,6 +132,7 @@ jobs:
           set -euo pipefail
           git -C jcore-cpu fetch --filter=tree:0 origin master
           git -C linux     fetch --filter=tree:0 origin jcore
+          git -C jcore-soc fetch --filter=tree:0 origin master
           # Fail here, with a readable message, rather than letting ~56 markers
           # turn into skips that --strict then reports one at a time.
           git -C jcore-cpu rev-parse --verify origin/master >/dev/null || {
@@ -132,6 +143,10 @@ jobs:
             echo "::error::linux origin/jcore is missing; every RESOLVED marker naming it would be unverifiable"
             exit 1
           }
+          git -C jcore-soc rev-parse --verify origin/master >/dev/null || {
+            echo "::error::jcore-soc origin/master is missing; the fetch-splice binding would be unverifiable"
+            exit 1
+          }
           # Belt and braces. The checker resolves markers three ways (see 0002:
           # a subject it can SEE passes at any depth; only an ABSENT subject on
           # a truncated history skips, which --strict fails). That is the right
@@ -139,7 +154,7 @@ jobs:
           # history two lines up, so a shallow clone here means the fetch did
           # not do what it says, and saying so directly beats letting it surface
           # later as a handful of skips.
-          for sub in jcore-cpu linux; do
+          for sub in jcore-cpu linux jcore-soc; do
             if [ "$(git -C "$sub" rev-parse --is-shallow-repository)" = "true" ]; then
               echo "::error::$sub is a shallow clone; git log returns a truncated history that looks complete"
               exit 1
