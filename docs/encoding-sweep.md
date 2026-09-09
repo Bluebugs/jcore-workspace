@@ -129,8 +129,9 @@ baselined; the owner line should move from B4 to whoever next has the manual.
 
 ## 3. SIMD
 
-[simd/spec.md](simd/spec.md) states 102 encodings across 57 mnemonics and none
-of them is in the canonical database. Under
+[simd/spec.md](simd/spec.md) states its encodings in 102 places across the
+document, and **not one SIMD mnemonic is in the canonical database** — checked
+by name over all 466 rows, and there is no group whose name contains "SIMD". Under
 [decisions/0008](decisions/0008-documented-but-unimplemented-encodings.md) they
 are candidates for reservation rows — *after* the ones that do not survive the
 tools are re-homed, because reserving a colliding encoding just writes the
