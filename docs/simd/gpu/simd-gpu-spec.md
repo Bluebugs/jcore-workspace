@@ -924,6 +924,25 @@ fetches fill. Each resident context has a numeric **`GCID`** and a window:
 > nothing in them survives to be restored, because the binder writes them from the
 > host's record before the context runs a single instruction.
 
+> **An SM is "a core" for bar item L1 — decided 2026-09-09 by Wave-3 C2c, which
+> owns L1.** [../../security/threat-model.md §8](../../security/threat-model.md)
+> L1 rules that the term turns on the shared-state property
+> ([../../glossary.md §4](../../glossary.md)) and not on which document uses the
+> word "core", and an SM has that property: 4–8 warps resident, selected per
+> cycle, over the shared tile buffer, texture cache and per-warp register files
+> that **G-R8** below makes ownership-change sites. **Consequence:** warps of two
+> tenants must not be concurrently resident on one SM at launch, independently of
+> the windows in this section — so the only launch-legal GPU is the single-tenant
+> one of **G-R10.3**, and G-R1..G-R9 are intra-tenant separation plus defence in
+> depth rather than the cross-tenant mechanism
+> [../../j4-remediation-plan.md §C2](../../j4-remediation-plan.md) asked them to be.
+> **What this owes:** L1's detector is evaluated at `HRTE`
+> ([../../hypervisor/hardware-spec.md §4.7.2](../../hypervisor/hardware-spec.md)),
+> and an SM's warp residency is decided by its own hardware warp scheduler from a
+> work queue, so that check cannot be the SM's. An SM-side equivalent is an
+> **entry condition on un-parking the GPU program**, not a launch blocker — no GPU
+> exists in either repository, so this bars nothing that is scheduled.
+
 > **G-R10 — this is the inner boundary only, and the outer one is not built.**
 > G-R1..G-R9 separate tenants *inside* the GPU. They do not contain a GPU that is
 > itself faulty or misprogrammed, because they are enforced by the GPU. The outer
