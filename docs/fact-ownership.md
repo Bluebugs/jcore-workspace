@@ -145,11 +145,21 @@ fixes is intra-tenant, and the cross-tenant direction of the same registers was
 closed by C1b's FP-R3. **What these two rows buy, and what they do not.** They buy
 that a document mentioning `S-R1` or `K-R3` must link the spec that defines it,
 which is the defence against a second rule of the same name appearing in
-`hypervisor/hardware-spec.md` or in a Linux-side document. They do **not** check
-that the rules say anything in particular: `owner-has-fact` is satisfied by the
-owner mentioning the token at all, so **rewriting `S-R1` to say the opposite would
-pass**, and C1c confirmed that by perturbation rather than by assuming it. The
-same weakness applies to every name fact in this table and is stated here once.
+`hypervisor/hardware-spec.md` or in a Linux-side document. **What they do not buy
+was measured, not assumed** — seven perturbations, of which three pass:
+
+| Perturbation | Result |
+|---|---|
+| `S-R1` restated in `security/threat-model.md` with no link to the owner | **caught**, `restatement-is-linked` |
+| `K-R3` restated in `j4-execution-plan.md` with no link to the owner | **caught**, `restatement-is-linked` |
+| the owner stops stating `S-R1`–`S-R5` at all | **caught**, `owner-has-fact` |
+| `simd.fp.ownership`'s `Constant` cell set to `SR.FD` = **1**, contradicting its own owner | **passes** — a name fact carries no value for `doc-matches-code` or `no-stale-value` to compare, so the cell is prose the checks never read |
+| `S-R1`'s normative sentence rewritten to *"does not require FPU ownership"*, token kept | **passes** — `owner-has-fact` is satisfied by the owner mentioning the token, not by what it says about it |
+| `K-R3`'s *"MUST scrub on exit"* rewritten to *"need not scrub on exit"*, token kept | **passes**, same reason |
+| ownership of `simd.fp.ownership` moved to `fpu/spec.md`, which also mentions `S-R1` | **caught, but not by the check that should catch it.** `owner-has-fact` passes, because the new owner does state the token; what fails is `restatement-is-linked` over the 24 lines of `simd/spec.md` that have just become restatements. A fact whose token appears in two documents can have its ownership moved between them and be caught only by that cascade |
+
+The three that pass are the weakness every name fact in this table has, stated
+here once and not per row.
 C1c also added no `## Code bindings` row and no `## Image layouts` row, for
 C1b's reason: no FPU or SIMD unit exists in `jcore-cpu@origin/master`, no
 `kernel_fpu` API exists in `linux@origin/jcore`, and neither rule set changes a
