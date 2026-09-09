@@ -796,7 +796,7 @@ Each thread has its own:
 - Auto-priority state: `last_cas_pc`, `cas_fail_count`, `prio_dropped`, `parked` (~40 bits total).
 - ASID (16-bit `ASID_TAG`, per [glossary §5](../glossary.md)) and `PDID` (6 bits, §20.10).
 - **Hypervisor context (§20.12):** `SR.HPRIV`, `HSPC`, `HSSR`, `VBR_HYP`, `HEDR`, `HEMUB`, `HEMUM`, `HPAR`, `HMDR`, `HMCR`, `HSQCR` — ~42 bytes.
-- **Store queue (§20.12):** two 32-byte buffers plus `QACR0`/`QACR1` — 72 bytes.
+- **Store queue (§20.12):** two 32-byte buffers plus `QACR0`/`QACR1` — the **72-byte store-queue image** of [../sq/spec.md §7.2](../sq/spec.md).
 - MMU fault state per [j32lt-spec §11](j32lt-spec.md)'s table: `PTEH`, `TSBPTR`, `TEA`, `MMUFSR`, `PTEL`, `EXPEVT`, `SPC`, `SSR` — ~32 bytes.
 
 Total per-thread state: ~428 bytes. Two threads: ~856 bytes. Still fits in distributed RAM and flip-flops.
@@ -1304,7 +1304,7 @@ Therefore every register the hypervisor specification calls per-vCPU is **per th
 
 **The store queue is the serious one, and it is not a speculation bug.** [sq/spec.md](../sq/spec.md) gives the core two 32-byte buffers at `0xE0000000`/`0xE0000020`, and [hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spec.md) carves them out of the guest-mode P4 trap precisely so guests can use them at native speed. With two contexts resident, two vCPUs write the *same* buffer; their bytes interleave, and whichever issues the `PREF` bursts a mixture of both tenants' data to its own physical target. That is a direct cross-VM disclosure and corruption on the hot path the carve-out exists to accelerate, with no misprediction involved anywhere. §20.3's core-granular tenancy makes the two contexts the same tenant and so bounds the damage, but it does not make the behaviour correct even within one tenant's pair of vCPUs.
 
-Cost: ~42 bytes of hypervisor registers plus 72 bytes of store queue per additional context — ~3,000 gates at 2-way. [j32lt-spec §16.12](j32lt-spec.md) pays this three times over, which is the largest single security cost in either design.
+Cost: ~42 bytes of hypervisor registers plus the **72-byte store-queue image** ([../sq/spec.md §7.2](../sq/spec.md)) per additional context — ~3,000 gates at 2-way. [j32lt-spec §16.12](j32lt-spec.md) pays this three times over, which is the largest single security cost in either design.
 
 This is the same correction [j32lt-spec §11](j32lt-spec.md) already made for `PTEH`/`TEA`/`MMUFSR`/`TSBPTR`, extended to the Phase 3 register set; the reasoning is identical and so is the failure mode — silent installation or attribution of one context's state to another.
 

@@ -100,9 +100,16 @@ are the substitute for a check that cannot be written cleanly — see
 | `isa.movi20s.sext` | `movi20s`: `imm20 << 8`, then **sign-extend from bit 27** of the shifted value | [isa-density/spec.md §3.1](isa-density/spec.md) | `sign-extend(?:ed)?\s+from\s+bit\s+\*\*27\*\*\s+of\s+the\s+shifted\s+value` |
 | `biendian.dside.bytelane` | Byte store to `…00` drives `we = "1000"`; the byte-order mode does not change it | [bi-endian-spec.md §4.1](bi-endian-spec.md) | `we = "1000"` |
 | `biendian.ifetch.select` | Fetch halfword selection is driven by `instr_o.a(1)`, an address bit | [bi-endian-spec.md §5.1](bi-endian-spec.md) | `instr_o\.a\(1\)` |
+| `sq.context.bytes` | Store-queue per-context image: **72 bytes** (2 × 32 B buffers + `QACR0`/`QACR1`, not `HSQCR`) | [sq/spec.md §7.2](sq/spec.md) | `\b72[- ](?:bytes?\b\|B\b)` |
+| `hyp.gangswitch.items` | Gang-switch flush sequence: **8** numbered items; item 7 is the store-queue scrub | [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md) | `\*\*8\*\* (?:numbered )?items` |
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
+Wave-3 **C1a** added the last two, and neither can be code-bound: there is no
+store queue in `jcore-cpu` and a gang switch is hypervisor software, so both are
+`## Value guards` rows instead, and `sq.context.bytes` is additionally an
+`## Image layouts` row because its total is the sum of a field table that had
+disagreed with its own enumeration by exactly one `HSQCR`.
 B1 added `ooo.uops.rte`, `platform.endianness`, `platform.fmax.floor`,
 `platform.fmax.j4.floor`, `platform.j4`, `mmu.l1.pipt`, `cache.l1d.write`,
 `cache.l1.index`, `cache.l2.ebr`, `ooo.gates.core`, `mmu.p4.segment`,
@@ -340,6 +347,31 @@ inferred from silence:
   the owning document drifting from the header it claims to follow — because
   each of these facts is code-bound.
 
+- **`hyp.gangswitch.items` guards prose against prose, and not against the table
+  it counts.** It was added by Wave-3 **C1a** because
+  [security/threat-model.md §8](security/threat-model.md) quotes the length of
+  [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md)'s gang-switch
+  list as evidence, and that quotation had to survive C1a adding an item to the
+  list. It does: nine perturbations were run and each failed, four of them on the
+  cross-document arm this row exists for. **A tenth did not.** Adding a ninth row
+  to the §4.7.1 table while leaving the prose reading `**8** numbered items`
+  passes with exit 0 — the checker compares the owner's *sentence* to other
+  documents' *sentences*, and nothing reads the table. So this row catches a
+  document quoting a stale count and does not catch a list that grew. Closing
+  that needs a table-row count in the checker, which is the shape
+  `p4-offsets-match-rtl` already has and is **B0c**'s to write, not a row's to
+  imply. Recorded because a green run should not be read as more than it is.
+
+- **`sq.context.bytes` is doc-internal arithmetic, like the two image facts above
+  it.** There is no store queue in `jcore-cpu` at all — no SQ region decode, no
+  buffers, no SH-4 `PREF` — so there is nothing to bind to, and the row is
+  covered by `context-image-sums` over [sq/spec.md §7.2](sq/spec.md)'s field
+  table plus a value guard. The table is what caught the defect the row was
+  written for: §7.1 enumerated the replicated state as two buffers plus both
+  `QACR`s plus `HSQCR` and then costed it at 72 bytes, which is that list minus
+  `HSQCR`. The image is 72 and `HSQCR` is counted with the hypervisor register
+  block; before the table, nothing could see the difference.
+
 - **`mmu.page.base` binds to Kconfig, not to the RTL,** because the RTL has no
   page-size constant: it is page-size-general, with `PageMask` in `PTEL[11:8]`
   selecting per entry. There is nothing in the hardware for `16 KB` to disagree
@@ -419,6 +451,8 @@ Two escapes, and they are different things:
 | `cache.l2.ebr` | `L2 EBR = (\d+)` | `(?:the )?(?:128 KB )?L2 (?:unified [^\n]{0,20})?at\s*~?(\d+) EBRs` |
 | `ooo.gates.core` | `core \+ caches\*\*\s*[\|]\s*\*\*([\d,]+)\*\*` | `(?:OoO budget\|core \+ caches)[^\n]{0,60}?([\d,]+)k? gates` |
 | `isa.movi20s.sext` | `sign-extend(?:ed)?\s+from\s+bit\s+\*\*(\d+)\*\*\s+of\s+the\s+shifted\s+value` | `sign-extend(?:ed)?\s+from\s+bit\s+\*\*(\d+)\*\*\s+of\s+the\s+shifted\s+value` |
+| `sq.context.bytes` | `(\d+)[-\s]byte store-queue image` | `(\d+)[-\s]byte store-queue image` |
+| `hyp.gangswitch.items` | `\*\*(\d+)\*\* (?:numbered )?items` | `\*\*(\d+)\*\* (?:numbered )?items` |
 
 ## Image layouts
 
@@ -435,6 +469,7 @@ otherwise. A per-fact requirement cannot be satisfied by somebody else's table.
 |---|
 | `fpu.context.t2` |
 | `simd.context.j32` |
+| `sq.context.bytes` |
 
 ## Unresolved — facts with no owner yet
 
