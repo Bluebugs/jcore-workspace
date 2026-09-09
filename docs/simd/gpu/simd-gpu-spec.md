@@ -786,12 +786,40 @@ fetches fill. Each resident context has a numeric **`GCID`** and a window:
 > latency-hiding works.
 
 > **G-R3 — relocate and bound, do not merely bound.** For a request with offset
-> `a` and identity `GCID`, the emitted physical address is `GBASE[GCID] + a`, and
-> the access faults per G-R7 unless `a < GLIMIT[GCID]` compared as unsigned (or
-> `a < GLIMIT_RO[GCID]` with `GBASE_RO`, for a read matched to the read-only
-> window). A context therefore cannot *name* an address outside its window: no
+> `a`, access size `n` bytes, and identity `GCID`, all arithmetic unsigned:
+>
+> ```
+> if      a + n <= GLIMIT[GCID]                     -> PA = GBASE[GCID] + a
+> else if a >= GLIMIT[GCID]
+>      and a + n <= GLIMIT[GCID] + GLIMIT_RO[GCID]
+>      and the access is a read                     -> PA = GBASE_RO[GCID] + (a - GLIMIT[GCID])
+> else                                              -> fault, per G-R7
+> ```
+>
+> A context therefore cannot *name* an address outside its two windows: no
 > shader-computed address, no descriptor field, no interpolated coordinate and no
 > wrapped texture coordinate can express one, whatever value it holds.
+>
+> Three details are normative and each closes a way to get this wrong:
+>
+> - **The bound is `a + n`, not `a`.** A vector access moves VLEN/8 bytes
+>   ([../spec.md §5.6](../spec.md)) and a tile burst moves a whole tile; checking
+>   only the first byte lets the last one leave the window. `a + n` is computed
+>   without wrapping, so an `a` near the top of the offset space faults rather
+>   than aliasing low.
+> - **The two windows are disjoint in the context's own offset space**, stacked
+>   private-then-read-only, so which window an access means is decided by its
+>   offset and never by a mode bit a shader could set. A write into the
+>   read-only range faults; it does not fall through to the private window.
+> - **`GBASE` and `GBASE_RO` are aligned to at least the largest access size the
+>   implementation supports.** Relocation is an add, so a misaligned base would
+>   silently turn a correctly-aligned tenant access into a misaligned physical
+>   one.
+>
+> **P6 does not belong to a tenant.** The command processor and scanout run under
+> a reserved `GCID` whose window is programmed by privileged host code and is
+> never any tenant's (G-R4). They are checked anyway, so that a command-processor
+> or scanout bug is contained rather than trusted.
 >
 > Bounding without relocating was considered and rejected in §16.4. Prior art is
 > pre-2006 and predates the ISA this project descends from: CDC 6600 `RA`/`FL`
@@ -823,7 +851,10 @@ fetches fill. Each resident context has a numeric **`GCID`** and a window:
 > `VTEXBASE` and a new descriptor-count register `VTEXCNT` are privileged
 > per-context state (G-R4). `VTEXSEL` remains shader-writable (`LDS Rm, VTEXSEL`,
 > §9.2). A `VTEX`/`VTFETCH` whose `VTEXSEL` selects an index ≥ `VTEXCNT` faults
-> per G-R7. That check is a diagnostic, not the containment: the descriptor fetch
+> per G-R7 — and unlike G-R6's address check this one *can* be made at issue,
+> because `VTEXSEL` holds an index set before the block and no address arithmetic
+> stands between it and the comparison. That check is a diagnostic, not the
+> containment: the descriptor fetch
 > P3 generates is *also* put through G-R3, so a `VTEXCNT` programmed too large
 > cannot reach outside the window — it can only read the context's own memory as
 > if it were a descriptor.
@@ -843,17 +874,29 @@ fetches fill. Each resident context has a numeric **`GCID`** and a window:
 > carried there.
 
 > **G-R7 — a violation is a fault; never a wrap, a clamp, a truncation or a
-> zero.** For the synchronous producers P1–P4 the fault is delivered to the
-> issuing (parked) warp and reports the **prefix PC**, per the restart-from-prefix
-> contract of [../spec.md §6.4 and §6.5](../spec.md); the block carries no
-> committed state, so the report is well-defined even though the warp parked. For
-> the asynchronous producers P5 and P6 the transaction is suppressed — the data
-> phase for a read, the write dropped — and the GPU latches `{GCID, offending
-> offset, producer, R/W}` in a fault register and raises a protection interrupt
-> to privileged host code, and the offending context is halted rather than
-> allowed to continue. No path may define the result of a blocked access as
-> "undefined": that word is banned at an ownership boundary by bar item **L6**
+> zero.** For the synchronous producers P1, P3 and P4 the fault is delivered to
+> the issuing (parked) warp and reports the **prefix PC**, per the
+> restart-from-prefix contract of [../spec.md §6.4 and §6.5](../spec.md); the
+> block carries no committed state, so the report is well-defined even though the
+> warp parked. P2 is instruction fetch and has no prefix of its own to report
+> unless a block is open, so it reports the faulting fetch address (the prefix PC
+> when one is open). For the asynchronous producers P5 and P6 the transaction is
+> suppressed — the data phase for a read, the write dropped — and the GPU latches
+> `{GCID, offending offset, producer, R/W}` in a fault register and raises a
+> protection interrupt to privileged host code. No path may define the result of
+> a blocked access as "undefined": that word is banned at an ownership boundary
+> by bar item **L6**
 > ([../../security/threat-model.md §8](../../security/threat-model.md)).
+>
+> **The report is for attribution; the fault is not resumable.** In every case
+> the offending context is terminated, not restarted. Restart-from-prefix is
+> correct "only when the handler *fixes* the fault and retries"
+> ([../spec.md §6.5](../spec.md)), and there is no fix here: resuming a window
+> violation would mean widening the window, which is the thing being denied. The
+> prefix PC is therefore borrowed as a *reporting* convention — it is what tells
+> the host which context and which instruction — and not as a resume path. An
+> implementation that returns from this fault to the faulting instruction has
+> built an infinite loop at best and a retry-until-it-lands primitive at worst.
 
 > **G-R8 — handover scrubs; saving is not scrubbing.** On any change of owner of
 > a warp slot, an SM, a tile-buffer region or a texture-cache line, the state
