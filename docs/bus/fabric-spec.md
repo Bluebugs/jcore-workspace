@@ -161,7 +161,7 @@ This is the property [hypervisor/](../hypervisor/) and [iommu/hardware-spec.md �
   ([iommu/hardware-spec.md §3.10](../iommu/hardware-spec.md) `I-R6`).
 - **BMID `0xFF` is reserved** for diagnostic / scan-chain traffic. **The fabric MUST
   NOT assign BMID `0xFF` to any normal master port**, and a transaction arriving at
-  the IOMMU with BMID `0xFF` is **blocked** (`I-R6`).
+  the IOMMU with BMID `0xFF` is **blocked** ([`I-R6`](../iommu/hardware-spec.md)).
 
 > **These two bullets were revised 2026-09-09 by Wave-3 task C2d, and the `0xFF` one
 > was reversed.** `0x00` previously read *"the only legitimate use … is by a

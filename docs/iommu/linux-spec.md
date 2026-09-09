@@ -102,7 +102,7 @@ This is the "unclaimed devices stay unprotected" clause of bar item **L2** arriv
 from the software side, and no amount of driver care fixes it — the decision is made
 in the OF layer before this driver is consulted.
 
-**It is also the third independent argument for `I-R1`**, and the strongest, because
+**It is also the third independent argument for [`I-R1`](hardware-spec.md)**, and the strongest, because
 it is the one that does not depend on anyone's diligence: under a default-deny
 IOMMU the forgotten device simply does not work, loudly, on its first DMA. Under the
 retired all-bypass reset it works perfectly and is unprotected for the life of the
@@ -230,7 +230,7 @@ struct jcore_iommu {
     /* Track which IOTLB entries are in use. Protected by lock. */
     DECLARE_BITMAP(entry_used, JCORE_IOMMU_MAX_ENTRIES);
 
-    /* I-R8 quota. q_reserved[] sums to <= num_entries; q_used[] is per-BMID.
+    /* Per-BMID IOTLB quota, hardware-spec §3.10. q_reserved[] sums to <= num_entries; q_used[] is per-BMID.
      * A .map for BMID B fails if q_used[B] == q_cap[B], or if granting it
      * would leave fewer free entries than the reservations not yet drawn
      * on. The second test is the one that stops starvation; a first-fit
@@ -307,7 +307,7 @@ subsection belongs in a security-driven revision rather than in a later tidy-up.
 |---|---|
 | `.detach_dev` | **Removed.** `struct iommu_domain_ops` (`include/linux/iommu.h:747-776`) has no such member. Detach is now expressed as *attaching a different domain* |
 | `.map` / `.unmap` | **Removed.** Only `map_pages` / `unmap_pages` (`:754-760`) exist |
-| `.attach_dev` | Signature changed: `int (*attach_dev)(struct iommu_domain *domain, struct device *dev, struct iommu_domain *old)` (`:748-749`) — the *previous* domain is now an argument, which is exactly what `I-R7`'s ordering needs |
+| `.attach_dev` | Signature changed: `int (*attach_dev)(struct iommu_domain *domain, struct device *dev, struct iommu_domain *old)` (`:748-749`) — the *previous* domain is now an argument, which is exactly what [`I-R7`](hardware-spec.md)'s ordering needs |
 | `.domain_alloc` | Restricted: it exists only under `#if IS_ENABLED(CONFIG_FSL_PAMU)` (`:701-703`) and is documented at `:640` as *"Do not use in new drivers"*. New drivers use `domain_alloc_paging()` (`:708`), `domain_alloc_paging_flags()` (`:705-707`) or `domain_alloc_identity()` (`:704`) |
 | `bus_set_iommu()` (§5.1) | **Removed.** A whole-tree grep returns zero matches. Registration is `iommu_device_register()` alone |
 | `struct iommu_fault_event` (§5.5) | **Removed.** `iommu_report_device_fault()` survives at `:1704` but now returns `int` and takes `struct iopf_fault *` (`:124`) |
@@ -322,7 +322,7 @@ struct iommu_domain *release_domain;    /* :742 */
 
 with `#define IOMMU_DOMAIN_BLOCKED (0U)` at `:211`. **A blocked domain is a
 first-class kernel concept**, and `release_domain` is the domain the core installs
-when a device goes away. Together they are the framework half of `I-R7`, and the
+when a device goes away. Together they are the framework half of [`I-R7`](hardware-spec.md), and the
 driver's obligation is to publish both rather than to invent a teardown path:
 
 ```c
@@ -342,7 +342,7 @@ mechanism.
 
 **Why a stale vtable is a security finding and not a chore.** A driver written to the
 sketch above cannot express teardown at all — `.detach_dev` is where its author would
-have put the re-protection `I-R7` requires, and that member no longer exists. The
+have put the re-protection [`I-R7`](hardware-spec.md) requires, and that member no longer exists. The
 implementer would have discovered the API drift at the first compile and *invented* a
 teardown path, most plausibly by restoring the bypass bit, which is precisely the
 inversion §10.1's test asks for. The API the kernel actually offers makes the correct
@@ -390,11 +390,11 @@ static int jcore_iommu_probe(struct platform_device *pdev)
     if (ret)
         return ret;
     
-    /* The IOMMU is already enabled and already denying (I-R1). Nothing
+    /* The IOMMU is already enabled and already denying (hardware-spec §3.10). Nothing
      * below turns protection on; it re-establishes a known IOTLB, arms the
      * fault IRQ, and locks SUPER_BYPASS.
      *
-     * Read-modify-write, never a bare word: under I-R3 a write of 0 to
+     * Read-modify-write, never a bare word: under hardware-spec §3.10 a write of 0 to
      * ENABLE is ignored, but SB_LOCK and FAULT_IRQ_EN are ordinary bits
      * and a whole-word write would clear them. */
     ctrl = readl(iommu->base + IOMMU_CTRL);
@@ -404,7 +404,7 @@ static int jcore_iommu_probe(struct platform_device *pdev)
 
     /* Arm the fault IRQ only now that the handler is installed -- the
      * hardware resets it masked for exactly this reason, and blocking has
-     * never depended on it (I-R2). */
+     * never depended on it (hardware-spec §3.10). */
     ctrl = readl(iommu->base + IOMMU_CTRL);
     writel(ctrl | IOMMU_CTRL_FAULT_IRQ_EN | IOMMU_CTRL_SB_LOCK,
            iommu->base + IOMMU_CTRL);
@@ -417,7 +417,7 @@ static int jcore_iommu_probe(struct platform_device *pdev)
         return -EIO;
     }
 
-    jcore_iommu_quota_init(iommu);   /* I-R8 */
+    jcore_iommu_quota_init(iommu);   /* quota, hardware-spec §3.10 */
     
     /* Register with the generic IOMMU framework. bus_set_iommu() no longer
      * exists (§4.3a); iommu_device_register() is the whole of it. */
@@ -458,7 +458,7 @@ static int jcore_iommu_map(struct iommu_domain *iommu_domain,
     /* Convert page size to PageMask encoding (log4 of size/4KB) */
     page_mask = ilog2(pgsize / SZ_4K) / 2;
     
-    /* Allocate an IOTLB entry, subject to the I-R8 quota. The quota test
+    /* Allocate an IOTLB entry, subject to the per-BMID quota of hardware-spec §3.10. The quota test
      * comes first and is per-BMID; find_first_zero_bit() on its own is a
      * global free-list, and a global free-list is what lets one tenant's
      * device make another tenant's dma_map fail. */
@@ -522,7 +522,7 @@ it allocates **one** `entry_idx` and then writes it once per BMID, so the second
 iteration overwrites the first BMID's entry rather than adding a second. A multi-BMID
 domain therefore ends up with exactly one working mapping — the last BMID's — and the
 others fault. With `GLOBAL` available an implementer's likely fix is to set `GLOBAL`
-and write one entry, which is why this and `I-R5` have to land together. The correct
+and write one entry, which is why this and [`I-R5`](hardware-spec.md) have to land together. The correct
 fix is one `entry_idx` per BMID.
 
 ### 5.3 Unmapping (.unmap)
@@ -578,7 +578,7 @@ static int jcore_iommu_attach_dev(struct iommu_domain *iommu_domain,
     master->domain = domain;
     iommu->masters[master->bmid] = master;
     
-    /* Nothing to do to the bypass bitmap: under I-R1 this BMID's bit is
+    /* Nothing to do to the bypass bitmap: under hardware-spec §3.10 this BMID's bit is
      * already 0 and has been since reset, so the device is already going
      * through the IOTLB and is already blocked until .map runs. Assert it
      * rather than assume it -- a set bit here means somebody handed this
@@ -605,7 +605,7 @@ static int jcore_iommu_attach_dev(struct iommu_domain *iommu_domain,
 > `#define BMID_BYPASS_REG(b) (BMID_BYPASS_BASE + 4 * ((b) / 32))`, bit `(b) % 32`,
 > which [hardware-spec.md §3.9](hardware-spec.md) now states because this happened.
 >
-> **The bug's failure mode is the argument for `I-R1` in miniature.** Under the
+> **The bug's failure mode is the argument for [`I-R1`](hardware-spec.md) in miniature.** Under the
 > retired all-bypass reset it clears a *different* device's bypass bit and leaves the
 > attaching device in bypass: the attaching device works perfectly and unprotected,
 > the innocent device starts faulting, and the symptom appears somewhere other than
@@ -614,7 +614,7 @@ static int jcore_iommu_attach_dev(struct iommu_domain *iommu_domain,
 > converts a silent-open bug into a loud-closed one is worth more than the bug it
 > would have caught.
 
-### 5.4a Detach, release and teardown — `I-R7`
+### 5.4a Detach, release and teardown — [`I-R7`](hardware-spec.md)
 
 There was no `.detach_dev` in this document and there is none in the kernel
 (§4.3a). The teardown obligation is discharged by publishing a blocked domain and
@@ -810,7 +810,7 @@ static void jcore_iommu_pm_resume(void)
     int i;
     
     /* IOTLB is empty after S2RAM and the block is back in its reset
-     * state, i.e. denying (I-R1). Restore by walking each domain's
+     * state, i.e. denying (hardware-spec §3.10). Restore by walking each domain's
      * mapping list and reprogramming.
      *
      * Read-modify-write, as in probe: a bare word here would clear
@@ -852,7 +852,7 @@ The reconstruction approach (vs. saving every IOTLB entry to memory) is more cod
 
 **The resume ordering is safe and it is worth saying why, because it looks wrong.**
 The bypass mask is restored before the IOTLB is reprogrammed, so there is a window in
-which devices are non-bypassed with an empty IOTLB. Under `I-R1` that window is
+which devices are non-bypassed with an empty IOTLB. Under [`I-R1`](hardware-spec.md) that window is
 **fail-closed**: every device in it is blocked, and the worst outcome is a fault
 latched against a device that resumed early. Restoring the IOTLB first and the bypass
 mask second would be the fail-open ordering, and it is the one an implementer
@@ -896,7 +896,7 @@ For each device that should be IOMMU-protected:
 - Attach **asserts** `BMID_BYPASS[BMID] == 0` and fails if it is set; detach installs
   the blocked domain. *(This line previously read "Attach and detach toggle the
   BMID_BYPASS bit correctly." A toggle back to 1 on detach releases the device into
-  unrestricted DMA — it is the inversion `I-R7` exists to forbid, written down as the
+  unrestricted DMA — it is the inversion [`I-R7`](hardware-spec.md) exists to forbid, written down as the
   thing to verify.)*
 - Quota: BMID *A* at its cap does not prevent BMID *B* from mapping (`I-E5`).
 
@@ -912,7 +912,7 @@ For each device that should be IOMMU-protected:
 - Manually corrupt a device's DMA descriptor to point at unmapped IOVA; verify fault is logged with correct BMID and IOVA.
 - Stress with high IOTLB pressure (allocate many small buffers to exhaust IOTLB); verify graceful `-ENOSPC` rather than silent corruption.
 - **A device with no `iommus` property in DT does not DMA.** This is §2b's fail-open
-  OF path meeting `I-R1`; the test asserts that the hardware catches what the kernel
+  OF path meeting [`I-R1`](hardware-spec.md); the test asserts that the hardware catches what the kernel
   does not.
 - **The negative tests `I-E0`–`I-E6`** in
   [hardware-spec.md §10.1](hardware-spec.md) are the ones bar item **L2** requires,
@@ -938,7 +938,7 @@ For each device that should be IOMMU-protected:
   framework. **This is no longer an open question in the direction it was asked.** An
   LRU eviction policy over a *shared* pool would make one BMID's pressure evict
   another BMID's live mapping, turning a starvation problem into a fault-and-disable
-  problem — the shared pool has to be quota'd (`I-R8`) before any eviction policy over
+  problem — the shared pool has to be quota'd ([`I-R8`](hardware-spec.md)) before any eviction policy over
   it is safe. Eviction *within* a BMID's own quota is a legitimate future option and
   needs profiling; eviction across BMIDs is now excluded.
 - **Where do the quota numbers come from?** `q_reserved` and `q_cap` per BMID are a
