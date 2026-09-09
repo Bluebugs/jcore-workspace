@@ -260,6 +260,35 @@ inferred from silence:
   without distinguishing the two sides; the doc side does, the code side often
   cannot.
 
+- **The two `biendian.*` bindings fail on *both* arms from *both* sides**, which
+  the `sh4guest.*` bullet above says is unusual, so the evidence is recorded
+  rather than claimed. Each was perturbed four ways against a committed tree and
+  the checker's own message was read back:
+
+  | Row | Doc side, value changed | Doc side, phrasing destroyed | Code side, retargeted to a different real value | Code side, retargeted to an absent shape |
+  |---|---|---|---|---|
+  | `biendian.dside.bytelane` | value disagreement (`says 0001, but … says 1000`) | pattern non-match, doc side | value disagreement (`says 1000, but … says 0100`) | pattern non-match, code side |
+  | `biendian.ifetch.select` | value disagreement (`says 2, but … says 1`), **plus** `owner-has-fact` | pattern non-match, doc side, **plus** `owner-has-fact` | value disagreement (`says 1, but … says 31`) | pattern non-match, code side |
+
+  The code side can disagree on *value* here — where the `sh4guest.*` rows can
+  only fail on a pattern non-match — because both captures are character classes
+  and both files contain sibling constructs holding different values. The
+  `datapath.vhm` `case` has four arms with four different `we` masks, so a byte
+  map that was remapped rather than deleted still matches and still disagrees;
+  that is exactly the mutation Decision B2-1 specified, and it is the reason
+  this row exists. `owner-has-fact` double-fires on `biendian.ifetch.select`
+  because its registry `Pattern` spells the literal `instr_o.a(1)` rather than a
+  class, so changing the bit trips the registry check and the binding
+  independently.
+
+  **What this does not prove**, stated in the same spirit as the bullet above:
+  the code-side perturbations move the *pattern*, not the submodule, because the
+  code is read from `origin/master` and this repository cannot rewrite it. They
+  establish that the comparison and both failure arms work on the real files;
+  they do not establish what a real RTL edit would look like. The two are close
+  here — retargeting the capture to the `"01"` arm produces the same captured
+  string a remapped `"00"` arm would — but they are not the same act.
+
 - **The `sh4guest.*` registry patterns are deliberately tight**, keying on the
   Linux symbol name (`SH_CCR`, `SQ_QACR0`, `SQ_QACR1`) rather than on the hex
   value. The values themselves are not usable as patterns here: `0xFF000038` is
