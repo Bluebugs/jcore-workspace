@@ -88,6 +88,17 @@ jobs:
       # with "jcore-soc is not checked out" rather than skipping it quietly.
       # The under-provisioning was caught by the property, not by review.
       #
+      # It is now caught by a check instead of by a CI run.
+      # `ci-provisions-submodules` reads THIS FILE and fails when a
+      # `## Code bindings` row -- or either of the checker's two
+      # hardcoded submodule reads -- names a submodule missing from any
+      # of the three provisioning sites below: the checkout list, the
+      # per-submodule fetch of its integration branch, and the
+      # shallow-clone guard. All three, because each one missing leaves
+      # the same binding unverifiable, only at a different step. Edit
+      # those sites and that check is what tells you the registry
+      # disagrees, on your machine, before the push.
+      #
       # --filter=tree:0, and NOT --depth. Two separate points:
       #
       # NOT --depth, because `resolved-is-merged` runs

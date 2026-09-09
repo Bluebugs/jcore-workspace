@@ -72,6 +72,9 @@ CHECKS = {
                            "B0c"),
     "one-encoding-database": ("a second encoding database, or the canonical one "
                               "missing", "0003"),
+    "ci-provisions-submodules": ("a submodule the doc-vs-code checks read that "
+                                 "the docs-gate workflow does not check out, "
+                                 "fetch or shallow-check", "B0c"),
     # 0004 -- platform tags
     "platform-tag-foreign-part": ("a `[FPGA]`/`[ASIC]` tag on a line naming a "
                                   "Xilinx-only part (Spartan/Artix/Kintex/"
@@ -1096,6 +1099,183 @@ def check_one_encoding_database(cfg, report, repos):
         report.note("one-encoding-database: canonical copy present at %s:%s@%s"
                     % (ENCODING_DB_REPO, ENCODING_DB_PATH, branch))
 
+
+# ---------------------------------- B0c: CI provisions what the checks read
+
+# The workflow that runs this checker in CI. Named here rather than in the
+# registry for the same reason `P4_MAP_DOC` is: it is a structural fact about
+# this repository, not a per-fact binding.
+#
+# WHY THIS EXISTS. A `## Code bindings` row may name any submodule in
+# INTEGRATION_BRANCH; the gate clones only the ones this workflow lists. Add a
+# row naming a submodule the workflow does not provision and every local run
+# still passes -- a developer has all the submodules checked out -- while CI
+# reports
+#
+#   FAIL [doc-matches-code] (skipped, --strict) jcore-soc is not checked out;
+#   cannot compare targets/data_bus_pkg.vhd against it (biendian.ifetch.select)
+#
+# That is not hypothetical; it is transcribed. `biendian.ifetch.select` was the
+# first row to name `jcore-soc`, the workflow provisioned two submodules, and
+# the gap surfaced as a red CI run after review and after a push. `--strict`
+# did its job -- the comparison was reported as unverified rather than skipped
+# quietly -- but the registry and the workflow are two files that have to agree
+# and nothing made them agree. This is that something, and it runs where the
+# registry row is being written rather than twenty minutes later.
+DOCS_GATE_WORKFLOW = os.path.join(".github", "workflows", "docs-gate.yml")
+
+# The three provisioning sites, all three load-bearing:
+#
+#   1. `git submodule update --init --filter=tree:0 -- <subs>` clones them.
+#   2. `git -C <sub> fetch ... origin <branch>` publishes the ref every check
+#      resolves against. 0002 section 2: the submodule POINTER is not evidence,
+#      so a submodule cloned without its integration branch fails one step
+#      later with a different message and the same outcome.
+#   3. `for sub in <subs>; do ... --is-shallow-repository` rejects a truncated
+#      history, which `git log` answers from without an error.
+#
+# Requiring all three, not just the clone: each one missing leaves the same
+# binding unverifiable in CI, and (2) is the one the commit that prompted this
+# check had to add as an afterthought. The `rev-parse --verify origin/<branch>`
+# lines beside (2) are deliberately NOT a fourth requirement -- they only
+# improve the message when a fetch silently fetched nothing, so demanding one
+# per submodule would fire on a workflow that is correct.
+#
+# Line continuations are folded before these run, so wrapping an argument list
+# across lines is an ordinary edit rather than a way to empty a site.
+SUBMODULE_UPDATE_RE = re.compile(
+    r"git\s+submodule\s+update\b[^\n]*?\s--\s+([^\n#]*)")
+SUBMODULE_FETCH_RE = re.compile(
+    r"git\s+-C\s+([A-Za-z0-9._-]+)\s+fetch\b[^\n]*?\borigin\s+([A-Za-z0-9._/-]+)")
+# Scoped to the loop that actually performs the shallow test, not to any `for`:
+# a workflow that grew an unrelated loop and lost this one must not read as
+# provisioned. `(?:(?!\bdone\b).)*?` keeps the search inside one loop body.
+SHALLOW_GUARD_RE = re.compile(
+    r"for\s+\w+\s+in\s+([^;\n]*?)\s*;\s*do\b(?:(?!\bdone\b).)*?"
+    r"is-shallow-repository", re.S)
+
+
+def check_ci_provisions_submodules(cfg, report, bindings):
+    """Every submodule the doc-vs-code checks read is one the gate's own
+    workflow clones, fetches and shallow-checks.
+
+    The registry says which submodule a fact is compared against; the workflow
+    says which submodules exist when that comparison runs. Neither file
+    mentions the other, and the failure mode is silent locally and loud
+    somewhere else."""
+    path = os.path.join(cfg.root, DOCS_GATE_WORKFLOW)
+    try:
+        body = read(path)
+    except (OSError, UnicodeDecodeError) as exc:
+        # A skip, not a pass. `--strict` makes it a failure, which is the right
+        # answer to "the gate's own workflow could not be read": a tree with no
+        # workflow provisions nothing, and reporting that as agreement is the
+        # fail-open direction this whole suite exists to close.
+        report.skip("ci-provisions-submodules",
+                    "%s could not be read (%s); nothing verified that CI "
+                    "provisions the submodules the bindings name"
+                    % (DOCS_GATE_WORKFLOW, exc))
+        return
+    text = re.sub(r"\\\n\s*", " ", body)
+    where = cfg.rel(path)
+
+    cloned = set()
+    for m in SUBMODULE_UPDATE_RE.finditer(text):
+        cloned.update(m.group(1).split())
+    fetched = {}
+    for m in SUBMODULE_FETCH_RE.finditer(text):
+        fetched.setdefault(m.group(1), set()).add(m.group(2))
+    shallow_checked = set()
+    for m in SHALLOW_GUARD_RE.finditer(text):
+        shallow_checked.update(m.group(1).split())
+
+    # A site this script can no longer locate is a failure and not an empty
+    # set. An empty set would report every submodule as missing from it -- a
+    # pile of confident, wrong findings instead of the one true one -- and the
+    # day someone rewrites this workflow around `actions/checkout`'s own
+    # submodule support, that is the message they need.
+    missing_site = False
+    for label, found, shape in (
+            ("clone", cloned,
+             "git submodule update --init ... -- <submodules>"),
+            ("fetch", fetched,
+             "git -C <submodule> fetch ... origin <branch>"),
+            ("shallow-check", shallow_checked,
+             "for sub in <submodules>; do ... --is-shallow-repository")):
+        if not found:
+            missing_site = True
+            report.fail("ci-provisions-submodules", where,
+                        "no %s site here: nothing matches `%s`. The workflow "
+                        "has been restructured and this check can no longer "
+                        "tell which submodules CI provisions. Fix the workflow "
+                        "or fix this check, but do not leave it reading "
+                        "nothing." % (label, shape))
+    if missing_site:
+        return
+
+    # What must be provisioned, and WHY -- the reason travels into the failure
+    # message, because "add jcore-soc" without "because this row binds to it"
+    # is a message somebody can satisfy by deleting the wrong thing.
+    needed = {}
+    for b in (bindings or []):
+        needed.setdefault(b.repo, []).append(
+            "code binding `%s` (%s)" % (b.id, b.code_ref))
+    # Two submodule reads that are not registry rows, and so would be invisible
+    # to a check that only walked the bindings table. They name their files in
+    # constants above; a binding-only check would go quiet the day the last row
+    # naming `jcore-cpu` was deleted, while these two kept reading it.
+    needed.setdefault(P4_RTL_REPO, []).append(
+        "the `p4-offsets-match-rtl` comparison (%s)" % P4_RTL_PATH)
+    needed.setdefault(ENCODING_DB_REPO, []).append(
+        "`one-encoding-database` (%s)" % ENCODING_DB_PATH)
+
+    for repo in sorted(needed):
+        # The superproject is not a submodule: `actions/checkout` provides it,
+        # and no `submodule update` line will ever name it.
+        if repo == "jcore-workspace":
+            continue
+        reasons = needed[repo]
+        why = reasons[0]
+        if len(reasons) > 1:
+            why += " and %d other read(s)" % (len(reasons) - 1)
+        branch = INTEGRATION_BRANCH[repo]
+        ok = True
+        if repo not in cloned:
+            ok = False
+            report.fail("ci-provisions-submodules", where,
+                        "%s reads `%s`, which this workflow never checks out: "
+                        "it is missing from the `git submodule update --init` "
+                        "argument list. The comparison passes here, where the "
+                        "submodule exists, and is unverifiable in CI."
+                        % (why, repo))
+        if repo not in fetched:
+            ok = False
+            report.fail("ci-provisions-submodules", where,
+                        "%s reads `%s`, and this workflow never fetches its "
+                        "integration branch: no `git -C %s fetch ... origin "
+                        "%s` line. `submodule update` leaves the pinned "
+                        "POINTER, which 0002 section 2 says is not evidence, "
+                        "so checking it out without the branch fails one step "
+                        "later." % (why, repo, repo, branch))
+        elif branch not in fetched[repo]:
+            ok = False
+            report.fail("ci-provisions-submodules", where,
+                        "%s reads `%s`, and this workflow fetches origin/%s "
+                        "for it -- but every check resolves it against "
+                        "origin/%s (INTEGRATION_BRANCH). One of the two names "
+                        "the wrong branch."
+                        % (why, repo, "/".join(sorted(fetched[repo])), branch))
+        if repo not in shallow_checked:
+            ok = False
+            report.fail("ci-provisions-submodules", where,
+                        "%s reads `%s`, which the shallow-clone guard loop "
+                        "does not name. A truncated history makes `git log` "
+                        "return a partial answer with no error, which is the "
+                        "fail-open direction." % (why, repo))
+        if ok:
+            report.note("ci-provisions-submodules: %s cloned, fetched "
+                        "(origin/%s) and shallow-checked by %s -- %s"
+                        % (repo, branch, DOCS_GATE_WORKFLOW, why))
 
 # ------------------------------------------- B0c: context-image field tables
 
@@ -2147,6 +2327,12 @@ def main():
         check_p4_offsets(cfg, report, repos)
         check_context_image_sums(cfg, report, facts, guards, layouts)
         check_one_encoding_database(cfg, report, repos)
+        # Not a comparison against code: a comparison between the registry and
+        # the workflow that runs this script in CI. Deliberately NOT gated on
+        # `bindings`, because two of the submodule reads it covers are
+        # constants in this file rather than registry rows -- gating it would
+        # switch it off exactly when the registry is broken.
+        check_ci_provisions_submodules(cfg, report, bindings)
 
     if args.check_waivers:
         # Only judge waivers whose consuming check actually ran, or a scoped
