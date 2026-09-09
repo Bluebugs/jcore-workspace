@@ -5,6 +5,17 @@
 **Audience:** Hardware architects, kernel developers, system integrators  
 **Prerequisites:** Phase 1 MMU spec (`01-design-spec.md`)
 
+> **§3.6, §4.1, §4.2 and §7 revised — 2026-09-09, Wave-3 task C2d.** The bypass
+> design this document argued for is replaced by default-deny; the normative owner
+> is [hardware-spec.md §3.10](hardware-spec.md) (`I-R1`–`I-R10`). Three claims are
+> withdrawn rather than edited: that reset-to-bypass is a convenience worth its
+> cost, that the `GLOBAL` bit is a legitimate sharing mechanism, and that the
+> IOMMU delivers cache coherency. Each is quoted where it is retired, per
+> [decisions/0002](../decisions/0002-supersede-convention.md).
+>
+> **Nothing in this document is implemented**: `jcore-cpu@origin/master` and
+> `jcore-soc@origin/master` contain no IOMMU, no IOTLB and no BMID.
+
 ---
 
 ## 1. Goals
@@ -85,13 +96,45 @@ This also means the IOMMU has no concept of a "page-table base register" or doma
 
 This matches Linux's `iommu_report_device_fault()` framework conventions and produces good diagnostics out of the box.
 
-### 3.6 Per-BMID bypass for boot and trusted masters
+### 3.6 Per-BMID deny at reset; bypass is opt-in
 
-**Decision:** A bypass bitmap controls which BMIDs skip translation. Cleared bits go through the IOTLB; set bits pass through with `PA = IOVA`.
+**Decision:** A per-BMID bitmap controls which BMIDs skip translation. **It resets
+to all zeros**, so every BMID goes through the IOTLB, and with the IOTLB reset
+empty every BMID is blocked. Setting a bit is an explicit act that hands one master
+an unprotected path. Normative: [hardware-spec.md §3.10](hardware-spec.md) `I-R1`.
 
-**Rationale:** At reset, all bypasses are set — the IOMMU is effectively absent. This lets the bootrom and early kernel use DMA without first initializing the IOMMU. Once the IOMMU driver is up, it clears bypass bits for devices it manages while leaving them set for any device that hasn't yet been claimed. Per-BMID bypass is also a debugging convenience: a driver developer can leave their device in bypass while developing the IOMMU integration.
+**Rationale:** an unclaimed device is exactly the device nobody has reasoned about,
+and it is the one that must not be able to reach memory. Deny costs no new state —
+a BMID with its bypass bit clear and no matching entry already blocks, latches a
+fault and raises an IRQ, so "deny" and "miss" are the same hardware
+([security/threat-model.md §7.7](../security/threat-model.md)). What the reset
+polarity buys is that the protection is present *before* the software that would
+configure it, rather than after.
 
-The bypass bitmap is itself an MMIO register, so accidentally enabling bypass requires kernel-mode access, the same trust level as direct PA access.
+**The debugging convenience survives** — a developer bringing up a driver can still
+set that BMID's bypass bit — but it is now a positive act on a running system rather
+than the state a board powers up in.
+
+> **The retired rationale read:** *"At reset, all bypasses are set — the IOMMU is
+> effectively absent. This lets the bootrom and early kernel use DMA without first
+> initializing the IOMMU. Once the IOMMU driver is up, it clears bypass bits for
+> devices it manages while leaving them set for any device that hasn't yet been
+> claimed."* The second sentence is a real cost and
+> [hardware-spec.md §8](hardware-spec.md) prices it. The third is the defect: leaving
+> unclaimed devices in bypass is not a transitional state, it is the permanent one
+> for every device no driver ever binds.
+>
+> **And the security argument under it is retired outright:** *"The bypass bitmap is
+> itself an MMIO register, so accidentally enabling bypass requires kernel-mode
+> access, the same trust level as direct PA access."* That is sound under a threat
+> model whose adversary is an unprivileged process. Under
+> [security/threat-model.md §1](../security/threat-model.md)'s, **the adversary is a
+> guest kernel**, and "the same trust level as direct PA access" stops being a
+> reassurance and becomes the thing being defended. What actually keeps the register
+> out of a guest's reach is
+> [hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spec.md)'s fail-closed
+> P4 trap — a different mechanism, in a different document, that this paragraph was
+> not relying on.
 
 ### 3.7 No VMID field
 
@@ -134,7 +177,21 @@ The IOMMU is a single SoC-level block sitting between the bus fabric and the DRA
                           +---------------+
 ```
 
-The CPU's accesses do not pass through the IOMMU — the CPU has its own MMU. The IOMMU only translates transactions originating from DMA masters.
+**The CPU's accesses do not pass through the IOMMU** — the CPU has its own MMU. The
+IOMMU only translates transactions originating from non-CPU masters. This is
+normative as [hardware-spec.md §3.10](hardware-spec.md) `I-R1a`, and it is normative
+rather than descriptive because **the diagram above contradicts it**: the diagram
+routes the CPU cores into the SoC bus fabric and the fabric into the IOMMU, which
+would put a core's every DRAM access behind the IOTLB.
+
+Under the retired all-bypass reset the contradiction was harmless — a core's
+transactions bypassed like everything else, so the diagram and the sentence produced
+the same machine. Under `I-R1` they do not: reading the diagram, a core would be
+denied its own boot fetch. The sentence is the correct half, and
+[bus/fabric-spec.md §3.2](../bus/fabric-spec.md) agrees with it — *"DMA masters
+bypass the CPU MMU but go through the IOMMU"*, said of DMA masters and of nobody
+else. The diagram is retained, unfixed, as the record of what it said; read the
+`coherent cache → fabric → IOMMU` chain as applying to the non-CPU initiators only.
 
 ### 4.2 Translation pipeline
 
@@ -142,10 +199,21 @@ A DMA transaction proceeds:
 
 1. Bus master issues transaction; bus fabric tags it with the master's BMID.
 2. Transaction reaches the IOMMU. IOMMU checks `BMID_BYPASS[BMID]`.
-3. If bypass: transaction passes through, `PA = IOVA`. No translation.
-4. If not bypass: IOMMU looks up `(BMID, IOVA)` in IOTLB.
-5. On IOTLB hit: form PA from `entry.PFN | (IOVA & page_offset_mask)`, check permissions, forward to DRAM controller.
-6. On IOTLB miss: block transaction, return bus error, latch fault info, raise IRQ.
+3. If the BMID is reserved (`0x00`, `0xFF`): block. `I-R6`.
+4. If bypass: transaction passes through, `PA = IOVA`. No translation, and **no
+   permission check** — there is no per-transaction permission on this path, which
+   is why [hardware-spec.md §3.1a](hardware-spec.md) deletes the `DEFAULT_PERM`
+   field that claimed to supply one.
+5. If not bypass: IOMMU looks up `(BMID, IOVA)` in IOTLB, skipping entries with
+   `GLOBAL = 1`. `I-R5`.
+6. On IOTLB hit: form PA from `entry.PFN | (IOVA & page_offset_mask)`, check
+   permissions, forward to DRAM controller.
+7. On IOTLB miss, permission failure, or multiple match: block the transaction,
+   **complete it with read data zero and the write discarded** (`I-R2` — the bus has
+   no error response), latch fault info, raise IRQ if enabled.
+
+Step 4 is reachable only for a BMID whose bypass bit software has deliberately set.
+Out of reset no BMID reaches it.
 
 ### 4.3 IOTLB structure
 
@@ -165,9 +233,19 @@ Three classes of IOMMU fault:
 |-------|-------|-------------------|-------------------|
 | Translation miss | Unmapped IOVA | Block, log, IRQ | Log to dmesg, disable device |
 | Permission | Write to RO mapping | Block, log, IRQ | Log to dmesg, disable device |
-| Invalid request | Malformed transaction | Block, log, IRQ | Log to dmesg |
+| Invalid request | Reserved BMID, refused entry install, multiple match, malformed transaction | Block, log, IRQ | Log to dmesg |
 
-All faults block the originating transaction. The bus master receives a bus error response and must handle it according to its own protocol (typically: the device's DMA engine halts and signals an interrupt to its driver).
+All faults block the originating transaction, which **completes** with read data
+zero and the write discarded ([hardware-spec.md §2.2](hardware-spec.md) — the master
+receives no error indication, because the bus carries none). A device whose DMA
+engine relies on a bus error to halt will not halt; it will read zeros. That is a
+correctness consequence for device drivers and it is stated here rather than left to
+be discovered.
+
+**The "disable device" column is load-bearing in a direction it does not look.**
+It is the reason the shared IOTLB needs a quota: a tenant who can make *another*
+tenant's `dma_map` fail can make that tenant's device fault, and this table is where
+the fault becomes a shutdown. See [hardware-spec.md §3.10](hardware-spec.md) `I-R8`.
 
 ## 5. Performance Model
 
@@ -243,11 +321,35 @@ The two units do **not** share physical hardware — the CPU TLB and the IOTLB a
 With the IOMMU enabled and all DMA-capable devices not in bypass:
 
 - **Device-to-kernel isolation:** A device can only access memory the kernel has explicitly mapped to its BMID. Kernel data structures are unreachable from devices.
-- **Device-to-device isolation:** Two devices cannot access each other's mappings unless the kernel deliberately shares an IOVA range under multiple BMIDs (or uses the `GLOBAL` bit for a genuinely-shared buffer).
+- **Device-to-device isolation:** Two devices cannot access each other's mappings
+  unless the kernel deliberately shares an IOVA range **by installing one entry per
+  sharing BMID**, which names the sharers and costs one entry each.
 - **Permission enforcement:** Per-entry R/W bits prevent write-only buffers from being read or read-only buffers from being written.
-- **Cache coherency:** Per-entry CACHEABLE bit controls whether the transaction snoops CPU caches. Configurable per-buffer.
+- **Cache coherency:** **not a guarantee of this block.** See §7.1 below.
 
-These guarantees are equivalent to user-process isolation in the CPU MMU. A device DMA in the wrong direction is a SIGSEGV-equivalent for the device.
+> **The device-to-device bullet previously ended** *"(or uses the `GLOBAL` bit for a
+> genuinely-shared buffer)"*, and the cache-coherency bullet previously read
+> *"Per-entry CACHEABLE bit controls whether the transaction snoops CPU caches.
+> Configurable per-buffer."* The first is withdrawn by
+> [hardware-spec.md §3.10](hardware-spec.md) `I-R5` — a bit that matches *every*
+> BMID cannot express "a genuinely-shared buffer", it expresses "shared with
+> everything, including whatever device is attached next" — and the second by `I-R9`,
+> because the IOMMU has no path to any cache.
+
+These guarantees are equivalent to user-process isolation in the CPU MMU **and are
+scoped to masters that reach memory through the IOMMU.** A master with a private path
+— [hardware-spec.md §3.10](hardware-spec.md)'s bypass path 7 — is outside them, and
+an integration that adds one must say so.
+
+### 7.1 What this block does not guarantee
+
+- **Coherence with CPU caches**, in either direction. `I-R9`;
+  [decisions/0010](../decisions/0010-dma-coherence-is-software-maintained.md).
+- **A bus error on a blocked transaction.** The master is told nothing; it reads
+  zeros. `I-R2`.
+- **Anything about a master it does not see.** Bypass path 7.
+- **Freedom from cross-BMID denial of service** unless the IOTLB quota `I-R8` is
+  implemented — the isolation is of *access*, not of *capacity*.
 
 ## 8. Out of Scope
 
