@@ -288,14 +288,40 @@ immediate bits. `dddd…` = displacement bits.
 | Mnemonic | Encoding (word0 word1) | Operation |
 |---|---|---|
 | `movi20  #imm20,Rn`  | `0000 nnnn iiii 0000` `iiiiiiiiiiiiiiii` | sign_extend₂₀(imm) → Rn |
-| `movi20s #imm20,Rn`  | `0000 nnnn iiii 0001` `iiiiiiiiiiiiiiii` | sign_extend₂₈(imm) << 8 → Rn |
+| `movi20s #imm20,Rn`  | `0000 nnnn iiii 0001` `iiiiiiiiiiiiiiii` | `imm20 << 8`, sign-extended from bit **27** of the shifted value → Rn |
 
 - The 20-bit immediate is `word0[11:8]` (high nibble) concatenated with
   `word1[15:0]`.
 - `movi20`: sign-extend the 20-bit value to 32 bits. Range −524288..+524287.
 - `movi20s`: the 20-bit value is shifted left by 8 (so it lands in bits
-  [27:8]) and sign-extended from bit 27. Reaches large/upper-bit constants and
-  addresses that `movi20` cannot.
+  [27:8]) and is sign-extended from bit **27** of the shifted value. Reaches
+  large/upper-bit constants and addresses that `movi20` cannot.
+
+> **This notation is pinned, and the question §8.5 asked is answered — B4
+> encoding sweep, 2026-09-08** ([../encoding-sweep.md §4](../encoding-sweep.md)).
+> Before this, `movi20s`'s semantics appeared four different ways: this table
+> said `sign_extend₂₈(imm) << 8`, this bullet said shift-then-extend-from-27,
+> [`hardware-impl.md`](hardware-impl.md) §4.3 said
+> `sign_extend_from_bit19(imm20) << 8`, and [`software-impl.md`](software-impl.md)
+> §2.2 said `imm << 8` with no sign extension at all.
+>
+> **The arbiter is upstream binutils, not `insns2asm --emit check`.** §B4 of the
+> remediation plan nominated the checker; its oracle reconstructs the
+> bit-pattern *string* and compares it to the original string, and models no
+> immediate semantics whatsoever, so it cannot see this question at all.
+> `binutils-gdb@origin/master` can and does: `opcodes/sh-opc.h` gives `movi20s`
+> the operand type `IMM0_20BY8`, and `opcodes/sh-dis.c` implements it as
+> *assemble the 20 bits, shift left 8, then subtract `0x10000000` if bit 27 is
+> set* — shift first, extend from bit 27. That is the wording above.
+>
+> **And the two readings §8.5 said "differ for negative immediates" do not
+> differ.** Evaluated over **all 2²⁰ immediates** this session:
+> `sign_extend_from_bit19(imm) << 8` disagrees with the binutils result **0**
+> times, and so does the table's old `sign_extend₂₈(imm) << 8`. All three
+> notations denote one function; only `software-impl.md`'s unsigned form was
+> actually wrong, on all 524,288 negative immediates. The defect was
+> notational, and it is fixed by having one notation rather than by choosing
+> between three behaviours.
 - PC advances by **4**. These are the only J32 instructions that consume two
   instruction words.
 - No flags affected. No memory access.
@@ -609,11 +635,22 @@ rejected). SH-2A's 32-bit format already carries a full base register *and* a
 ABI-neutral.
 
 A **16-bit indexed** form, `lea @(R0,Rm),Rn` → `R[n] = R[m] + R[0]`, remains a
-viable *lighter-weight companion*: it fits the unallocated `1111nnnnmmmm1111`
-slot (free in SH-2, SH-2A, SH-4, and J32), is 2 bytes, executes in one cycle
-reusing the address adder, but offers **no displacement** and reintroduces an
-`R0` dependency (the very thing the 32-bit form removes). It is documented as an
-alternative, not the primary encoding — Open Question §8.7.
+viable *lighter-weight companion*: it would be 2 bytes and execute in one cycle
+reusing the address adder, but it offers **no displacement** and reintroduces an
+`R0` dependency (the very thing the 32-bit form removes). It was documented as
+an alternative, not the primary encoding — Open Question §8.7.
+
+> **The slot is not free, and the alternative is closed — B4 encoding sweep,
+> 2026-09-08** ([../encoding-sweep.md §4](../encoding-sweep.md)). This paragraph
+> previously called `1111nnnnmmmm1111` "unallocated" and "free in SH-2, SH-2A,
+> SH-4, and J32", and §8.7 asked for the slot to be confirmed clear before
+> committing. Confirmed, in the negative:
+> `cpugen freespace -avoid <all 13 variants> -form '1111nnnnmmmm1111'` returns
+> **0 candidates** — SH-DSP's `movs.l Ds,@As+Is` is `111101AADDDD1111` and 83
+> DSP rows overlap the form. It is also inside the opcode plane bare-metal J4
+> traps ([../sh4-guest-model.md §2](../sh4-guest-model.md)). Two of the four
+> "free in" claims were wrong. The 32-bit `lea` form, whose encoding the same
+> sweep **confirmed** free, is the only one.
 
 ### 4.8 Delay-slot-free branches: reuse the `bt`/`bf` redirect; no `bra/n`
 
@@ -789,10 +826,12 @@ Full detail in the companion specs; the architectural requirements are:
    (`gen-go`); regenerate via `make -C decode generate` (Go 1.26+ only), editing
    the TOML spec — never the generated VHDL (see
    [`software-impl.md`](software-impl.md) §1).
-5. **`movi20s` exact sign-extension width**: confirm against the SH-2A manual
-   whether the pre-shift value is sign-extended from bit 19 then shifted, or the
-   post-shift value from bit 27 (this spec assumes the latter); the two differ
-   for negative immediates.
+5. **`movi20s` exact sign-extension width — closed 2026-09-08 (B4 encoding
+   sweep, [../encoding-sweep.md §4](../encoding-sweep.md)).** §3.1 pins the
+   notation against `binutils-gdb@origin/master`'s `IMM0_20BY8`. This item
+   previously said the two candidate readings "differ for negative immediates";
+   they do not — exhaustively over all 2²⁰ immediates they are the same
+   function — so the question it asked had no answer to find.
 6. **`lea` displacement form — RESOLVED (2026-05-30):** sign-extended, unscaled
    (±2048, byte-granular). The scaled-×4/unsigned alternative (+16380,
    longword-granular, uniform with the disp12 loads) was rejected: it is less
@@ -804,10 +843,12 @@ Full detail in the companion specs; the architectural requirements are:
    offset-distribution measurement in [`software-impl.md`](software-impl.md) §7(d)
    is now a confirm-the-fallback-rate check, not a decision input.)*
 7. **`lea` 16-bit indexed companion** (§4.7): is the lighter
-   `lea @(R0,Rm),Rn` (`1111nnnnmmmm1111`) worth adding alongside the 32-bit form
-   for the no-displacement case, or does it just re-introduce the `R0` pressure
-   the 32-bit form exists to remove? Note `1111…` is the FPU/SIMD nibble — confirm
-   the slot stays clear on FPU-bearing J32 parts before committing.
+   `lea @(R0,Rm),Rn` (`1111nnnnmmmm1111`) worth adding alongside the 32-bit
+   form? **Closed 2026-09-08, in the negative** (§4.4): the slot is not free —
+   SH-DSP occupies it and bare-metal J4 traps the plane — so the question of
+   whether the `R0` dependency is worth paying does not arise. This item
+   previously asked for the slot to be "confirmed clear before committing"; it
+   was confirmed, and it is not.
 8. **Adopt the SH-2A disp12 load family wholesale?** §3.4.1 needs only `mov.l`
    for PIC, but the same prefix carries `mov.b/w`, `movu.b/w`, and the disp12
    stores (and `fmov.s`). Decide whether to implement just `mov.l` (minimal PIC

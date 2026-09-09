@@ -470,6 +470,20 @@ For FP add-reductions the reduction respects IEEE 754 rounding using `FPSCR.RM`;
 
 SWIZZLE permutes the lanes of Vn according to a control vector in Vm. Vm is interpreted as a packed array of lane indices (4 bits per index at w=8 down to 1 bit at w=64). Out-of-range indices force the destination lane to zero (AltiVec VPERM convention, 1996). See §5.6 for the immediate-pattern variant SWIZZLE.I.
 
+> **The stated index width cannot address the lanes, and neither can `llll`.**
+> Found by the B4 encoding sweep ([encoding-sweep.md §3.1](../encoding-sweep.md)).
+> §1.2 fixes `VLEN = 8 × XLEN`, so w=8 gives **32 byte-lanes on J32 and 64 on
+> J64** — 5 and 6 index bits. "4 bits per index at w=8" reaches 16 of them, and
+> Appendix A's `llll` (the `VLNS` lane index) is 4 bits with the same shortfall.
+> This is arithmetic against this document's own §1.2, not a search result.
+>
+> It is **not fixed here**, because the two candidate fixes are not equivalent
+> and the choice is architectural: widen the packed index to `ceil(log2(VLEN/8))`
+> and accept that the control vector's packing becomes XLEN-dependent, or keep
+> 4 bits and restrict SWIZZLE/`VLNS` to lane widths where 16 indices suffice
+> (w ≥ 16 on J32, w ≥ 32 on J64). `VLNS` has a second, independent reason to
+> change shape — see §5.7 — and both should be settled in one revision.
+
 SWIZZLE is a **pure lane-permute** and is **never itself reduced**: in a horizontal (or segmented, [gpu/simd-gpu-spec.md](gpu/simd-gpu-spec.md)) block it performs its permute and consumes one governed slot to **prepare operands** for a following reducing instruction; only arithmetic governed instructions contribute to the reduction. Like all SWIZZLE forms it has no standalone encoding — it is valid **only inside an open SIMD block** (§3.3), so broadcasts and half-selects that feed a reduction or a VCLMUL live in the *same* block as the operation they feed, not before the prefix.
 
 ### 4.6 Lane beat execution (implementation guidance)
@@ -493,7 +507,7 @@ When `SIMD_VAL = 1`, the decoder uses a SIMD-context decode table. The SIMD deco
 | Encoding | Mnemonic | Lane operation | Tier |
 |---|---|---|---|
 | `0011 nnnn mmmm 1100` | ADD Rm,Rn | per-lane add | T0 |
-| `0011 nnnn mmmm 1010` | SUB Rm,Rn | per-lane subtract | T0 |
+| `0011 nnnn mmmm 1000` | SUB Rm,Rn | per-lane subtract | T0 |
 | `0010 nnnn mmmm 1001` | AND Rm,Rn | per-lane AND | T0 |
 | `0010 nnnn mmmm 1011` | OR  Rm,Rn | per-lane OR | T0 |
 | `0010 nnnn mmmm 1010` | XOR Rm,Rn | per-lane XOR | T0 |
@@ -508,6 +522,19 @@ When `SIMD_VAL = 1`, the decoder uses a SIMD-context decode table. The SIMD deco
 | `0011 nnnn mmmm 0111` | CMP/GT Rm,Rn | per-lane signed > test → writes P0 | T0 |
 
 Per-lane comparison results are written to **P0** (§2.5); bits not covered by the current width's active lanes are preserved across width changes.
+
+> **`SUB` corrected 2026-09-08 by the B4 encoding sweep**
+> ([encoding-sweep.md §3.1](../encoding-sweep.md)). This row previously read
+> `0011 nnnn mmmm 1010`, which is not `SUB Rm,Rn` — it is **`SUBC Rm,Rn`**, as
+> `jcore-cpu/docs/insns.json` and `decode/gen-go/spec/arithmetic.toml` both
+> record. `SUB Rm,Rn` is `0011 nnnn mmmm 1000`. The error was not inert: §5.4.3
+> below gives `0011 nnnn mmmm 1010` to `VABSDIFF` "(was SUBC)", so this table
+> and that one claimed **one encoding twice**, both of them governed and both
+> reachable in the same block. Correcting the nibble dissolves the double claim;
+> `VABSDIFF` keeps `SUBC`'s slot and needs no move.
+>
+> The other 20 rows of §5.1 and §5.2 were checked the same way against the
+> canonical database and every one of them matches.
 
 ### 5.2 SH-4 FPU operations (Tier 0 governed)
 
@@ -708,6 +735,19 @@ Tier 0 vector memory and SIMD-control instructions are reproduced unchanged from
 > SIMD blocks and its encoding is one operand form of SH-4's `FSCA`. Re-homing both is
 > [j4-remediation-plan.md §B4](../j4-remediation-plan.md)'s encoding sweep, which was told to
 > decide them jointly with the guest decode-fidelity policy; that policy is now written.
+>
+> **The sweep confirmed both, and sharpened the second**
+> ([../encoding-sweep.md §3.1](../encoding-sweep.md)). A database reservation
+> row carrying `1111 nnnn mmmm 1000` came back from regeneration annotated as
+> colliding with `fmov.s @Rm,FRn` without being told to — six encodings, six
+> collisions. `VMKCHG` is not merely "in `FSCA`'s row": `1111 1100 1111 1101`
+> **is** `FSCA FPUL,DRn` at `n = 110`, and
+> `cpugen freespace -form '1111110011111101'` returns zero candidates once
+> `SH4A` is avoided. The one fix that costs nothing is the smaller one — both
+> are declared valid *outside* SIMD blocks and nothing in this document needs
+> them to be, so **the cheapest re-home is to make them in-block-only**, which
+> §5.4 already says of the same bits, and only then to look for new slots for
+> whatever genuinely has to work outside a block.
 - **VGATHER.Q / VSCATTER.Q** with per-lane offsets from Vm (inside SIMD block only).
 - **VMOV Vm, Vn** (inside SIMD block; SH-4 FMOV-register encoding reinterpreted).
 - **VLDI.Q #imm, Vn** (8-bit signed immediate broadcast; inside SIMD block).
@@ -747,7 +787,33 @@ The pair must be **adjacent and atomic**: any instruction between VLNS and a fol
 
 **Scalar-side targets.** Integer variants (`VEXT.B/W/L/Q`, `VINS.B/W/L/Q`) read/write a SH-2 integer scalar register Rn. FP variants (`VEXTF.L`, `VINSF.L`) read/write an **FR register (FRn) directly** — the same scalar FP bank the reductions target (§2.3). No intermediate register and no boundary move: `VEXTF.L` extracts a lane to FRn, `VINSF.L` inserts FRn into a lane. Because these touch FR, the FP variants require FPU ownership (trap under SR.FD as well as SR.VD; SR.VD first per §2.6).
 
-**Encodings** (full table in Appendix A): VLNS at `0100 mmmm llll 1011`; VEXT.B/W/L/Q at `0100 nnnn {1000..1011} 1011`; VINS.B/W/L/Q at `0000 nnnn {1000..1011} 1011`; VEXTF.L at `0100 nnnn 1100 1011` (nnnn = destination FRn); VINSF.L at `0000 nnnn 1100 1011` (nnnn = source FRn). Valid inside and outside SIMD blocks. Assembler accepts the single-mnemonic forms (`VEXT.L V5.2, R3` and `VEXTF.L V5.2, FR3`).
+**Encodings** (full table in Appendix A): VLNS at `0100 mmmm llll 1011`; VEXT.B/W/L/Q at `0100 nnnn {1000..1011} 1011`; VINS.B/W/L/Q at `0000 nnnn {1000..1011} 1011`; VEXTF.L at `0100 nnnn 1100 1011` (nnnn = destination FRn); VINSF.L at `0000 nnnn 1100 1011` (nnnn = source FRn). Valid inside and outside SIMD blocks.
+
+> **These encodings do not survive the collision sweep, and `VLNS`'s does not
+> survive its own field layout.** Enumerated against the canonical database by
+> the B4 sweep ([encoding-sweep.md §3.2](../encoding-sweep.md)); the encodings
+> above are left as written because re-homing them is one decision, not five,
+> and it is this document's to take.
+>
+> - **Four of the five `VEXT` slots are occupied on a J-Core variant**, not
+>   merely on an SH one. `0100 nnnn 1000/1001/1010 1011` are SH-2A's
+>   `mov.b/w/l R0,@Rn+` and `0100 nnnn 1100 1011` is `mov.b @-Rm,R0`, all live
+>   on **J2A** and SH-2A. Only `VEXT.Q` at `1011` is free.
+>   `cpugen freespace -avoid <all 13> -form '0100nnnn----1011'` leaves six free
+>   minors: `0011`, `0101`, `0110`, `0111`, `1011`, `1111`.
+> - **`VINS.L` at `0000 nnnn 1010 1011` is SH-4A `synco`** — `VINS.L R0` *is*
+>   `synco`. That is a violation of Decision B2-5
+>   ([../sh4-guest-model.md §5](../sh4-guest-model.md)), not a tidy-up, and it
+>   is the one item in this block that has to move whatever else is decided.
+>   The other four `VINS` slots are free.
+> - **`VLNS` cannot be given a slot, because it does not want one.**
+>   `0100 mmmm llll 1011` spends both nibble fields — `mmmm` on the source
+>   register, `llll` on the lane index — so it claims **all 16 minors** of a
+>   family with six free, and no free family of that shape exists in the map.
+>   The same `llll` is the field §4.5 shows cannot address the lanes. One cause,
+>   one fix: **the lane index has to leave the instruction word** — a GPR
+>   operand, a second instruction word, or a width restriction — and `VEXT`/
+>   `VINS` can be re-homed into their families' free minors once it has. Assembler accepts the single-mnemonic forms (`VEXT.L V5.2, R3` and `VEXTF.L V5.2, FR3`).
 
 ### 5.8 (retired) SIMD↔FPU boundary instructions
 
@@ -843,6 +909,16 @@ Inside SIMD blocks, the following encoding ranges are architecturally reserved. 
 | MAC.W, MULL in `0000 ……` (MAC.L now consumed by VCRC32C.B; DMULU.L by VCLMUL.D; DMULS.L by VMULSU) | ~48 | Multi-issue MAC, extended-precision SIMD |
 | CAS.L, DIV0S, DIV0U, DIV1 | ~16 | SIMD atomic operations, lane-wise division |
 | Tier 3 (256-bit) | reserved entirely | J64 wide-vector extensions |
+
+> **The `VINS` family is contended, and this table does not list it.**
+> [../mmu/hardware-spec.md §3.1](../mmu/hardware-spec.md) retired seven
+> encodings from `0000 nnnn xxxx 1011` and declares the resulting eight free
+> slots "the first reserve for J4-only `0000 nnnn`-shaped instructions". §5.7 of
+> this document already spends five of them on `VINS.B/W/L/Q` and `VINSF.L`.
+> Neither document cited the other until the B4 sweep found it
+> ([../encoding-sweep.md §3.3](../encoding-sweep.md)). The reserve is
+> **contended, not free**; whichever way it is settled, it is settled between
+> these two specs and not by whoever writes an instruction there first.
 
 **Total Tier 0/1/2 reserved: ≈22,000 architecturally-reserved 16-bit codepoints** inside SIMD blocks. Ample headroom for incremental architectural growth.
 

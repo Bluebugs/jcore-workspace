@@ -196,8 +196,7 @@ signed forms `imms_8_1`/`imms_12_1` similar. No form reads a second word. So:
   register if timing allows — to be confirmed).
 - Form the 20-bit value `imm20 = ir0[11:8] & word1[15:0]`.
 - `movi20`: `imm_val = sign_extend_from_bit19(imm20)`.
-- `movi20s`: `imm_val = sign_extend_from_bit19(imm20) << 8` (see [`spec.md`](spec.md)
-  §8.5 — confirm sign-extension order against the SH-2A manual).
+- `movi20s`: `imm_val = imm20 << 8`, sign-extended from bit **27** of the shifted value — [`spec.md`](spec.md) §3.1 owns that notation. (This line previously read `sign_extend_from_bit19(imm20) << 8` and deferred to a §8.5 open question. The two expressions denote the same function on every immediate; the question is closed and the wording follows the owner so the tree has one notation.)
 - Add `IMM_S_20` (and the `movi20s` variant) to `immval_t`. The immediate mux
   gains an input that concatenates `ir0[11:8]` with `word1`. `imm_val` storage
   is already 32-bit, so only the *source mux* changes, not the bus width.

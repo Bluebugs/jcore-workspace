@@ -688,6 +688,17 @@ The new encodings in §3.1–§3.2 extend a family that **J2 does not currently 
 > 8 free** — every slot virgin, and it is the natural first reserve for
 > future J4-only `0000 nnnn`-shaped instructions.
 >
+> **The count is confirmed and the reserve is contended — B4 encoding sweep,
+> 2026-09-08** ([../encoding-sweep.md §3.3](../encoding-sweep.md)). The command
+> published below was re-run verbatim and reproduces exactly: 8 candidates, 8
+> virgin. What changed is the "reserve" half, not the arithmetic:
+> [../simd/spec.md §5.7](../simd/spec.md) already places `VINS.B`, `VINS.W`,
+> `VINS.Q` and `VINSF.L` in four of these eight slots, and `VINS.L` on the ninth
+> minor this family has, `1010`, which is not free at all — it shadows SH-4A
+> `synco`. Neither document cited the other. **Treat the family as spoken for
+> until that is settled**, jointly with the SIMD spec; a J4-only instruction
+> assigned here today would collide with a documented one.
+>
 > **Kept:** `LDTLB` (`0x0038`) and the parameterless `LDTLB.RN`
 > (`0x0078`) — only the `Rm` form of `LDTLB.RN` went.
 >
