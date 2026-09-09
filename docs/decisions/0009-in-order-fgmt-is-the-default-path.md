@@ -173,20 +173,25 @@ while leaving the FGMT-over-OoO conclusion standing.
 
 ### Where the roadmap currently disagrees with all of this
 
-[jcore-ulx3s-service-plan.md §9](../jcore-ulx3s-service-plan.md) stages Tier 0
+[jcore-ulx3s-service-plan.md §9](../jcore-ulx3s-service-plan.md) staged Tier 0
 at Phase 1B, the Tier 1 MVP at Phase 5, the **dual-issue OoO core at Phase 6**,
 and dual-core-plus-FGMT at Phase 6.5 — FGMT arriving *after* OoO and *on top of*
 it. On the evidence above that ordering is backwards, and leaving it standing
-beside a paused OoO path would be two statements about the same work.
+beside a paused OoO path would have been two statements about the same work.
+D5 below re-stages it, and the plan now reads that way; this paragraph describes
+the state this record found.
 
 ---
 
 ## Decision
 
 **D1. The default microarchitecture path is dual-issue in-order with 2-thread
-switch-on-miss FGMT, on both platforms.** `[FPGA]` and `[ASIC]` land on the same
-answer for different reasons — area and fit on the ECP5-85F, energy on gf180 —
-and neither reason depends on the other.
+switch-on-miss FGMT, on both platforms.** The argument that carries the most
+weight is the one that applies to *both* and is about the OoO design's own
+stated purpose: a window this size does not hide SDRAM latency, and two contexts
+do. The platform-specific arguments sit on top of that — fit and timing margin
+on the ECP5-85F, energy on gf180 — and the ECP5 one is the weaker of the two
+after this task's citation check (see §Context).
 
 **D2. New OoO RTL effort pauses.** [ooo/j32ooo-spec.md](../ooo/j32ooo-spec.md)
 and [ooo/j32lt-spec.md](../ooo/j32lt-spec.md) are **not** superseded, not
@@ -241,6 +246,17 @@ Dual-issue and FGMT are **upgrades beyond Phase 1**, not part of it. Stating
 that separation is most of what §B3 asked for: the Phase-1 deliverable is a core
 that exists and is measured, and everything in D1 is a core that does not exist
 yet.
+
+**The "boots" half of §B3's question is not answered either, and it is worth
+being exact about what is and is not demonstrated.** What `jcore-cpu@master` CI
+establishes for J4 is that it *fits and closes timing* — synthesis and P&R on
+the 85F, gated against a floor — and that its MMU behaves, via bare-metal
+simulation harnesses that link the **real** `linux@jcore` objects: the TLB-miss
+handler, the `head_32.S` MMU-enable path, huge-page installs. That is
+considerably stronger than a hand-written stub. It is **not a Linux boot**:
+nothing in that repository's workflows boots a kernel on J4, on hardware or in
+simulation. So boot-to-Linux is a Phase-1 *goal* with a partial evidence trail,
+not an achieved property, and a roadmap should not read it as done.
 
 **D5. The roadmap order flips: FGMT before OoO.** In
 [jcore-ulx3s-service-plan.md](../jcore-ulx3s-service-plan.md), the work that was
@@ -499,4 +515,10 @@ patent freedom; the rows above are.
 | [ooo/j32lt-spec.md](../ooo/j32lt-spec.md) | Pause notice, with the narrower reason of D2 |
 | [jcore-ulx3s-service-plan.md](../jcore-ulx3s-service-plan.md) | Tier 1.5, §5, Phases 6 and 6.5, §11 and the spec map re-staged per D5 |
 | [glossary.md §3](../glossary.md) | J32-OOO and J32-LT status; the default path named in the threading section |
-| [j4-remediation-plan.md §B3](../j4-remediation-plan.md) | Completion note, with the corrections to §B3's own text |
+| [j4-remediation-plan.md §B3](../j4-remediation-plan.md) | Completion note, with four corrections to §B3's own text |
+| [j4-remediation-plan.md §E.1](../j4-remediation-plan.md) | Correction note on the two citations that did not hold; the bullet itself left as quoted review text |
+| [j4-remediation-plan.md](../j4-remediation-plan.md) principle 1 | The ~40 MHz clause marked retired; the goals list it carries is untouched |
+| [0004](0004-platform-tag-convention.md) rule 3, [0005](0005-unmeasured-figures-are-removed.md) rule 4 | Both illustrate their rule with the retired ~40 MHz; the illustration is corrected, neither rule changes |
+| [simd/hardware-impl.md](../simd/hardware-impl.md), [simd/software-impl.md](../simd/software-impl.md) | The two `[FPGA]` goal lines that inherited ~40 MHz |
+| [security/threat-model.md §9](../security/threat-model.md) | A platform-tagging complaint withdrawn: with ~40 MHz retired, the row's own 30 MHz is J4's CI floor |
+| [fgmt/dual-fgmt-proposal.md §2](../fgmt/dual-fgmt-proposal.md) | The MIPS MT and barrel prior-art citations corrected to primary sources |
