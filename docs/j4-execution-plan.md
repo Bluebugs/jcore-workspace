@@ -113,7 +113,7 @@ minimize-loss step is settled.
 | C2a | GPU memory protection (base+bounds or IOMMU/BMID) — launch blocker before user shaders. **Design DONE 2026-09-09** — [simd/gpu/simd-gpu-spec.md §16](simd/gpu/simd-gpu-spec.md), [simd/gpu/architecture.md §5.4](simd/gpu/architecture.md). **The `or` is a false alternative, the "launch blocker" is not blocking any scheduled launch, and the implementation half is not dispatchable in any repo** — see below. | docs → jcore-cpu | Opus | *blocked on a GPU program existing* |
 | C2b | Speculation: delay-on-miss + frontend coverage (commit-time predictor updates, tenant-tagged BTB, degenerate-STT taint, delayed spec TLB/PTW). **Design DONE 2026-09-09** — [mmu/hardware-spec.md §5.0a](mmu/hardware-spec.md) W-R1–W-R5, [ooo/j32ooo-spec.md §8.2a, §11.1a](ooo/j32ooo-spec.md), [ooo/j32lt-spec.md §7.4a, §7.5a](ooo/j32lt-spec.md), [security/threat-model.md §7.2, §7.3, §8 L4, §10](security/threat-model.md). **Three of the four named mechanisms target structures no repository contains and were already specified; the implementation half is dispatchable in part, and it is the first Wave-3 row of which that is true** — see below. | docs → jcore-cpu | Opus | Opus |
 | C2c | FGMT single-tenant-core + microreset on realloc. **Design DONE 2026-09-09** — [hypervisor/hardware-spec.md §2.10, §2.11, §4.7.1a, §4.7.2, §4.7.3](hypervisor/hardware-spec.md), [security/threat-model.md §8 L1](security/threat-model.md). **The row's mechanism name is post-2006 and had to be replaced, its figures were nobody's, and the implementation half is not dispatchable in any repo** — see below. | docs → jcore-cpu | Opus | *blocked on FGMT and a hypervisor existing* |
-| C2d | IOMMU default-deny + per-device block + no global-match IOTLB + coherent-DMA owner. | docs → jcore-cpu + jcore-soc + linux | Opus | Opus |
+| C2d | IOMMU default-deny + per-device block + no global-match IOTLB + coherent-DMA owner. **Design DONE 2026-09-09** — [iommu/hardware-spec.md §3.10](iommu/hardware-spec.md) `I-R1`–`I-R10` and §10.1 `I-E0`–`I-E6`, [iommu/security-review.md](iommu/security-review.md) (commissioned by this task; it did not exist), [decisions/0010](decisions/0010-dma-coherence-is-software-maintained.md), [security/threat-model.md §7.7a, §8 L2](security/threat-model.md). **The per-device block state already existed on both sides of the interface, the coherent-DMA entry is wrong about every noun, and the implementation half is not dispatchable in any of the three repos** — see below. | docs → jcore-cpu + jcore-soc + linux | Opus | *blocked on a BMID-carrying bus and a DMA master existing* |
 | C2e | Cache isolation beyond ways (DAWG-semantics metadata + MSHR reservation + bandwidth QoS + per-tenant KSM + privileged flush ops). | docs → jcore-cpu + linux | Opus | Opus |
 
 **C1a's implementation step reverses this table, and the reversal is recorded rather than
@@ -394,6 +394,133 @@ L1 — an SM **is** a core for L1, so a two-tenant SM is out of bounds at launch
 C2a's windows, and the SM's own L1-equivalent detector becomes an entry condition on un-parking the
 GPU program rather than a launch blocker. Nothing in Wave 3 has moved a bar item to `MET`, and this
 row does not either.
+
+**C2d reverses this row five times, and the eight-item worklist splits three ways.**
+
+| # | Worklist item | Outcome |
+|---|---|---|
+| 1 | per-BMID deny/block state | **Already present, on both sides.** [security/threat-model.md §7.7](security/threat-model.md)'s sharpening survives checking — a BMID with its bypass bit clear and no matching entry already blocks, latches a fault and raises an IRQ. And the *kernel* half was already there too, which nobody had said: `IOMMU_DOMAIN_BLOCKED`, `blocked_domain` and `release_domain` all exist in `include/linux/iommu.h` at `linux@origin/jcore`. **No new state machine on either side** |
+| 2 | reset = deny, or a locked bypass window | **Specified: hard deny.** The window alternative is *rejected with a derived reason*, below |
+| 3 | write-once lock on `SUPER_BYPASS` | **Specified, and widened.** `ENABLE` needed the same treatment and nobody had asked |
+| 4 | guard the `GLOBAL` IOTLB bit | **Reversed to removal.** The grant is deleted; the bit becomes a fault term |
+| 5 | detach/teardown re-protection | **Specified — and the existing text specified the opposite direction** |
+| 6 | quota the shared IOTLB | **Specified**, with a channel sharper than the one it was assumed to close |
+| 7 | commission the IOMMU security review | **Delivered**: [iommu/security-review.md](iommu/security-review.md), 5 critical / 8 important / 7 minor spec findings and 5 implementation-prerequisite findings |
+| 8 | own coherent-DMA vs the write-back L2 | **Reversed.** Every noun in the entry is wrong, and the useful fact is one nobody had recorded |
+
+1. **The reset decision is hard deny, and the argument for it is not the bar's.**
+   [security/threat-model.md §8](security/threat-model.md) had already ratified
+   block-all-at-reset; what C2d owes is why the *alternative* the plan offered — "a
+   documented brief bypass window that locks after handoff" — is not available.
+   **It is not available because the handoff event does not exist.** A window that
+   locks needs hardware to observe handoff, and the only fabric-visible boot
+   transition ([bus/fabric-spec.md §9.2](bus/fabric-spec.md)) is the SMP release
+   register at `0xFF00FF00` — a different block, and never written at all on a
+   single-core part. A window that locks on a *software* command is a rule with no
+   detector, which is the failure C1c and C2c both filed. Hard deny needs no event.
+   Two further arguments are derived rather than inherited: the kernel's OF path
+   **fails open** by design (`of_dma_configure_id()` swallows `of_iommu_configure()`'s
+   `-ENODEV` under a comment reading *"we'll just carry on without it"* and configures
+   raw `dma-direct`), so an un-annotated device is unprotected no matter how careful
+   the driver is; and default-deny converts this document's own bugs from silent-open
+   to loud-closed — `iommu/linux-spec.md` §5.4's bypass-bitmap arithmetic indexed the
+   register by `bmid / 8` and the bit by `bmid % 32`, which under all-bypass reset
+   unprotects the attaching device *and* faults an innocent one.
+
+2. **`GLOBAL` is removed rather than guarded, and S-I7's shape is why the narrower
+   answer is not available.** [mmu/security-review.md §2](mmu/security-review.md)
+   **S-I7** resolved by making a *combination* fault — `G=1 && U=1` — which left the
+   legitimate global kernel page alone. The IOMMU has no `U` bit and no per-entry
+   marker of who is untrusted, so there is no combination to make fault; and
+   restricting `GLOBAL` to read-only would not help, because a globally *readable*
+   buffer is already cross-tenant disclosure once two tenants own devices. What made
+   removal free is a fact in `iommu/linux-spec.md` §5.2 that nobody had connected to
+   it: `.map` already loops `for_each_set_bit(bmid, domain->bmids, …)`, so a *k*-way
+   shared buffer is already expressed as *k* entries that **name their sharers**.
+   S-I7's shape is kept where it counts — a hardware term at lookup plus a named guard
+   ([iommu/hardware-spec.md §3.10](iommu/hardware-spec.md) `I-R5`, `I-E4`), not a rule
+   telling software not to set the bit.
+
+3. **Three mechanisms the specs relied on exist in no repository, and the first of
+   them hangs the machine.** `iommu/hardware-spec.md` §2.2 told an implementer to
+   return `SLVERR` and *"suppress the data phase"*; `jcore-cpu:cpu2j0_pkg.vhd`'s
+   response record is `{ d, ack }` and carries **no error field**, so suppressing the
+   data phase means never asserting `ack` — a permanent stall of the master and, behind
+   `bus_mux_typec.vhm`'s fixed-priority arbiter, of everything queued behind it. Under
+   default-deny that is the *default* path. `IOMMU_CTRL.DEFAULT_PERM` applied a
+   permission on the bypass path, which has no permission check (C1c's shape, in a
+   register field). And §7's coherency guarantee delegated to a fabric whose snoop bus
+   has one originator, the L2, and one class of destination, CPU L1-D ports.
+
+4. **Two defects nobody had listed, found by asking who can write each control.**
+   [bus/fabric-spec.md §4.3](bus/fabric-spec.md) made BMID `0xFF` a **permanent**
+   bypass and — unlike `0x00` — stated **no rule** forbidding the fabric from assigning
+   it to a master port: one integration decision from a master with unconditional
+   physical DMA, on a path a board's JTAG connector makes physically reachable. And
+   `HCALL_HV_IOMMU_MAP(iova, ra, perms, bmid)`
+   ([hypervisor/design-spec.md §4.6](hypervisor/design-spec.md)) takes **`bmid` from
+   the guest**, with no stated validation — the one IOMMU control delegated to the
+   adversary, and C1b's lesson arriving at a hypercall argument. Every other control is
+   MMIO the guest cannot reach, because
+   [hypervisor/hardware-spec.md §4.4.3](hypervisor/hardware-spec.md) traps P4
+   fail-closed; that check is a strength, and it is in a different document from the one
+   that needed it. Counting the ways to memory rather than the ways to leak gives
+   **7** bypass paths ([iommu/hardware-spec.md §3.10](iommu/hardware-spec.md)), of which
+   six are closed and the seventh — a master with a private path, `flash_boot_reader`'s
+   SPRAM port — is named because no register can reach it.
+
+5. **The coherent-DMA entry is wrong about every noun, and the useful fact is the
+   opposite of the one it states.** *"The L2 exposes no fabric snoop port today"*:
+   there is **no L2** in either repository — every `l2` token in VHDL is a `textio`
+   variable, an FPGA ball name, or a comment about the *TLB*'s second tier. The
+   write-back cache that creates the hazard is the **L1-D** at `[T1/T2]`
+   ([decisions/0007](decisions/0007-l1d-write-policy-under-msi.md)), not the L2, whose
+   own policy was never in dispute. And **a snoop port does exist today** — on the
+   L1-D: `cache_pkg.vhd:467-470`'s `dcache_snoop_io_t` is `{ al, en }`, it is a real
+   external port, an incoming address clears the matching line's valid bit, it is
+   cross-wired CPU↔CPU in the two-CPU build, and it is tied to `NULL_SNOOP_IO`
+   everywhere else with `dma_dbus_o` connected to none of it. So the accurate statement
+   is that the hardware a DMA write needs in order to invalidate a stale CPU line is
+   present, invalidate-only, and one wire from the DMA leg of the DDR mux.
+   [decisions/0010](decisions/0010-dma-coherence-is-software-maintained.md) names the
+   wire, and finds the software half worse than
+   [0007](decisions/0007-l1d-write-policy-under-msi.md) assumed: the J4 Linux build
+   compiles **no** cache-operations file at all — `cacheops-` keys on `CPU_J2` and
+   `jcore_defconfig` sets `CPU_SUBTYPE_JCORE`, which selects `CPU_JCORE` → `CPU_SH2` —
+   so `__flush_wback_region`, `__flush_purge_region` and `__flush_invalidate_region`
+   all stay at `noop__flush_region` and every DMA cache-maintenance call on J4 is a
+   no-op. That is the one C2d finding reachable on hardware that exists today.
+
+**The implementation half is not dispatchable in any of the three repos, and this
+row's `Implement Opus` is wrong as written — but the reason is a step larger than the
+IOMMU.** `jcore-cpu@origin/master` and `jcore-soc@origin/master` contain no IOMMU, no
+IOTLB and no BMID (case-insensitive over *all* files: zero matches in both), and
+`linux@origin/jcore` has no `jcore` file in `drivers/iommu`. That is C2a's and C2c's
+position. What is new is the **prerequisite**: the J-Core bus carries no master
+identifier of any kind. `cpu2j0_pkg.vhd`'s `cpu_data_o_t` is `{ en, a, rd, wr, we, d }`
+and the DDR mux tells its five masters apart by *port position*, recorded in a comment.
+There is no field to put a BMID in, and widening the bus record touches every master
+and slave in both repositories. There is also nothing to protect yet:
+`components/dma/` is a stub with a `README` and no entity, `dma_dbus_o` is tied to a
+constant zero on all four boards, and every peripheral including the Ethernet MAC is a
+bus **slave**. Unlike C2a's GPU this is not a parked program —
+[bus/fabric-spec.md §0](bus/fabric-spec.md) already calls BMID tagging the T0→T1 step —
+so C2d's rules land inside whatever task first builds a T1 fabric. Naming that
+dependency, and its size, is the deliverable.
+
+**One thing *is* dispatchable, in `linux`, today**, and it is the exception to the
+paragraph above: [decisions/0010](decisions/0010-dma-coherence-is-software-maintained.md)
+decision 4 — a `cacheops-` arm for `CPU_JCORE`, real `__flush_*_region` implementations
+against the J-Core CCR that `cache-j2.c` already reaches through `j2_ccr_base`, and
+`ARCH_HAS_SYNC_DMA_FOR_CPU`. It needs no IOMMU and no DMA master; it is a correctness
+bug waiting for one.
+
+**L2 does not move.** It stays `NOT MET`, with every clause now *specified and
+unbuilt*, and with a second status that must be recorded rather than skipped:
+[security/threat-model.md §8](security/threat-model.md) makes L2 a launch blocker only
+for a configuration with a tenant-influenced DMA master, and there is no DMA master at
+all, so the item's **blocker** condition is `N/A` today. `N/A`-as-blocker is not `MET`.
+Nothing in Wave 3 has moved a bar item to `MET`, and this row does not either.
 
 ### Final
 
