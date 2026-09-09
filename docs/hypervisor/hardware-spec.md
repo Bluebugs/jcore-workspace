@@ -1415,7 +1415,7 @@ carried over deliberately and for §20.7's reason; the fourth is this item's own
    forbids is silent: a single-cycle assert that does not propagate into a multi-entry array leaves
    residue while reading as done, and the residue is in exactly the structures nothing else on the
    list checks. How many cycles it takes is
-   **unknown at this stage — needs measurement** (§4.7.1b, T-E2).
+   **unknown at this stage — needs measurement** (§4.7.3, T-E2).
 
 **Why the microreset does not subsume items 3–8, which is the obvious simplification.** Two
 reasons, and the first is dispositive. **Ordering:** items 7 and 8 are not separate actions at all —
@@ -1603,7 +1603,7 @@ pre- or post-2006, and the absence of a find is weaker evidence than a find; the
 professional-search caveat §4.7.1a and [../ooo/j32ooo-spec.md §20.7](../ooo/j32ooo-spec.md) carry
 applies here unchanged.
 
-### 4.7.1b What §4.7.1a and §4.7.2 cost, and the experiments that price them
+### 4.7.3 What §4.7.1a and §4.7.2 cost, and the experiments that price them
 
 The area, frequency and cycle cost of the microreset and of the tenancy check are
 **unknown at this stage — needs measurement**, and unlike Wave-3 **C2b**'s W-E1 none of these
@@ -1705,7 +1705,7 @@ Each CPU has its own:
 
 The hypervisor runs on each CPU independently. Inter-CPU coordination (IPIs, shared data structures) is handled in software, using existing SMP primitives plus a few additional ones for virtual IRQ delivery.
 
-The CPUINFO register (Phase 1 §2.9) gains one capability bit: `[16] = HYP_SUPPORT`. Hypervisor probe reads this bit to determine whether this CPU supports Phase 3.
+The CPUINFO register (Phase 1 §2.9) gains three capability bits: `[16] = HYP_SUPPORT`, `[17] = PDID_SUPPORT` (§2.8) and `[18] = TENANCY_CHECK` (§2.10). *(This sentence said "one" and named only bit 16; `PDID_SUPPORT` was added with §2.8 and never reached here, `TENANCY_CHECK` by Wave-3 **C2c**.)* A hypervisor probe reads bit 16 to determine whether this CPU supports Phase 3, and bits 17 and 18 to decide whether it must write `PDID` and `HTCR` at all.
 
 ## 9. Verification Points
 
