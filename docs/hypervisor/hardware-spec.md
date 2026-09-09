@@ -1756,6 +1756,23 @@ Critical RTL verification:
     hypervisor offset. Then set the `HEDR` bit and confirm the identical cause arrives at
     `VBR + <same offset>` in the guest. The offset must be bit-identical between the two runs; only
     the base register changes.
+20. **The tenancy check refuses, and refuses without destroying state (§4.7.2):** with two thread
+    contexts of one core holding different `HTCR.TENANT`, both `VALID`, and context 0 already at
+    `SR.HPRIV = 0`, an `HRTE` on context 1 does **not** reach `HSPC`; `SR.HPRIV` stays 1, `HSPC`
+    and `HSSR` are bit-identical to their pre-`HRTE` values, `HTCR[1].VIOL` reads 1, and **no**
+    `EXPEVT` was written. Then set `HTCR[1].TENANT` equal to context 0's and re-execute the *same*
+    `HRTE`: it must now complete. Three negative cases must each be checked separately, because
+    each is a different clause of T-R1: `HTCR[1].VALID = 0` with matching `TENANT`s;
+    `HTCR[0].VALID = 0` with context 0 running; and a sibling **halted** at `SR.HPRIV = 0` with a
+    different `TENANT`, which the rule includes and the obvious implementation excludes.
+    **This point is vacuous on a single-context implementation and must be reported as
+    not-applicable rather than as passing** — §4.7.3's T-E1 says why.
+21. **The microreset completes before it reports done, and reports done (§4.7.1a):** a write of
+    `HMRC.SCRUB = 1` reads back 1 for at least one cycle and then 0, and every structure in
+    §4.7.1a's scope reads its reset value at the cycle `HMRC.SCRUB` first reads 0 — checked per
+    scope class, not once. A `SCRUB` that reads 0 on the very next cycle fails this point on an
+    implementation whose caches invalidate one set per cycle: that is constraint 4's silent failure
+    and the whole reason the bit is readable.
 
 ### 9.1 Additional verification points on a speculative implementation
 
@@ -1813,11 +1830,24 @@ Phase 3 hardware additions beyond Phase 1 baseline:
 | **Emulated-MMIO trap subtotal** | **~130–195 LUTs, ~15 flops** |
 | **Total (per core), single-threaded implementation** | **approximately 300 LUTs, ~215 flops** |
 | `PDID` register + predictor-tag width (§2.8) | ~6 flops, ~40 LUTs |
+| `HTCR` register (§2.10), per thread context | 8 flops each (`TENANT`, `VALID`, `VIOL`) |
+| Tenancy check: the cross-context comparator and the `HRTE` refusal path (§4.7.2) | unknown at this stage — needs measurement |
+| `HMRC` register and the microreset sequencer (§2.11, §4.7.1a), per core | unknown at this stage — needs measurement |
 | Non-speculative region gating for P4 / aperture / uncacheable (§2.5 rule 6) | ~40 LUTs |
 | Serialization and mode-snapshot logic (§4.4.1a) | ~50 LUTs |
-| **Per additional thread context** (§2.9: the 12 per-vCPU registers + two 32 B SQ buffers + `QACR0/1`) | **~910 flops each** |
+| **Per additional thread context** (§2.9: the 13 per-vCPU registers + two 32 B SQ buffers + `QACR0/1`) | **~910 flops each, plus `HTCR`'s 8 — not re-derived** |
 | **Total, 2-way FGMT (J32-OOO)** | **~430 LUTs, ~1,130 flops** |
 | **Total, 4-way FGMT (J32-LT)** | **~430 LUTs, ~2,950 flops** |
+
+**Three rows in this table say *unknown at this stage — needs measurement* rather than carrying a
+number, and one says its number was not re-derived.** Wave-3 **C2c** added `HTCR`, `HMRC`, the
+tenancy check and the microreset; the two "unknown" rows are structures whose size depends on how
+many arrays the implementation sweeps and how wide the sweep is, which no document in this
+workspace fixes, and [../decisions/0005](../decisions/0005-unmeasured-figures-are-removed.md)
+forbids inventing a plausible one. §4.7.3's **T-E2** is the experiment that fills them. The
+per-context `~910 flops` predates `HTCR` and is left as it stands rather than adjusted by
+arithmetic on top of an estimate, which is why the cell says so; the two FGMT totals below inherit
+that.
 
 The per-context rows are the honest cost of virtualizing a multi-threaded core and they dominate
 everything else in this table. They are flops, not LUTs, so they land on FPGA registers rather than
@@ -1868,7 +1898,7 @@ To be explicit: Phase 3 adds nothing to the **TLB array or its lookup function**
 - A privilege-mode bit (one flop)
 - A trap-delegation register (32 flops)
 - A separate vector base for hyperprivileged traps
-- Two new instructions (HCALL, HRTE), plus eleven new hyperprivileged LDC/STC control-register encodings (§2.2), of which `PDID` (§2.8) is required only on implementations that speculate
+- Two new instructions (HCALL, HRTE), plus thirteen new hyperprivileged LDC/STC control-register encodings (§2.2), of which `PDID` (§2.8) is required only on implementations that speculate and `HTCR` (§2.10) only on implementations with more than one thread context
 - One change to LDTLB behavior in supervisor mode
 - A guest-mode override on the `MMUCR.AT` translation gate (§4.4.1) — one extra term in front of the existing lookup, not a change to the lookup, and no change to the TLB entry format
 - One aperture comparator on the post-translation physical address (§2.5, §4.5), plus the trap-entry capture registers and the `HRTE`-armed writeback port that go with it (§10: ~130–195 LUTs, ~15 flops, including §4.6 fail-closed gating)
