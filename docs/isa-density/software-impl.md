@@ -65,11 +65,12 @@ enabling them on the J32 target. **`lea` is a new mnemonic** — `gas` has no SH
 - `movi20`: emit two 16-bit words (big-endian to match J-core). Operand range
   check: `−524288 ≤ imm ≤ 524287`; out-of-range is an assembler error (the
   compiler/relaxation must pick a different sequence — see §3.3).
-- `movi20s`: the immediate is `imm20 << 8`, sign-extended from bit **27** of the shifted value — [`spec.md`](spec.md) §3.1 owns the notation. Validate that
-  the low 8 bits are zero *or* document that they are dropped (match SH-2A
-  `gas` behavior exactly). This line previously stated only `imm << 8`, which
-  is the one of the tree's four spellings that was actually wrong — it drops the
-  sign, and so disagrees with `gas` on every negative immediate.
+- `movi20s`: the immediate is `imm20 << 8`, sign-extended from bit **27** of the shifted value — [`spec.md`](spec.md) §3.1 owns the notation.
+  <br>Validate that the low 8 bits are zero *or* document that they are dropped
+  (match SH-2A `gas` behavior exactly). This bullet previously stated only
+  `imm << 8`, which is the one of the tree's four spellings that was actually
+  wrong: it drops the sign, so it disagrees with `gas` on every negative
+  immediate.
 - `movmu`/`movml`: the base must be literally `@-r15` / `@r15+`; reject other
   base registers (these forms are stack-only by definition).
 - `lea`: `disp` is a **signed, unscaled** 12-bit displacement;
