@@ -1093,11 +1093,14 @@ walk_i_miss <= '1' when i_at_translated = '1' and sig_inst_o.en = '1'
                '0';
 ```
 
-The three gates on that line are a translation gate, an older-D-access ordering
-gate and a multi-hit gate. **None of them is a dispatch, squash or
-branch-resolution term**, and `core/tlb_walk.vhd` has no abort input — its own
-arm is a per-VPN one-shot and a give-up counter, neither of which is driven by
-the pipeline. The matching property is stated on the fault side in
+Every term on that line is one of five things: the fetch request itself
+(`sig_inst_o.en`), the ITLB lookup result (`tlb_i_hit`), a translation-enable
+gate, a multi-hit gate, or the older-D-access ordering pair. Downstream,
+`walk_req` adds one more — `dp_sr.rb = '0'`, the handler-residency gate of
+§7.1 of `jcore-cpu/docs/architecture/tlb.md`. **Not one of the six is a dispatch,
+squash or branch-resolution term**, and `core/tlb_walk.vhd` has no abort input —
+its own arm is a per-VPN one-shot and a give-up counter, neither of which is
+driven by the pipeline. The matching property is stated on the fault side in
 `core/components_pkg.vhd`: *"A fetch that is squashed before dispatch therefore
 never raises anything."* The fault is squashed. The walk is not.
 
@@ -1200,20 +1203,32 @@ This is the first Wave-3 item whose measurement can run on hardware that exists.
 
 **W-E1 — how often does a squashed fetch walk?** Count I-side arms of
 `walk_i_miss` whose fetch never reaches dispatch, over the `sim/tests` MMU
-corpus and a directed test that places a taken branch immediately before a code
-page that is mapped in the TSB but absent from the ITLB.
+corpus and **two** directed tests, because the pipeline has two ways to squash a
+fetch and a test that exercises only one of them would report a zero that means
+nothing:
 
-> **Kill criterion.** If that count is identically zero across the corpus *and*
-> the directed test cannot make it non-zero, then the arm is not reachable on a
-> squashed fetch on this pipeline, W-R1 buys nothing here, and
+1. **Control flow.** A taken branch placed immediately before a code page that is
+   mapped in the TSB but absent from the ITLB, so any fetch beyond the delay slot
+   walks. `core/datapath.vhd` names this case in its own comments — "the
+   speculative branch-target fetch, whose younger fault overwrites the older one".
+2. **The exception squash window.** A fault taken while a later fetch is in
+   flight, which is the window `core/components_pkg.vhd` describes as existing
+   solely for "the precise-exception squash window … and the P4/TSB assist".
+
+> **Kill criterion.** If the count is identically zero across the corpus **and
+> both** directed tests fail to make it non-zero, then the arm is not reachable
+> on a squashed fetch on this pipeline, W-R1 buys nothing here, and
 > [security/threat-model.md §7.2](../security/threat-model.md) is overstated
 > rather than conservative. §12 of that document already says what to do in that
 > case: **re-derive it, do not delete it** — the exposure returns with any front
-> end that fetches further ahead.
+> end that fetches further ahead. A zero from the corpus alone does **not** meet
+> this criterion; a corpus that never builds the scenario is the failure mode
+> this whole item is about.
 
 A non-zero count is also what discharges L4's *non-vacuity* clause for this
-transmitter: the same counter is red before W-R1 and green after, which is the
-demonstration that document asks for and that is usually skipped.
+transmitter. The test is "this counter reads zero": it must **fail** on the core
+as it stands and pass after W-R1, which is the demonstration that document asks
+for and that is usually skipped.
 
 **W-E2 — what does the wait cost?** A/B the gated arm over the same corpus, on
 cycles. There is a measured comparator already in the tree for the structure most
