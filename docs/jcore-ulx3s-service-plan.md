@@ -16,9 +16,11 @@ The service ships in three tiers that share the same auth, tooling, and observab
 
 - **Tier 0 — QEMU SH4 user-mode** on the OVH VPS. High-concurrency, fast, free or near-free. Ships within weeks of the infrastructure spine. Reuses the same Debian SH4 rootfs as the hardware tier.
 - **Tier 1 — Real hardware VM** on j-core. Paravirtualized Debian SH4 guest with cross-compilers, dev tools, and standard packages preinstalled, on a read-only shared rootfs. Real MMU ([mmu/design-spec.md](mmu/design-spec.md)), real timings, real hardware-bug surface. Ships at Phase 5.
-- **Tier 1.5 — Dual-issue OoO J32** ([ooo/j32ooo-spec.md](ooo/j32ooo-spec.md), Phase 6), then dual-core + FGMT ([fgmt/dual-fgmt-proposal.md](fgmt/dual-fgmt-proposal.md) + [cache/l2-spec.md](cache/l2-spec.md), 6.5), then SH4-complete FPU coprocessor ([fpu/spec.md](fpu/spec.md), 7) and SIMD prefix unit ([simd/spec.md](simd/spec.md), 7.5). Tenants opt into richer profiles at reservation time. Product-point definitions for each profile (J32, J32-OOO, J32-FM) in [glossary §3](glossary.md).
+- **Tier 1.5 — Dual-issue in-order J32 + 2-thread FGMT** (Phase 6), then dual-core SMP ([cache/l2-spec.md](cache/l2-spec.md), 6.5), then SH4-complete FPU coprocessor ([fpu/spec.md](fpu/spec.md), 7) and SIMD prefix unit ([simd/spec.md](simd/spec.md), 7.5). Tenants opt into richer profiles at reservation time. Product-point definitions for each profile (J32, J32-FM) in [glossary §3](glossary.md).
 
-A **differential testing harness** (Phase 5.5) runs the same binary on Tier 0 and Tier 1 and diffs the architectural output — turning tenant workloads into an automated continuous hardware-conformance test. This is also the safety net for deploying the OoO core in Phase 6.
+  > **Changed 2026-09-08 by [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md).** Tier 1.5 previously read "dual-issue **OoO** J32 ([ooo/j32ooo-spec.md](ooo/j32ooo-spec.md), Phase 6), then dual-core + FGMT (6.5)". The out-of-order path is paused and FGMT moves ahead of it; see §9 Phase 6 for what replaced it and 0009 for the trigger that would put OoO back.
+
+A **differential testing harness** (Phase 5.5) runs the same binary on Tier 0 and Tier 1 and diffs the architectural output — turning tenant workloads into an automated continuous hardware-conformance test. This is also the safety net for deploying any new core in Phase 6 — originally written for the OoO core, and it applies unchanged to the dual-issue in-order + FGMT core that replaced it, since what it checks is retired architectural state.
 
 Per-tenant traces, console logs, hypercall samples, IOMMU faults, and hardware metrics are streamed to **SigNoz on the OVH VPS** — both in-band from the J-core itself and out-of-band via the on-board ESP32, so observability survives any j-core failure mode.
 
@@ -31,7 +33,7 @@ The fleet sits behind **two separate MikroTik devices** at home for hardware-lev
 
 The OVH VPS is the consolidated public hub. It runs sshpiperd (public port 22), SigNoz, the jcore-mgmt REST API, the MCP server, the raw-WG endpoint for tenant traffic, the Tailscale node for management, the QEMU Tier 0 containers, and Cloudflare Tunnel for the HTTPS reservation web UI. A separate **super-user track** provides programmatic remote access — the MCP server above the REST API exposes board control, bitstream lifecycle, VM lifecycle, and log queries to Claude Code, reached over the Tailscale management plane.
 
-The plan is staged so that each phase delivers a working, demonstrable system. Tier 0 ships at Phase 1B, Tier 1 MVP at Phase 5, OoO at Phase 6, and J64 only after the SH4 path is fully fleshed out.
+The plan is staged so that each phase delivers a working, demonstrable system. Tier 0 ships at Phase 1B, Tier 1 MVP at Phase 5, the dual-issue in-order + FGMT core at Phase 6, and J64 only after the SH4 path is fully fleshed out. **The Phase-1 `[FPGA]` deliverable is the J4 core that exists today** — single-issue in-order, MMU, privileged architecture — at the measured figure in its row of [platform-baseline.md §3](platform-baseline.md). Frequency and energy targets are `[ASIC]` concerns per [decisions/0004](decisions/0004-platform-tag-convention.md); what Phase 1 owes is fit, correctness and boot-to-Linux.
 
 ---
 
@@ -42,7 +44,7 @@ The plan is staged so that each phase delivers a working, demonstrable system. T
 - **Primary: provide an excellent SH4 development environment.** SH4 has existing binaries and an existing audience. Make it fast and rich here first.
 - Software-developer audience: discover the J-core / SuperH ecosystem without owning hardware
 - Tenant runtime is upstream Debian SH4 across all tiers (QEMU emulation and real hardware use the same image)
-- **Three-tier service architecture sharing one platform:** Tier 0 (QEMU emulation), Tier 1 (real hardware VM), Tier 1.5 (richer cores: OoO, dual-core, FPU, SIMD). Tenants choose at reservation time.
+- **Three-tier service architecture sharing one platform:** Tier 0 (QEMU emulation), Tier 1 (real hardware VM), Tier 1.5 (richer cores: dual-issue in-order + FGMT, dual-core, FPU, SIMD). Tenants choose at reservation time. *This bullet previously named OoO as the Tier-1.5 core; [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md) paused that path.*
 - Real hardware-virtualized isolation between concurrent tenants on real-hardware tiers (Option C from earlier discussion)
 - Per-tenant traces and logs sufficient to find and diagnose hardware bugs early
 - **Automated differential testing** between Tier 0 (QEMU) and Tier 1 (j-core) on every opted-in tenant binary, turning the service into a continuous hardware-conformance test rig
@@ -66,7 +68,7 @@ The plan is staged so that each phase delivers a working, demonstrable system. T
 - Live migration between boards
 - Unmodified vintage SH kernel support — paravirt-only guests
 - Full Debian J64-native port (new `sh64-linux-gnu` triple) — multi-year upstream effort, out of scope; the J64 phase provides COMPAT for existing sh4 binaries instead
-- Cloud-density tenant counts — **one tenant per physical core at any instant**, so a dual-core board *runs* **two tenants concurrently**, each with as many vCPUs as that core has thread contexts (2 on J32-OOO, 4 on J32-LT). This is a corrected number: earlier drafts said "2–3 concurrent VMs per board" on the assumption that FGMT contexts were separately sellable. They are not. **More tenants than that may be *hosted*, time-sliced by gang scheduling** ([hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md)) — all contexts of a core switch tenant together at a ~10 ms quantum, at ~5% overhead and ~20 ms worst-case scheduling latency for three tenants. For a fleet whose tenants are mostly-idle dev shells that is the mode to run: idle tenants consume no gang slots at all, so the practical ceiling is set by RAM and by how many tenants are simultaneously *busy*, not by core count. The thread contexts of a core share its L1, L2, TLB, TSB and branch predictors, and [hypervisor/hardware-spec.md §4.7](hypervisor/hardware-spec.md) makes a core the unit of guest allocation for that reason. See [ooo/j32ooo-spec.md §20.3](ooo/j32ooo-spec.md) and [ooo/j32lt-spec.md §16.3](ooo/j32lt-spec.md); the underlying result is pre-2006 (Percival, BSDCan 2005, key recovery across a shared L1 between two contexts of one core). The isolation claim in §2 is written against mutually distrusting tenants, and this is what makes it true rather than aspirational.
+- Cloud-density tenant counts — **one tenant per physical core at any instant**, so a dual-core board *runs* **two tenants concurrently**, each with as many vCPUs as that core has thread contexts (**2** on the default path of [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md); the paused J32-OOO was also 2, and the paused J32-LT 4). This is a corrected number: earlier drafts said "2–3 concurrent VMs per board" on the assumption that FGMT contexts were separately sellable. They are not. **More tenants than that may be *hosted*, time-sliced by gang scheduling** ([hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md)) — all contexts of a core switch tenant together at a ~10 ms quantum, at ~5% overhead and ~20 ms worst-case scheduling latency for three tenants. For a fleet whose tenants are mostly-idle dev shells that is the mode to run: idle tenants consume no gang slots at all, so the practical ceiling is set by RAM and by how many tenants are simultaneously *busy*, not by core count. The thread contexts of a core share its L1, L2, TLB, TSB and branch predictors, and [hypervisor/hardware-spec.md §4.7](hypervisor/hardware-spec.md) makes a core the unit of guest allocation for that reason. See [ooo/j32ooo-spec.md §20.3](ooo/j32ooo-spec.md) and [ooo/j32lt-spec.md §16.3](ooo/j32lt-spec.md); the underlying result is pre-2006 (Percival, BSDCan 2005, key recovery across a shared L1 between two contexts of one core). The isolation claim in §2 is written against mutually distrusting tenants, and this is what makes it true rather than aspirational.
 
 ---
 
@@ -277,18 +279,23 @@ The previously planned standalone "observability host" at home is **eliminated**
 | Phase-2 IOMMU | +2,500–3,500 | small | 0 | 3 | [iommu/design-spec.md](iommu/design-spec.md), [iommu/hardware-spec.md](iommu/hardware-spec.md); fabric BMID per [bus/fabric-spec.md §4](bus/fabric-spec.md) |
 | Phase-3 hypervisor (HPRIV, trap delegation) | +100–300 | small | 0 | 4 | [hypervisor/design-spec.md](hypervisor/design-spec.md), [hypervisor/hardware-spec.md](hypervisor/hardware-spec.md); AIC2 Tier 2 [aic/aic2-spec.md §5](aic/aic2-spec.md) |
 | **Phase 4 subtotal (MVP ships here)** | **~15,000–18,500** | ~15% | 0 | | |
-| **Dual-issue OoO J32 upgrade (replaces in-order)** | **+~5,000–7,000 (delta)** | **+15%/core** | 0 | **6** | [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md) |
-| 2nd core + FGMT (per core +1,500–2,500 LUT4) | +12,000–17,000 | +15% | 0 | 6.5 | [fgmt/dual-fgmt-proposal.md](fgmt/dual-fgmt-proposal.md), [fgmt/mt2x2-plan.md](fgmt/mt2x2-plan.md); coherent L2 [cache/l2-spec.md](cache/l2-spec.md) Tier 1; AIC2 Tier 1 [aic/aic2-spec.md §4](aic/aic2-spec.md) |
+| **Dual-issue in-order upgrade (replaces single-issue)** | unknown at this stage — needs measurement | **+15%/core** | 0 | **6** | none yet — [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md) D2 names what it is derived from |
+| 2-thread FGMT + 2nd core (per core +1,500–2,500 LUT4) | +12,000–17,000 | +15% | 0 | 6 (FGMT) / 6.5 (2nd core) | [fgmt/dual-fgmt-proposal.md](fgmt/dual-fgmt-proposal.md), [fgmt/mt2x2-plan.md](fgmt/mt2x2-plan.md); coherent L2 [cache/l2-spec.md](cache/l2-spec.md) Tier 1; AIC2 Tier 1 [aic/aic2-spec.md §4](aic/aic2-spec.md) |
+| *Dual-issue OoO J32 upgrade — **paused**, budget retained* | *+~5,000–7,000 (delta)* | *+15%/core* | 0 | *—* | [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md) |
 | SH4-compat FPU coprocessor | +11,000–19,000 | small | 4–8 | 7 | [fpu/spec.md](fpu/spec.md) Tier 1 (FIPR/FTRV/FSCA/FSRRA/SR.FD); Tier 2 hypervisor-aware for J32-FM |
 | SIMD prefix unit | +4,000–6,000 | ~3% | 4–8 | 7.5 | [simd/spec.md](simd/spec.md) Tier 0+1 (+Tier 2 GF(2) crypto for VCLMUL/VCRC32C on J32-FM) |
 | J64 datapath widening (optional, deferred) | +2,000–3,000 | small | 0 | 8 | [glossary §3](glossary.md) (J64 row); L2 Tier 2 (`ADDR_WIDTH=40`) per [cache/l2-spec.md](cache/l2-spec.md) |
 | **Full SH4-rich stack (Phase 7.5)** | **~50,000–100,000 LUT4** (range, not point — see caveat) | **~70–75%** | **8–16 DSP** | | J32-FM product point — see [glossary §3](glossary.md) |
 
+**Three rows moved on 2026-09-08 and the arithmetic did not, which is the point.** [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md) makes dual-issue **in-order** + 2-thread FGMT the default and pauses the out-of-order path, so: the Phase-6 core row is now the in-order one and has **no budget**, because nobody ever wrote one for it — the +~5,000–7,000 that stood in this row was budgeted for the *out-of-order* upgrade specifically and it moves down with that row rather than being inherited by a different design; the FGMT half of the old 6.5 row moves up to Phase 6 with its budget attached, and the second core stays at 6.5. The paused OoO row is retained rather than deleted, per [decisions/0005](decisions/0005-unmeasured-figures-are-removed.md) rule 4 — it is a budget for a design that still has a specification, and if 0009's trigger fires it is the number to be judged against.
+
 The OoO J32 design is BRAM-heavy by deliberate choice (state in BRAM, logic in LUTs). What one OoO core costs in LUT4 is unknown at this stage — needs measurement; see "OoO LUT-count uncertainty" below for the two bounds that used to be presented as competing answers.
 
 OoO J64 is **explicitly out of scope** for the 85F — a quad-issue OoO J64 core would consume the entire device (~50–80K LUT4 alone). If pursued, it lives on a separate FPGA platform as a research target.
 
-### OoO LUT-count uncertainty — **decision required before Phase 6 commits**
+### OoO LUT-count uncertainty — **now the gate on resuming OoO at all**
+
+> **Re-scoped 2026-09-08 by [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md).** This section used to be headed "decision required before Phase 6 commits". Phase 6 is no longer an OoO phase, so that deadline is gone — but the *question* is not, and it got more load-bearing rather than less: the unmeasured LUT4 cost of an OoO core is one of the three legs 0009 stands on, and 0009 §What would reopen this names this exact measurement as a trigger that could knock the leg out. Read what follows as the price of resuming OoO, not as a Phase-6 blocker.
 
 **The LUT4 cost of one OoO J32 core on ECP5-6 is
 unknown at this stage — needs measurement.** `yosys` + `nextpnr-ecp5` on the ULX3S 85F is what produces it,
@@ -317,7 +324,7 @@ themselves are kept, as bounds, because the *spread* is the finding:
 
 They differ by ~4× and neither is measured, so neither wins — 0005 rule 6.
 
-**Decision-gate at Phase 6 midpoint:** synthesize a representative OoO subset (rename + ROB + 1 ALU + L1$) on ECP5-6 with nextpnr; measure actual LUT count. If the empirical number trends toward the pessimistic end, Phase 6.5 dual-core on the 85F is at risk and one of the following must be picked:
+**The gate, re-pointed by [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md):** synthesize a representative OoO subset (rename + ROB + 1 ALU + L1$) on ECP5-6 with nextpnr; measure actual LUT count. This was a Phase-6 midpoint gate on *how* to build OoO; it is now a gate on *whether* to resume it at all, and it is one of the triggers 0009 lists. If the empirical number trends toward the pessimistic end, that confirms the area leg of 0009 and the five mitigations below are moot. **If it trends toward the optimistic end the decision is genuinely reopened**, because the BOOM-versus-Rocket proxy 0009 leans on would then be shown not to describe *our* core. The five options below are what a resumed OoO path would still have to pick between:
 
 1. **Asymmetric SMP:** one OoO core + one in-order J32 core (host on OoO, lighter VMs on in-order). Saving: unknown at this stage — needs measurement; it is a *difference* of two unmeasured core costs, so it is the least knowable of these five.
 2. **Smaller L1 caches:** 16 KB I + 16 KB D per core instead of 32+32. Saves **36 EBRs** — structural, not measured: it is half of the 4 × ~18 EBRs [cache/l2-spec.md §20.1](cache/l2-spec.md) books for two cores' L1s. LUT saving and the IPC cost are each unknown at this stage — needs measurement.
@@ -329,7 +336,7 @@ They differ by ~4× and neither is measured, so neither wins — 0005 rule 6.
 
 It does, however, change *what a core is worth* on this board — though **not in the way an earlier draft of this paragraph claimed**. That draft read 4 hardware threads at ~1.55 aggregate IPC as "roughly four tenant VMs per core", and concluded that one J32-LT core might beat two J32-OOO cores for a concurrency-driven service. That conclusion is withdrawn: [hypervisor/hardware-spec.md §4.7](hypervisor/hardware-spec.md) makes a **core** the unit of guest allocation, because the four contexts share one L1, one TLB, one TSB and one predictor set. Four contexts are four vCPUs for **one** tenant, not four tenants.
 
-The corrected comparison: one J32-LT core serves **one** tenant with 4 vCPUs; two J32-OOO cores serve **two** tenants with 2 vCPUs each. For a service selling concurrent isolated tenants, two OOO cores now win outright on the axis this paragraph was about — and J32-LT's case reverts to what [ooo/j32lt-spec.md §1.1](ooo/j32lt-spec.md) always claimed it was, throughput per joule for a tenant with parallel work. Note also that [ooo/j32lt-spec.md §16.12](ooo/j32lt-spec.md) adds ~10k gates of per-context hypervisor and store-queue state at four contexts, roughly three times the J32-OOO figure, which pushes the area comparison further against LT than §12.1's original "comparable area" framing. The Phase 6.5 decision stands, but on these numbers rather than the earlier ones.
+The corrected comparison: one J32-LT core serves **one** tenant with 4 vCPUs; two J32-OOO cores serve **two** tenants with 2 vCPUs each. For a service selling concurrent isolated tenants, two OOO cores now win outright on the axis this paragraph was about — and J32-LT's case reverts to what [ooo/j32lt-spec.md §1.1](ooo/j32lt-spec.md) always claimed it was, throughput per joule for a tenant with parallel work. Note also that [ooo/j32lt-spec.md §16.12](ooo/j32lt-spec.md) adds ~10k gates of per-context hypervisor and store-queue state at four contexts, roughly three times the J32-OOO figure, which pushes the area comparison further against LT than §12.1's original "comparable area" framing. The Phase 6.5 decision stood on these numbers rather than the earlier ones — and [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md) has since paused **both** cores this paragraph compares, so the comparison is now a record of why neither is the default rather than a live choice. The finding it turns on survives the pause and is one of 0009's inputs: light OoO is not an area saving.
 
 ### BRAM budget — corrected
 
@@ -744,7 +751,7 @@ Deliverable: public URL where any GitHub user can sign in, reserve a VM, and SSH
 
 ### Phase 5.5 — Differential testing harness (3–4 weeks)
 
-Scope: orchestrator service on the VPS that runs the same binary on Tier 0 (QEMU container) and Tier 1 (real-hardware VM) and diffs the architectural output. Foundation for both continuous SH4 conformance testing and the OoO bring-up safety net in Phase 6.
+Scope: orchestrator service on the VPS that runs the same binary on Tier 0 (QEMU container) and Tier 1 (real-hardware VM) and diffs the architectural output. Foundation for both continuous SH4 conformance testing and the new-core bring-up safety net in Phase 6 (written for OoO, and unchanged in purpose by [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md)).
 
 - **Orchestrator** (Go or Python) on the VPS, Tailscale-only listener for super-user API + opt-in tenant submission endpoint behind GitHub auth
 - **Normalization layer:** mask non-determinism — PIDs, timestamps, ASLR, `/dev/urandom`; FP tolerance bands for the eventual Phase 7 FPU vs QEMU softfloat divergence
@@ -783,47 +790,64 @@ Deliverable: the diff harness can run a seed-corpus binary on all three targets 
 
 **Note for Phase 8 onward:** Dreamcast is SH-4 only and opts out of the diff harness for J64-mode binaries. QEMU vs ULX3S 2-way diff remains the J64 path; Dreamcast's role is bounded to SH-4 conformance.
 
-### Phase 6 — Dual-issue OoO J32 core (3–6 months)
+### Phase 6 — Dual-issue in-order J32 + 2-thread FGMT (3–6 months)
 
-Scope: replace the in-order J32 with the dual-issue out-of-order J32 specified in [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md), designed around memory-latency hiding (not arithmetic parallelism). The 85F's 32 MB SDRAM at ~200 MB/s shared is the binding workload constraint; OoO's value is keeping the ALU busy during 30–50 cycle SDRAM stalls, not feeding multiple multipliers. The spec covers: pipeline (§2), front-end + branch prediction (§3), rename + ROB (§5), atomic-group CAS.L handling (§10), L1+L2 cache hierarchy interaction (§11), the PMU (§12), FGMT (§13), and the gate budget (§15).
+> **Replaced 2026-09-08 by [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md).** This phase was "Dual-issue OoO J32 core", building [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md). The out-of-order path is paused and the 2-thread FGMT that used to sit in Phase 6.5, *on top of* the OoO core, moves here and stands on its own. The old scope text is not deleted — it is kept below, under "What this phase used to be", because the parts of it that are not about out-of-order execution are still the right scope.
 
-Key microarchitecture points the spec pins down:
+Scope: upgrade the Phase-2/4 single-issue in-order J4 to **dual-issue in-order with two hardware thread contexts, switching on cache miss**. The 85F's 32 MB SDRAM at ~200 MB/s shared is still the binding workload constraint, and it is the reason for the shape of this core rather than an argument against it: a second thread covers a 30–50-cycle stall by construction, where a window small enough to fit here cannot ([j4-remediation-plan.md §E.1](j4-remediation-plan.md)).
+
+**This phase has no specification yet, and that is the first deliverable.** [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md) D2 says where it comes from: the front end, PAIR stage and pairing rules of [ooo/j32lt-spec.md §3–§4](ooo/j32lt-spec.md), taken at 2 contexts with switch-on-miss selection instead of a 4-way barrel, with the ROB re-opened at that thread count; the 2-way FGMT machinery of [fgmt/dual-fgmt-proposal.md](fgmt/dual-fgmt-proposal.md) and [fgmt/mt2x2-plan.md](fgmt/mt2x2-plan.md), which is already written for `N_TC = 2` on an in-order J-Core pipeline; per-thread `ASIDR` per [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md); and per-(core, thread) interrupt delivery per [aic/aic2-spec.md §4 (Tier 1)](aic/aic2-spec.md).
+
+Key points the specification has to pin down, carried over from the phase this replaced because they are not OoO-specific:
 
 - **Two integer ALUs**, one of each specialized unit (mul, shift, eventual FPU, eventual SIMD coprocessor port)
-- **BRAM-heavy state:** rename map, reorder buffer, issue queue, load-store queue, physical register file, branch predictor all in BRAM. ~15% of total BRAM per core.
-- **LUT4 per core** for the dual-issue logic, wakeup, bypass, scoreboarding: unknown at this stage — needs measurement. This bullet previously carried a bare "~10K LUT4 per core", unhedged, and it is the origin of the optimistic bound in §5's "OoO LUT-count uncertainty" — including the copy that `ooo/j32ooo-spec.md` §15.1 attributes back to this plan
-- **SH4 memory model preserved:** stores commit in program order; loads OoO with LSQ hazard checks; `synco` drains the LSQ; CAS.L drains and re-issues without speculation past
-- **Atomicity:** CAS.L now uses **L2 per-line lock** (see [cache/l2-spec.md §6](cache/l2-spec.md)) for J32-OOO and beyond, not legacy bus-lock; J2 cores without L2 keep bus-lock for backward compatibility
-- **`Fmax` expectation `[FPGA]`:** unknown at this stage — needs measurement. There is no OoO RTL to synthesize; `yosys` + `nextpnr-ecp5` on the ULX3S 85F is what answers it. This bullet previously gave "~50–65 MHz on ECP5-6 (down from in-order's ~80 MHz)" — the 80 MHz in-order baseline it was measured *down from* was itself never measured, and the real in-order baseline is ~42–43 MHz for J2 / ~33 MHz for J4 ([platform-baseline.md §3](platform-baseline.md)), so both ends of that comparison were wrong
+- **SH4 memory model preserved:** stores commit in program order; `synco` drains the store path; CAS.L drains and re-issues without speculation past
+- **Atomicity:** CAS.L uses the **L2 per-line lock** (see [cache/l2-spec.md §6](cache/l2-spec.md)) once an L2 exists; J2 cores without L2 keep bus-lock for backward compatibility
+- **`Fmax` expectation `[FPGA]`:** unknown at this stage — needs measurement, and this is the phase's real risk. The single-issue J4 it upgrades measures the figure in its row of [platform-baseline.md §3](platform-baseline.md), and that section records how thin the margin over the CI floor is — roughly one seed-to-seed standard deviation. Dual issue and a second context are both spent out of that margin. `yosys` + `nextpnr-ecp5` on the ULX3S 85F answers it; nothing on paper does
+- **LUT4 per core:** unknown at this stage — needs measurement. §5's budget table carries no row for this core, deliberately: the budget that used to sit in that row was written for the out-of-order upgrade
 
-Dependencies: Phase 5.5 (differential harness must exist as the safety net before deploying OoO to tenants).
+Dependencies: Phase 5.5 (differential harness must exist as the safety net before deploying a new core to tenants).
 
-Deliverable: tenants opt into "OoO J32" profile at reservation; differential harness reports zero retired-state divergence vs QEMU on the seed corpus; in-order J32 remains available as fallback. Measurable wall-clock improvement on representative workloads (compile, network, crypto).
+Deliverable: tenants opt into the richer core profile at reservation; two CPUs visible per core in `/proc/cpuinfo`; differential harness reports zero retired-state divergence vs QEMU on the seed corpus; single-issue J4 remains available as fallback. Measurable wall-clock improvement on representative workloads (compile, network, crypto) — measured on memory-bound loads, **not** CoreMark or Dhrystone, per [j4-remediation-plan.md §E.3](j4-remediation-plan.md).
 
-### Phase 6.5 — Dual-core + 2-way FGMT on OoO core (1–2 months)
+#### What this phase used to be — dual-issue OoO J32, paused
 
-Scope: promote `cpus_two_fpga.vhd` to coherent SMP with the dual-issue OoO core and add 2-way FGMT per core. Two pieces drive this:
+Retained as the record of what [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md) paused, and as the scope this phase returns to if 0009's trigger fires.
+
+Scope was: replace the in-order J32 with the dual-issue out-of-order J32 specified in [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md), designed around memory-latency hiding (not arithmetic parallelism), with OoO's value stated as keeping the ALU busy during 30–50 cycle SDRAM stalls. That justification is the one [§E.1](j4-remediation-plan.md) found the design cannot deliver at any size this board affords, and it is the specific reason 0009 went the way it did. The spec covers: pipeline (§2), front-end + branch prediction (§3), rename + ROB (§5), atomic-group CAS.L handling (§10), L1+L2 cache hierarchy interaction (§11), the PMU (§12), FGMT (§13), and the gate budget (§15) — all of which stay live as specification.
+
+Two corrections that were made to this text before it was paused, kept so they are not re-introduced with it:
+
+- The "~10K LUT4 per core" that this bullet list carried unhedged is the origin of the optimistic bound in §5's "OoO LUT-count uncertainty" — including the copy that [ooo/j32ooo-spec.md §15.1](ooo/j32ooo-spec.md) attributes back to this plan. It is not a measurement and there is no OoO RTL to measure.
+- The `Fmax` bullet gave "~50–65 MHz on ECP5-6 (down from in-order's ~80 MHz)". The 80 MHz in-order baseline it was measured *down from* was itself never measured, and the real in-order baseline is the J2 and J4 rows of [platform-baseline.md §3](platform-baseline.md), so both ends of that comparison were wrong.
+
+### Phase 6.5 — Dual-core SMP (1–2 months)
+
+> **Re-scoped 2026-09-08 by [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md).** This phase was "Dual-core + 2-way FGMT on OoO core". The FGMT half moved to Phase 6, where it no longer depends on an out-of-order core, and what remains here is the second core and the coherence work it needs.
+
+Scope: promote `cpus_two_fpga.vhd` to coherent SMP with the Phase-6 core.
 
 - **Coherent L2 + L1-D MSI directory + L2-line-lock CAS.L** per [cache/l2-spec.md](cache/l2-spec.md) Tier 1. This is what makes lazy TLB shootdown (and hypervisor SMP guests) work.
-- **FGMT inside each OoO core** per [ooo/j32ooo-spec.md §13](ooo/j32ooo-spec.md) (ready-thread arbiter, per-TC ARF/RAT/RAS/GHR, auto-priority on CAS.L spin and SLEEP). FGMT vocabulary and tier coverage in [glossary §4](glossary.md). The J2 dual-core+FGMT predecessor proposal (still relevant for the smaller J2 variant) lives in [fgmt/dual-fgmt-proposal.md](fgmt/dual-fgmt-proposal.md) and [fgmt/mt2x2-plan.md](fgmt/mt2x2-plan.md).
+- The FGMT machinery itself is Phase 6 now. What this phase adds on top of it is *cross-core* coherence, which two contexts of one core never needed — threads on one core are coherent by construction.
 
-Per-thread interrupt routing via [aic/aic2-spec.md §4 (Tier 1)](aic/aic2-spec.md): each interrupt source carries a `(core_id, thread_id)` target, and the `per_tc_pending` sideband wakes SLEEP-parked threads directly into the OoO ready-thread arbiter.
+Per-thread interrupt routing via [aic/aic2-spec.md §4 (Tier 1)](aic/aic2-spec.md): each interrupt source carries a `(core_id, thread_id)` target, and the `per_tc_pending` sideband wakes SLEEP-parked threads directly into the core's ready-thread arbiter.
 
 Hypervisor scheduler updated to assign vCPUs to hardware threads. Realistic concurrent-VM count nudges from 2–3 to 3–4 (RAM still binding constraint, but more CPU to spread across guests).
 
-**Alternative core for this phase: J32-LT** ([ooo/j32lt-spec.md](ooo/j32lt-spec.md)) — a single core with 4-way barrel FGMT instead of two cores with 2-way FGMT each. Same 4 logical CPUs, roughly half the LUT and EBR, no L1-D MSI directory needed (threads on one core are coherent by construction), and the per-thread `ASIDR` of [mmu/hardware-spec.md §2.1a](mmu/hardware-spec.md) covers the address-space isolation the hypervisor needs. What is given up: no real SMP to validate, no cross-core coherence exercise, and single-thread performance ~0.94 IPC rather than the OoO core's higher figure. If the Phase 6 decision gate says dual-core does not fit the 85F, this is the path that still delivers "4 CPUs in `/proc/cpuinfo`" on schedule. Requires AIC2 at `n_tc = 4` ([aic/aic2-spec.md §4](aic/aic2-spec.md)).
+**On the alternatives that used to be listed here.** This phase previously offered [ooo/j32lt-spec.md](ooo/j32lt-spec.md) — one core with 4-way barrel FGMT instead of two cores with 2-way each — as the fallback if dual-core did not fit the 85F. That option is paused with the rest of the OoO line ([decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md)), and §5 above already recorded the reason it was never the area answer it looked like: [ooo/j32lt-spec.md §12.1](ooo/j32lt-spec.md) makes it *larger* than J32-OOO, not smaller. If the second core does not fit, the fallback is a single Phase-6 core with its two contexts, which is a smaller machine than either.
 
 Dependencies: Phase 6.
 
-Deliverable: 4 CPUs visible in `/proc/cpuinfo` on host; or 2 VMs each with 2 vCPUs; or one VM with all four. Kernel self-build `make -j4` on the host.
+Deliverable: 4 CPUs visible in `/proc/cpuinfo` on host (2 cores × 2 contexts); or 2 VMs each with 2 vCPUs; or one VM with all four. Kernel self-build `make -j4` on the host.
+
 
 ### Phase 7 — SH4-compat FPU coprocessor (2–3 months)
 
-Scope: the SH4-complete FPU specified in [fpu/spec.md](fpu/spec.md), exposed via coprocessor interface, power-gateable. The spec is tiered: **Tier 0** is the existing J2 baseline; **Tier 1** is SH4-complete (FIPR, FTRV, FSCA, FSRRA, FRCHG, FSCHG, FPCHG, SR.FD trap at SR bit 15, full FPSCR — what this phase delivers so Dreamcast / Renesas SH4 binaries use hardware FP; the byte order is big-endian like the rest of the platform, [platform-baseline.md §2](platform-baseline.md), and the Tier-1 little-endian migration this line used to name is withdrawn); **Tier 2** is hypervisor-aware (EXC_FPU_DISABLED at EXPEVT 0x1B0 / HEDR bit 3, lazy FPU context-switch ABI, 136-byte FPU save/restore image — [fpu/spec.md §7.4](fpu/spec.md)) and lands together with the Phase 4 hypervisor for J32-FM. Single FPU shared across cores via coprocessor bus arbitration (not duplicated per core, per the OoO design philosophy). Tier 0 SIMD horizontal reductions also depend on the Tier 1 FPU register file — see Phase 7.5.
+Scope: the SH4-complete FPU specified in [fpu/spec.md](fpu/spec.md), exposed via coprocessor interface, power-gateable. The spec is tiered: **Tier 0** is the existing J2 baseline; **Tier 1** is SH4-complete (FIPR, FTRV, FSCA, FSRRA, FRCHG, FSCHG, FPCHG, SR.FD trap at SR bit 15, full FPSCR — what this phase delivers so Dreamcast / Renesas SH4 binaries use hardware FP; the byte order is big-endian like the rest of the platform, [platform-baseline.md §2](platform-baseline.md), and the Tier-1 little-endian migration this line used to name is withdrawn); **Tier 2** is hypervisor-aware (EXC_FPU_DISABLED at EXPEVT 0x1B0 / HEDR bit 3, lazy FPU context-switch ABI, 136-byte FPU save/restore image — [fpu/spec.md §7.4](fpu/spec.md)) and lands together with the Phase 4 hypervisor for J32-FM. Single FPU shared across cores via coprocessor bus arbitration (not duplicated per core) — a sharing decision inherited from the OoO design philosophy and unaffected by [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md), since it turns on cost per core rather than on issue order. Tier 0 SIMD horizontal reductions also depend on the Tier 1 FPU register file — see Phase 7.5.
 
-Dependencies: Phase 6 (the OoO core's coprocessor interface).
+Dependencies: Phase 6 (the Phase-6 core's coprocessor interface).
 
-Deliverable: SH4 binaries with hardware floating point run at native speed; differential harness reports controlled tolerance-band divergence vs QEMU softfloat (and we now have ground truth on which one is correct per IEEE 754); new tenant profile "OoO J32 + FPU" available.
+Deliverable: SH4 binaries with hardware floating point run at native speed; differential harness reports controlled tolerance-band divergence vs QEMU softfloat (and we now have ground truth on which one is correct per IEEE 754); new tenant profile "J32 + FGMT + FPU" available. *(This profile was named "OoO J32 + FPU" before [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md).)*
 
 ### Phase 7.5 — SIMD prefix unit (2–3 months)
 
@@ -833,9 +857,9 @@ Crypto throughput on SSH improves substantially (3–5× on SSH bulk transfers v
 
 Dependencies: Phase 7 (FPU and SIMD share DSPs; sequence to share is established here).
 
-Deliverable: tenants opt into "OoO J32 + FPU + SIMD" — the full SH4-rich profile. SIMD micro-benchmarks runnable; SSH bulk transfer measurably faster than the non-SIMD baseline.
+Deliverable: tenants opt into "J32 + FGMT + FPU + SIMD" — the full SH4-rich profile. SIMD micro-benchmarks runnable; SSH bulk transfer measurably faster than the non-SIMD baseline.
 
-**End of SH4-excellence track. The platform now provides a genuinely first-class SH4 development environment with hardware-virtualized tenant isolation, observability, OoO performance, FPU, SIMD, and SMP.**
+**End of SH4-excellence track. The platform now provides a genuinely first-class SH4 development environment with hardware-virtualized tenant isolation, observability, dual-issue + multithreaded performance, FPU, SIMD, and SMP.**
 
 ### Phase 8 — J64 + COMPAT (deferred research, 1–2 months)
 
@@ -892,9 +916,9 @@ instruction set with no RTL.
 ## 11. Open questions and decisions deferred
 
 - **Verify j-core upstream state.** The LUT estimates assume the j-core repo hasn't moved significantly. Worth a `git log` and mailing-list review before Phase 2 lands. Any new FPU work upstream would shift Phase 7 sizing.
-- **ECP5-6 `Fmax` of the dual-issue OoO J32:** unknown at this stage — needs measurement. Whether the wakeup CAM lands in LUT logic (longer paths) or BRAM-backed (shorter, lookup-time-dominated) is the structural question that decides it, and it is not answerable on paper. Note the scale the answer has to clear: the *in-order* J4 with an MMU measures ~33 MHz ([platform-baseline.md §3](platform-baseline.md)).
-- ~~**OoO microarchitecture spec.** Write `10-ooo-design-spec.md` before implementation~~ — **DONE.** Specified in [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md) (v0.3, 2026-05). Covers issue rules, retire ordering, LSQ disambiguation (store-set predictor), memory ordering guarantees (SH-Compact weak preserved), hypervisor-visibility (none), FGMT in §13, gate budget in §15. No longer blocks Phase 6.
-- **OoO trace cache / uop cache decision.** Adds BRAM cost but amortizes decode; might be worth it for tight loops. Decide during Phase 6 design.
+- **ECP5-6 `Fmax` of the Phase-6 core:** unknown at this stage — needs measurement, and after [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md) this is the question for the *dual-issue in-order + FGMT* core rather than for an OoO one. Note the scale the answer has to clear and how little room is in it: the single-issue J4 with an MMU measures the figure in its row of [platform-baseline.md §3](platform-baseline.md), and that section records the CI floor sitting about one seed-to-seed standard deviation below the observed worst seed. *For the paused OoO core the open question was different and is retained with it: whether the wakeup CAM lands in LUT logic (longer paths) or BRAM-backed (shorter, lookup-time-dominated), which is not answerable on paper.*
+- ~~**OoO microarchitecture spec.** Write `10-ooo-design-spec.md` before implementation~~ — **DONE.** Specified in [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md) (v0.3, 2026-05). Covers issue rules, retire ordering, LSQ disambiguation (store-set predictor), memory ordering guarantees (SH-Compact weak preserved), hypervisor-visibility (none), FGMT in §13, gate budget in §15. **Reopened as a different question by [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md), and it now blocks Phase 6:** the core Phase 6 builds is dual-issue *in-order* + 2-thread FGMT, and that core is specified nowhere. Writing it is Phase 6's first deliverable; 0009 D2 names the material it is derived from.
+- **OoO trace cache / uop cache decision.** Adds BRAM cost but amortizes decode; might be worth it for tight loops. Deferred with the rest of the OoO path ([decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md)); decide if and when it resumes.
 - **Bitstream reflash brick rate.** Estimated 5% on remote reflash. Validate with a torture test in Phase 1; if higher than expected, implement the watchdog-revert-to-golden mechanism before Phase 5 public launch.
 - **Tenant Ethernet gateway MikroTik model.** CRS326 (24 GbE, ~$200), RB5009 (ARM64, ~$250), or hEX S (5 GbE, ~$60) depending on planned fleet size. For ≤4 boards: hEX S. Decide before ordering hardware for Phase 0.
 - **Management MikroTik model.** Default recommendation: hAP ax3 (~$120, WiFi 6 + container support in one box). Confirm before Phase 0.
@@ -929,8 +953,9 @@ instruction set with no RTL.
 | 2 | Interrupt controller | [aic/aic2-spec.md](aic/aic2-spec.md) (Tier 0 baseline) |
 | 3 | IOMMU | [iommu/design-spec.md](iommu/design-spec.md), [iommu/hardware-spec.md](iommu/hardware-spec.md), [iommu/linux-spec.md](iommu/linux-spec.md) |
 | 4 | Hypervisor | [hypervisor/design-spec.md](hypervisor/design-spec.md), [hypervisor/hardware-spec.md](hypervisor/hardware-spec.md), [hypervisor/linux-spec.md](hypervisor/linux-spec.md); AIC2 Tier 2 [aic/aic2-spec.md §5](aic/aic2-spec.md) |
-| 6 | Out-of-order J32 | [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md) |
-| 6.5 | FGMT + coherent L2 | [fgmt/dual-fgmt-proposal.md](fgmt/dual-fgmt-proposal.md), [fgmt/mt2x2-plan.md](fgmt/mt2x2-plan.md); [cache/l2-spec.md](cache/l2-spec.md) Tier 1; AIC2 Tier 1 [aic/aic2-spec.md §4](aic/aic2-spec.md) |
+| 6 | Dual-issue in-order + 2-thread FGMT | **none yet — Phase 6's first deliverable.** Derived from [ooo/j32lt-spec.md §3–§4](ooo/j32lt-spec.md) and [fgmt/dual-fgmt-proposal.md](fgmt/dual-fgmt-proposal.md) + [fgmt/mt2x2-plan.md](fgmt/mt2x2-plan.md), per [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md) D2; AIC2 Tier 1 [aic/aic2-spec.md §4](aic/aic2-spec.md) |
+| 6.5 | Dual-core SMP + coherent L2 | [cache/l2-spec.md](cache/l2-spec.md) Tier 1; AIC2 Tier 1 [aic/aic2-spec.md §4](aic/aic2-spec.md) |
+| *paused* | *Out-of-order J32; light-OoO 4-way-barrel sibling* | [ooo/j32ooo-spec.md](ooo/j32ooo-spec.md), [ooo/j32lt-spec.md](ooo/j32lt-spec.md) — live as specification, no RTL effort, per [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md) |
 | 7 | SH4-complete FPU | [fpu/spec.md](fpu/spec.md) Tier 1 (+ Tier 2 with hypervisor for J32-FM) |
 | 7.5 | SIMD | [simd/spec.md](simd/spec.md), [simd/hardware-impl.md](simd/hardware-impl.md), [simd/software-impl.md](simd/software-impl.md) |
 | 8 | J64 widening | [glossary §3](glossary.md) (J64 row); [cache/l2-spec.md](cache/l2-spec.md) Tier 2 (40-bit PA) |

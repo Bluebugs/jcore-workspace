@@ -6,6 +6,32 @@
 
 **J32-LT** is a 2-wide in-order-issue, out-of-order-completion core with **4-way barrel FGMT**, 32-bit datapath. It is a *sibling* of [J32-OOO](j32ooo-spec.md), not a replacement: J32-OOO buys single-thread latency with register renaming and a wakeup-select issue queue; J32-LT buys **throughput per joule** with thread count and deletes both structures. See [glossary §3–§4](../glossary.md) for product-point and threading naming.
 
+> **This product point is not being built, and it is paused for a narrower
+> reason than J32-OOO. Decision
+> [0009](../decisions/0009-in-order-fgmt-is-the-default-path.md), 2026-09-08.**
+> The default microarchitecture path is dual-issue in-order with **2-thread**
+> switch-on-miss FGMT. Two of the three arguments in
+> [j4-remediation-plan.md §E.1](../j4-remediation-plan.md) do not reach this
+> design at all — issue is in-order here, and §1.2 already deletes the rename
+> machinery and the issue-queue CAM that the area and energy arguments land on.
+> What does reach it is the **barrel width** and §12.1's own finding: E.1's
+> counter-evidence bullet reads Hölzle as arguing against a wide barrel (per-
+> thread IPC must not collapse), and §12.1 records that this core is not smaller
+> than J32-OOO, so it does not relieve the ECP5 fit problem either.
+>
+> **The consequence is the opposite of a demotion for most of this document.**
+> 0009 D2 records that the front end, the PAIR stage and the pairing rules of §3
+> and §4 are the *nearest existing description of the default path*, and that
+> the spec the default path needs should be derived from them — at 2 contexts
+> with switch-on-miss selection instead of a 4-way barrel, and with §6.3's ROB
+> re-opened, since 40,000 gates of ROB was budgeted against four threads' worth
+> of in-flight work rather than two. §15's **P0** trace model is likewise the
+> instrument 0009 D3 names for settling the question against OoO.
+>
+> Nothing here is superseded or wrong, which is why there is no
+> [0002](../decisions/0002-supersede-convention.md) marker: that grammar has no
+> form for "correct, and not currently being implemented".
+
 ---
 
 ## 1. Goals and non-goals

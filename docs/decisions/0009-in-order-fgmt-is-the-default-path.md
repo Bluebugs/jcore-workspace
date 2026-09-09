@@ -92,17 +92,41 @@ assumed free.
 
 Three different things are in circulation and only one of them is a measurement.
 
-1. **The ~10× figure is a third-party measurement of other people's cores.**
-   [§E.1](../j4-remediation-plan.md) cites a RISC-V soft-core survey reporting
-   BOOM (out-of-order) at roughly ten times Rocket (in-order) in LUTs. That is a
-   real result and it is legitimate **evidence** about the shape of the cost of
-   out-of-order execution on an FPGA. It is a measurement of **BOOM against
-   Rocket, by its authors, on their device** — not of J32-OOO against a J-Core
-   in-order baseline, on the ECP5-85F, by us. Quoting it as though it were a
-   J-Core ratio is exactly the substitution
+1. **The ~10× figure is a third-party measurement of other people's cores, and
+   the way §E.1 states it does not survive checking.** [§E.1](../j4-remediation-plan.md)
+   reads: *"BOOM (OoO) ≈ 49,865 LUTs vs Rocket (in-order) ≈ 5,073 — ~10× — on an
+   84K-LUT ECP5-85F (RISC-V soft-core survey, TU-Braunschweig)."* Checked at
+   source on 2026-09-08, **the named survey does not contain that sentence's
+   device**. It is Dörflinger, Albers, Kleinbeck, Guan, Michalik, Klink,
+   Blochwitz, Nechi & Berekovic, *A Comparative Survey of Open-Source
+   Application-Class RISC-V Processor Implementations*, ACM Computing Frontiers
+   (CF '21), 2021 — and its own abstract states that its results are for **"the
+   Xilinx Virtex UltraScale+ family and GlobalFoundries 22FDX ASIC technology"**.
+   Not an ECP5. Not a Lattice part at all, and Virtex UltraScale+ has **6-input**
+   LUTs where the ECP5 has 4-input ones, so the unit is not even the same unit.
+
+   That is a defect [0004](0004-platform-tag-convention.md) rule 3 names
+   precisely: *"a figure measured on a different FPGA family — Spartan, Artix,
+   Kintex, Virtex, all Xilinx, none of them what this project builds on — is not
+   made `` `[FPGA]` `` by tagging it."* §E.1 did more than tag it: it wrote the
+   ECP5-85F into the sentence.
+
+   **What survives, and it is still worth something.** A published, peer-reviewed
+   comparison of an out-of-order and an in-order RISC-V core under forced-common
+   parameters exists, it is by third parties, and it puts the out-of-order core
+   at a *multiple* of the in-order one on both FPGA and ASIC. That is real
+   evidence about the shape of the cost, and it is what this decision leans on.
+   What does **not** survive is the specific magnitude, the specific LUT counts,
+   and the device — so none of them is repeated as a J-Core-relevant number
+   anywhere this task touched, and the corrections are recorded in the plan's own
+   §B3 rather than applied silently to §E.1.
+
+   The general rule this instance is an instance of: it is a measurement of
+   **BOOM against Rocket, by its authors, on their device** — not of J32-OOO
+   against a J-Core in-order baseline, on the ECP5-85F, by us. Quoting it as
+   though it were a J-Core ratio is exactly the substitution
    [0005](0005-unmeasured-figures-are-removed.md) exists to prevent, and this
-   project has caught the same substitution more than once. Wherever the figure
-   appears it must name the cores, the measurer and the device on the same line.
+   project has caught the same substitution more than once.
 2. **Our own OoO LUT4 number does not exist.** [ooo/j32ooo-spec.md §15](../ooo/j32ooo-spec.md)
    reads, of the LUT4 count for the core plus caches, that it is
    *unknown at this stage — needs measurement*.
@@ -120,10 +144,19 @@ Three different things are in circulation and only one of them is a measurement.
    needs something to be judged against. It is not evidence for or against this
    decision; it is the thing the eventual measurement will be compared to.
 
-**The area argument in §E.1 therefore rests on the proxy, and this record says
-so rather than borrowing its authority.** The proxy is strong enough to shift a
-burden of proof. It is not strong enough to close the question, and closing the
-question is not what this record does.
+**The area argument in §E.1 therefore rests on a proxy, and the proxy got weaker
+during this task rather than stronger.** That is recorded rather than smoothed
+over, and it is survivable for one reason: **this decision does not rest on the
+area leg.** §E.1 has three legs — the instruction window cannot hide SDRAM
+latency (the strongest, and the only one that is about the design's own stated
+purpose), area on the ECP5, and where the `[ASIC]` energy goes. The area leg is
+now "a real third-party result showing a multiple, on the wrong device, at an
+unverified magnitude". A decision that *closed* the question would be in trouble.
+A decision that **shifts a burden of proof** is not, and shifting the burden is
+all D3 does. If the area leg were the load-bearing one, the honest outcome here
+would have been to leave the question open — and it is worth saying that plainly,
+because the temptation on finding a broken citation is to defend the conclusion
+it was supporting.
 
 ### What the light-OoO sibling does and does not fix
 
@@ -365,15 +398,20 @@ The mechanism being adopted is **fine-grained multithreading with a small thread
 count and switch on a long-latency event**. Its pre-2006 art is deep and is
 independent of this project:
 
+**Every citation below was checked against a primary source on 2026-09-08**, and
+three of them changed as a result; the changes are recorded under §Citations
+that did not survive checking.
+
 | Element of D1 | Prior art |
 |---|---|
-| Hardware thread contexts interleaved into one pipeline (barrel) | CDC 6600 peripheral processors — J. E. Thornton, *Parallel Operation in the Control Data 6600*, AFIPS FJCC 1964; described at length in Thornton, *Design of a Computer: The Control Data 6600*, Scott Foresman, 1970 |
-| One instruction issued per cycle from a different thread, to cover memory latency | Denelcor HEP — B. J. Smith, *A Pipelined, Shared Resource MIMD Computer*, ICPP 1978 |
-| Many-thread interleaving as the sole latency-tolerance mechanism, no data cache | Tera MTA — Alverson, Callahan, Cummings, Koblenz, Porterfield & Smith, *The Tera Computer System*, ICS 1990 |
-| Switch on a long-latency event rather than every cycle (block multithreading) | MIT Alewife / Sparcle — Agarwal et al., *Sparcle: An Evolutionary Processor Design for Large-Scale Multiprocessors*, IEEE Micro 13(3), 1993 |
-| Small thread count on a single-issue in-order commercial core, chosen because memory stalls dominate | Sun UltraSPARC T1 "Niagara" — Kongetira, Aingaran & Olukotun, *Niagara: A 32-Way Multithreaded SPARC Processor*, IEEE Micro 25(2), March/April 2005 |
+| Hardware thread contexts interleaved into one pipeline (the barrel) | CDC 6600 peripheral processors — J. E. Thornton, *Parallel Operation in the Control Data 6600*, AFIPS Proc. FJCC 1964, part 2, vol. 26, pp. 33–40. The barrel is described in the 1964 paper itself: ten processors' dynamic state moves around a "barrel", each getting one 100 ns minor cycle of every ten, so "the single arithmetic and the single distribution and assembly network are made to appear as ten" |
+| Issuing each cycle from a different thread specifically to cover memory latency | Denelcor HEP — B. J. Smith, *A Pipelined, Shared Resource MIMD Computer*, Proc. 1978 International Conference on Parallel Processing, pp. 6–8. The mechanism is a **process queue**, not a fixed rotation: a new instruction begins every 100 ns while an instruction takes 800 ns to complete, so at least eight independent processes are needed for full issue rate |
+| Thread interleaving as the *sole* latency-tolerance mechanism, no data cache | Tera MTA — Alverson, Callahan, Cummings, Koblenz, Porterfield & Smith, *The Tera Computer System*, Proc. 4th International Conference on Supercomputing (ICS '90), 1990, pp. 1–6. Up to 128 program counters per processor, sized against an average instruction latency of "perhaps 70 ticks" |
+| **Switch on a long-latency event rather than every cycle — the mechanism D1 actually adopts** | MIT Alewife / Sparcle — Agarwal, Kubiatowicz, Kranz, Lim, Yeung, D'Souza & Parkin, *Sparcle: An Evolutionary Processor Design for Large-Scale Multiprocessors*, IEEE Micro 13(3), June 1993, pp. 48–61. The paper draws the distinction this record needs, against HEP by name: cycle-by-cycle interleaving is "fine multithreading", whereas "Sparcle employs **block multithreading or coarse multithreading**. That is, context switches occur only when a thread executes a memory request that must be serviced by a remote node … Thus, a given thread continues to execute as long as its memory requests hit in the cache" |
+| Small thread count on a single-issue in-order commercial core, chosen because memory stalls dominate | Sun UltraSPARC T1 "Niagara" — Kongetira, Aingaran & Olukotun, *Niagara: A 32-Way Multithreaded Sparc Processor*, IEEE Micro 25(2), March–April 2005, pp. 21–29. Eight thread groups of four threads on a single-issue six-stage pipeline, justified because "the combination of low available ILP and high cache-miss rates causes memory access time to limit performance". **The paper describes no branch predictor**; branches are listed among the long-latency events that deschedule a thread |
+| Two hardware threads on an in-order embedded RISC core, as a shipped architecture | MIPS MT ASE — MIPS Technologies, *MIPS32 Architecture for Programmers Volume IV-f: The MIPS MT Application-Specific Extension to the MIPS32 Architecture*, document MD00378, revision 1.00, **28 September 2005** |
 | In-order issue with out-of-order completion via a scoreboard (the mechanism D1 must re-examine, per §What this does not decide) | CDC 6600 scoreboard — Thornton 1964, above |
-| Non-blocking loads on an in-order pipeline, the structure switch-on-miss needs | Kroft, *Lockup-Free Instruction Fetch/Prefetch Cache Organization*, ISCA 1981; Farkas & Jouppi, *Complexity/Performance Tradeoffs with Non-Blocking Loads*, ISCA 1994 |
+| Non-blocking loads on an in-order pipeline, which is the structure switch-on-miss needs | Kroft, *Lockup-Free Instruction Fetch/Prefetch Cache Organization*, ISCA 1981; Farkas & Jouppi, *Complexity/Performance Tradeoffs with Non-Blocking Loads*, ISCA 1994 |
 
 **Matched on mechanism, per [glossary §2.1](../glossary.md).** Every row above
 is a machine that interleaved hardware contexts into one pipeline to cover
@@ -388,6 +426,60 @@ this one** — it is the *security* property built on top, where
 [ooo/j32lt-spec.md §16.13](../ooo/j32lt-spec.md) and
 [ooo/j32ooo-spec.md §20.13](../ooo/j32ooo-spec.md) already do the rule-2 check
 for the mitigations, and those sections remain live under D2.
+
+### Citations that did not survive checking
+
+Three of the citations this record started from were wrong, and they are listed
+because a corrected citation looks identical to one that was right all along.
+
+1. **MIPS MT, cited as "Kissell, MIPS Tech 2005".** That form appears in
+   [ooo/j32ooo-spec.md §1.3](../ooo/j32ooo-spec.md),
+   [ooo/j32lt-spec.md §1.4](../ooo/j32lt-spec.md) and
+   [fgmt/dual-fgmt-proposal.md §2](../fgmt/dual-fgmt-proposal.md), and as a
+   *paper* it does not exist: Kissell's *MIPS MT: A Multithreaded RISC
+   Architecture for Embedded Real-Time Processing* is **HiPEAC 2008**, LNCS 4917,
+   pp. 9–21 — after the cutoff, and therefore not usable under
+   [glossary §2](../glossary.md) at all. The pre-2006 artifact is real but is a
+   different document: MIPS Technologies' **MD00378 rev 1.00, 28 September
+   2005**, the MIPS MT ASE specification, which is what the table above now
+   cites. Worse, the cited *core* is on the wrong side of the line too — the
+   34K was announced in February **2006**. A reader checking "Kissell 2005"
+   would have found the 2008 paper and concluded the policy had been broken,
+   when the fix was to name the 2005 specification.
+2. **The 34K throughput/area result, cited as "EE Journal, 2006".** The claim is
+   real and the source is Kissell, *Demystifying multithreading and multi-core*,
+   **EDN, 26 September 2007**: *"an increase in area of 14% can buy an increase
+   of throughput of 60% relative to a comparable single-threaded core (as
+   measured using the EEMBC PKFLOW and OSPF benchmarks, run sequentially on a
+   MIPS32 24KE core versus concurrently on a **dual-threaded** MIPS32 34K
+   core)."* It is a vendor-authored trade-press claim on two networking kernels,
+   not a peer-reviewed general result, and it should be quoted with that
+   qualifier. Note what the qualifier does *not* do: the configuration measured
+   is **two threads on an in-order embedded core**, which is D1's configuration
+   exactly, so of the evidence in §E.1 this is the piece that transfers most
+   directly and the piece that was cited least precisely.
+3. **The BOOM-versus-Rocket LUT ratio.** Covered above under §Context. The
+   survey is real and is not what §E.1 says it measured.
+
+**One site carrying the same broken shape is deliberately not corrected here.**
+[aic/aic2-spec.md](../aic/aic2-spec.md) cites MIPS MT twice as *"Kissell, MIPS
+Tech 2005 … MD00452"*, mixing the 2008 paper's title with a document number this
+task did not verify — it is a different number from the MD00378 established
+above, and it is cited there for per-thread *interrupt steering* rather than for
+FGMT. Correcting a citation to a document nobody has opened would substitute one
+unchecked reference for another, which is the failure this section is about.
+Recorded so the site is visible; it belongs to whoever next touches AIC2's
+prior-art table.
+
+**What did survive**, checked the same way and unchanged: Thornton 1964 (and the
+barrel is in the 1964 paper, not only in the 1970 book), Smith 1978, Alverson et
+al. 1990, Agarwal et al. 1993, Kongetira et al. 2005, and Mutlu et al., HPCA
+2003, pp. 129–140 — whose 128-entry window result is the strongest leg of this
+decision and whose stated finding is that a machine with a 128-entry window
+"spends 71% of its cycles in full instruction window stalls", most of them
+attributable to main-memory latency. One precision point on that: the 128
+entries are **micro-operations**, not instructions, which makes the window
+smaller in the units §E.1 reasons in, not larger.
 
 **Not cited as prior art, and the distinction is deliberate.** The MIPS 34K
 throughput/area result and the ARM A53-versus-A9 comparison in
