@@ -781,10 +781,12 @@ what those documents teach. §10's first open item is where the *motivation*
 becomes relevant again, and it is recorded as unresolved rather than argued
 away.
 
-### 11.3 What checking changed, and the one gap it exposed
+### 11.3 What checking changed
 
 Three of the expected citations did not survive contact with the sources, and
-the corrections matter to which reference supports which clause:
+the corrections matter to which reference supports which clause. A fourth
+architecture was missing entirely and is dealt with in §11.3a, which is also
+where the weakest clause is assessed:
 
 1. **PowerPC `MSR[LE]` is address munging, not byte invariance**, so it must
    **not** be cited for the byte-invariance clause. *PowerPC Architecture*
