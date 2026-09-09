@@ -1061,6 +1061,170 @@ empirically by the Phase-1 feasibility spike, `jcore-cpu` commit `90e6cbc`.)
 | `TSBSLOT` / `TSBVSEED` / `TSBVICT` (§2.12, §2.13) | Phase 2, IMPLEMENTED and decoded in `core/datapath.vhm` |
 | Instruction retirement (§3.1) | **RESOLVED 2026-08-25 — jcore-cpu@master: artifact `decode/gen-go/spec/sh4/mmu.toml` containing `All seven were retired`.** *(This row previously read "Phase 3, not yet started. All seven instructions still exist and still work." They do not: the whole `0000 nnnn xxxx 1011` read family is retired and the encoding space is back in the free pool. The write side — `LDC Rm,{PTEH,PTEL,ASIDR}` — is deliberately kept.)* |
 
+### 5.0a The I-side arm is speculative — the four transmitters of a squashed fetch, and the rules that bound them
+
+**Why this subsection is here.** [security/threat-model.md §7.2](../security/threat-model.md)
+retires the "the core is non-speculative" premise by showing that the I-side arm
+of the walk described in §5.0 runs off a *live fetch*, while the fault it may
+raise is deferred to dispatch. Its item **L4** makes covering that arm a launch
+requirement, and Wave-3 task **C2b** owns it. The rules land here rather than in
+a decision record because [decisions/README](../decisions/README.md)'s test is
+ownership of the *subject*: §5.0 owns the walk, so the walk's speculation rules
+are inline, in the section that specifies it.
+
+**What is being bounded is shipping hardware, not a proposal.** Three of the four
+mechanisms Wave 3 lists for C2b — commit-time predictor updates, a tenant-tagged
+BTB, degenerate-STT taint — describe structures `jcore-cpu@origin/master` does
+not contain, and are already specified for the design points
+[decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md) paused
+([ooo/j32ooo-spec.md §3.2, §9.4](../ooo/j32ooo-spec.md)). The fourth — delayed
+speculative TLB/PTW fill — is the one that lands on the core that exists, and it
+is the only one this subsection is about.
+
+#### The arm, quoted
+
+`core/cpu.vhd` computes the I-side miss condition from the fetch request and the
+ITLB lookup alone:
+
+```vhdl
+walk_i_miss <= '1' when i_at_translated = '1' and sig_inst_o.en = '1'
+                        and tlb_i_multihit = '0' and tlb_i_hit = '0'
+                        and sig_db_o.en = '0' and d_fault_held = '0' else
+               '0';
+```
+
+The three gates on that line are a translation gate, an older-D-access ordering
+gate and a multi-hit gate. **None of them is a dispatch, squash or
+branch-resolution term**, and `core/tlb_walk.vhd` has no abort input — its own
+arm is a per-VPN one-shot and a give-up counter, neither of which is driven by
+the pipeline. The matching property is stated on the fault side in
+`core/components_pkg.vhd`: *"A fetch that is squashed before dispatch therefore
+never raises anything."* The fault is squashed. The walk is not.
+
+#### The four transmitters
+
+A fetch that is squashed before dispatch can, on `origin/master` today, have
+already left state in four places. They are listed in the order a single
+squashed fetch reaches them, because each later one is conditional on the one
+before:
+
+| # | Transmitter | Left behind by a squashed fetch because |
+|---|---|---|
+| 1 | **L1-I line** | `cache/icache_ccl.vhm` enters `MISS1` on a demand miss and commits the tag in that state. The fill has no speculation input at all |
+| 2 | **L1-D lines touched by the walk** | the walker's TSB reads are cacheable by an explicit policy decision (`core/cpu.vhd`, the `TSB COHERENCY POLICY` block) — this is the observable [security/threat-model.md §7.1](../security/threat-model.md) builds AnC on |
+| 3 | **ITLB entry** | the walk installs on a tag match through the same port `LDTLB` uses (§5.0) |
+| 4 | **DTLB entry, via the I→D shadow fill** | an ITLB install registers `shadow_wr <= walk_install and walk_side_i` in `core/cpu.vhd` and re-drives the DTLB write port one cycle later |
+
+**Transmitter 4 is the one that is easy to miss, and it is the one that crosses
+structures.** The shadow fill is an address *prediction*: an ITLB install is
+taken as evidence of an imminent D-side access to the same page, because SH code
+pages carry PC-relative literal pools. It is bounded in the RTL — `core/tlb.vhd`
+skips the install entirely when the page is already resident and usable, and
+installs `used = '0'` (next NRU victim, never promoted on a hit) when it does
+land — but **both bounds are about not displacing demand entries; neither is
+about speculation.** The consequence is that an I-side event that never
+architecturally happened becomes visible to a *D-side* observer. That is a
+different exposure from transmitters 1–3, and W-R5 below is where it is
+answered.
+
+#### Rules
+
+- **W-R1 — the arm waits.** An I-side TSB walk **must not be armed by a fetch
+  that has not dispatched.** `walk_i_miss` gains a dispatch dependence, or an
+  equivalent squash term that disarms it before `tlb_walk` leaves `st_idle`.
+  This is [j4-remediation-plan.md §E.10](../j4-remediation-plan.md)'s *delayed
+  speculative TLB/PTW fill*, applied to the only walker this project has, and it
+  is the same shape as delay-on-miss: a condition on an existing arm, not a new
+  structure. **It closes transmitters 2, 3 and 4 in one term**, because 3
+  requires 2 and 4 requires 3.
+
+- **W-R2 — an abort path is not a substitute for W-R1.** Adding an abort input
+  to `core/tlb_walk.vhd` closes transmitters 3 and 4 and **does not close
+  transmitter 2**: by the time a squash can be signalled the walk has already
+  issued its TSB reads, and those reads are the AnC observable. An abort path may
+  be worth adding for other reasons — it bounds how long a doomed walk holds the
+  bus — but it does not discharge W-R1, and a review that accepts it as
+  equivalent has accepted a mitigation for the install while leaving the
+  cacheable-read footprint intact.
+
+- **W-R3 — the walker stays the sole installer.** W-R1 and W-R2 are conditions
+  on an existing arm and an existing port. Neither may be implemented by adding
+  a second install path. The shadow fill is not one: `shadow_wr` is derived from
+  `walk_install`, so the walker remains what
+  [security/threat-model.md §12](../security/threat-model.md) names as the
+  premise of half of §7.1 — a code-level trigger that has **not** fired.
+
+- **W-R4 — the L1-I wrong-path fill is an accepted residual, and the reason is
+  on the do-not-build list.** W-R1 does not reach transmitter 1, and no rule in
+  this document closes it. A fetch cannot wait for its own dispatch — it is what
+  produces the instruction that dispatches — so the delay shape that works for
+  the walk does not exist here. The two mechanisms that would close it are both
+  refused elsewhere on grounds this task is not entitled to overturn: a
+  flush-on-switch filter cache is on
+  [j4-remediation-plan.md §E.10](../j4-remediation-plan.md)'s **don't build**
+  list, and a speculative fill buffer promoted at non-speculative is
+  [ooo/j32ooo-spec.md §20.7](../ooo/j32ooo-spec.md) rejection 1, refused there on
+  live-patent grounds rather than on cost. **The residual is recorded as
+  accepted, not closed**, in [security/threat-model.md §10](../security/threat-model.md).
+  A third mechanism — discarding the returning line instead of committing its tag
+  when the fetch that requested it was squashed — is a condition on a tag write
+  rather than a buffer, so §20.7's rejection does not reach it on its face; it is
+  **not adopted here** because the prior-art check §20.7 requires has not been
+  done, and because nothing has yet measured how often the case arises. W-E1
+  below is what would supply the second half of that.
+
+- **W-R5 — the shadow fill's I→D disclosure is intra-tenant, and is named rather
+  than closed.** Under W-R1 the shadow fill can no longer be armed by a squashed
+  fetch, which is the whole of its transient-execution exposure. What remains is
+  architectural: a page that was *executed* becomes DTLB-resident without ever
+  being read, so D-side timing reports I-side activity. Observer and victim are
+  inside one tenant — [security/threat-model.md §8](../security/threat-model.md)'s
+  **L1** places both in the same tenant, exactly as it does for §7.1's AnC
+  primitive — so no item of that bar requires this to be closed, and it is filed
+  in §10 with the other intra-guest channel rather than fixed. `TLBINST`
+  ([soc/p4-mmio-map.md](../soc/p4-mmio-map.md)) makes it directly countable, but
+  `TLBINST` is in P4 and P4 is privileged, so the counter is not the channel; the
+  channel is the DTLB hit it records.
+
+#### What this costs, and the experiment that prices it
+
+W-R1 delays the start of an I-side walk by the fetch-to-dispatch distance of the
+pipeline it is implemented on. That distance, and the fraction of I-side walks
+that are armed off fetches which never dispatch, are
+**unknown at this stage — needs measurement**.
+This is the first Wave-3 item whose measurement can run on hardware that exists.
+
+**W-E1 — how often does a squashed fetch walk?** Count I-side arms of
+`walk_i_miss` whose fetch never reaches dispatch, over the `sim/tests` MMU
+corpus and a directed test that places a taken branch immediately before a code
+page that is mapped in the TSB but absent from the ITLB.
+
+> **Kill criterion.** If that count is identically zero across the corpus *and*
+> the directed test cannot make it non-zero, then the arm is not reachable on a
+> squashed fetch on this pipeline, W-R1 buys nothing here, and
+> [security/threat-model.md §7.2](../security/threat-model.md) is overstated
+> rather than conservative. §12 of that document already says what to do in that
+> case: **re-derive it, do not delete it** — the exposure returns with any front
+> end that fetches further ahead.
+
+A non-zero count is also what discharges L4's *non-vacuity* clause for this
+transmitter: the same counter is red before W-R1 and green after, which is the
+demonstration that document asks for and that is usually skipped.
+
+**W-E2 — what does the wait cost?** A/B the gated arm over the same corpus, on
+cycles. There is a measured comparator already in the tree for the structure most
+affected: `jcore-cpu/docs/architecture/tlb.md` §4.1 records a whole-run A/B of
+the shadow fill on `mmudrain`. Report W-E2 against that same harness so the two
+numbers are commensurable, and report them **together** — W-R1 makes the shadow
+fill rarer, so pricing the gate without re-pricing the fill prices half a change.
+
+No figure from [j4-remediation-plan.md §E.10](../j4-remediation-plan.md) is
+carried into this subsection as a cost for this core. Its delay-on-miss numbers
+are measurements of an 8-wide out-of-order machine and of an ARM Cortex-A53, and
+[decisions/0005](../decisions/0005-unmeasured-figures-are-removed.md) is the
+record about what happens when a number from one machine is asked to stand in
+for another's.
+
 ### 5.1 Exception sequence (when the walk does not resolve the miss)
 
 When a memory access misses the TLB, translation is enabled (MMUCR.AT=1), and
