@@ -195,7 +195,7 @@ rule that a decision goes inline when a spec owns the thing decided. What is dec
 **which SIMD instructions require the FPU**, and that is a property of the SIMD decode rules,
 which this document owns. The `FPSCR` fields themselves are
 [../fpu/spec.md §6.4](../fpu/spec.md)'s and are not restated. The one consequence that lands on
-`FPDS` is stated by that document, in §7.7, because it owns that bit.
+`FPDS` is stated by [../fpu/spec.md §7.7](../fpu/spec.md), because it owns that bit.
 
 #### The defect
 
@@ -229,11 +229,14 @@ one: it read and wrote `FPSCR` under `SR.FD = 1`, which `LDS Rm,FPSCR` and `STS 
    Inside one guest that is a data-dependent channel between two tasks that share nothing else,
    and it is a correctness defect in both directions before it is a channel in one.
 3. **A dirty bit that can lie in the unsafe direction.** [../fpu/spec.md §7.7](../fpu/spec.md) rule
-   **FP-R4** sets `FPDS` = `10` on any architectural write to `FPSCR` from any mode. Consequence 2
+   **FP-R4** ([../fpu/spec.md §7.7](../fpu/spec.md)) sets `FPDS` = `10` on any architectural write
+   to `FPSCR` from any mode. Consequence 2
    is such a write. An implementer reading §2.1 as it stood would not have wired the SIMD FP
-   datapath into that logic at all, and `FPDS` would have read CLEAN over a file the SIMD unit had
+   datapath into that logic at all, and `FPDS` ([../fpu/spec.md §7.7](../fpu/spec.md)) would have
+   read CLEAN over a file the SIMD unit had
    modified. What that loses is the tenant's *own* flags at a gang switch rather than another
-   tenant's secrets — FP-R3's scrub is unconditional and is not an input to `FPDS` — but a `FPDS`
+   tenant's secrets — FP-R3's scrub is unconditional and is not an input to
+   `FPDS` ([../fpu/spec.md §7.7](../fpu/spec.md)) — but a `FPDS`
    that can be wrong in the CLEAN direction is one bit from FP-INV, which is the direction
    [../fpu/spec.md §7.7](../fpu/spec.md) chose `11` → `10` to avoid.
 
@@ -297,8 +300,8 @@ names the scan once rather than leaving three sections to assume it independentl
 `FPSCR`, and no `RM` or `FLAG` shadow, is added to `VCSR` or to §2.5's SIMD image; §2.5's
 architectural-state list and the 520-byte / 1036-byte image of §2.6 are unchanged by this section.
 Under S-R1 a task running FP SIMD owns the FPU, so its rounding mode and its sticky flags are its
-own, `LDS Rm,FPSCR` is available to it, and both travel in the 136-byte FPU image
-([../fpu/spec.md §7.4](../fpu/spec.md)) as they already did. Two owners for one register is the
+own, `LDS Rm,FPSCR` is available to it, and both travel in the
+136-byte FPU image ([../fpu/spec.md §7.4](../fpu/spec.md)) as they already did. Two owners for one register is the
 [../decisions/0001](../decisions/0001-one-authority-per-fact.md) failure, and it would additionally
 owe a rule for which of the two images wins on restore.
 
@@ -312,7 +315,7 @@ the case §2.3 did not cover.
 #### What it costs
 
 One `EXC_FPU_DISABLED` trap, once, for a task doing vertical FP SIMD that would previously have
-taken none, plus the 136-byte FPU image it must then carry. **No new architectural state, no new
+taken none, plus the 136-byte FPU image ([../fpu/spec.md §7.4](../fpu/spec.md)) it must then carry. **No new architectural state, no new
 instruction, no new trap cause, no new hyperprivileged bit, no change to either context image, and
 no new item on [../hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)'s
 gang-switch list.** The decoder cost is S-R3's `N`-opcode scan, which §2.3 and §6.5 already require
@@ -580,6 +583,60 @@ scrubbed — plus two flip-flops per thread context for `VDS`. Everything else, 
 the clear enable moves `Fmax` and how often a tenant leaves the file dirty at a quantum boundary,
 is `unknown at this stage — needs measurement`, and the experiment and its kill criteria are
 [../fpu/spec.md §7.7](../fpu/spec.md)'s, run over both files together.
+
+---
+
+### 2.6.2 Kernel-mode use of the SIMD facility (normative for the OS)
+
+**Wave-3 task C1c**, second half, SIMD side. [../fpu/spec.md §6.3.1](../fpu/spec.md) states the
+`kernel_fpu` discipline for the FP file and the facts about `linux@origin/jcore` that all of it
+rests on; its rules **K-R1** through **K-R5** apply here with `V0..V15`, `P0` and `VCSR`
+substituted for the FP registers, and with `SR.VD` and `EXC_SIMD_DISABLED` substituted for `SR.FD`
+and `EXC_FPU_DISABLED`. This section states only what is different, and both differences make the
+SIMD side worse.
+
+**1. The V file is the case [../j4-remediation-plan.md §C1](../j4-remediation-plan.md) actually
+names**, in its request for "a scrub requirement for kernel crypto that stages key material in V
+registers". A block cipher's round keys are the natural contents of `V0..V15` in a vectorised
+kernel implementation, and §2.5 makes that file **512 bytes on J32 and 1024 on J64** — the largest
+single block of architectural state in the design. Nothing else a kernel critical section touches
+has that combination of size and sensitivity.
+
+**2. §2.6's handler has *two* branches that write nothing, where the FP handler has one.** K-R3's
+argument is that the lazy model provides no unconditional reload to overwrite the kernel's data
+with. Here it is worse than at the FP file, and the extra branch is the one that will be missed:
+
+- **The spurious branch.** §2.6's pseudocode opens with
+  `if current_simd_owner == current_task: SR.VD = 0; return_from_exception()`. If a kernel critical
+  section runs SIMD in the context of task *T* and leaves `current_simd_owner` reading *T* — which
+  it does, because the kernel was not a task in that bookkeeping — then *T*'s next SIMD instruction
+  takes this branch, which clears `SR.VD` and writes **nothing**. *T* reads the kernel's key
+  material out of `V0..V15` with a committed `VST.Q`.
+- **The no-saved-image branch.** `if current_task.has_saved_simd_state: restore_simd_state(...)` —
+  a task that has never used SIMD has no image, so the restore does not run and the file is handed
+  over as the kernel left it. **This is §2.6.1's exposure and
+  [../fpu/spec.md §7.7](../fpu/spec.md)'s, one privilege level down and out of reach of both.**
+  V-R3 fires on a hyperprivileged `VDS` write at a cross-tenant switch; a kernel→user return inside
+  one guest is not one, and the guest kernel cannot write `VDS` in any case (§2.6.1: `VDS` is
+  hypervisor-only state that no guest instruction can read).
+
+**Setting `SR.VD = 1` on the way out of the section is not a fix**, and it is the fix that will be
+proposed, because it is what the context-switch path does. The trap that `SR.VD` raises is
+delivered to the handler above, whose first two branches are the two that write nothing. Clearing
+the software `current_simd_owner` is not a fix either: it disarms the first branch and leaves the
+second.
+
+**The rule.** A kernel SIMD critical section MUST, before re-enabling preemption, write §2.6.1's
+**V-R1** values — `V0..V15` = 0, `P0` = 0, `VCSR` = 0 — over the whole file, whatever subset of it
+the section used, and MUST NOT rely on any later restore to do it. `P0` is named because it is a
+jcore integer register and not a member of `V0..V15` (§2.5), so a scrub loop written over the
+vector file misses it; that is V-R1's own reason, and it applies unchanged to a software scrub.
+
+**What has a site today: nothing.** [../fpu/spec.md §6.3.1](../fpu/spec.md) records the checks —
+there is no SIMD support of any kind in `arch/sh` at `linux@origin/jcore` (`128e8958`), no
+`arch/sh/include/asm/simd.h`, no `arch/sh/crypto`, no `lib/crypto/sh` and no `lib/raid/raid6/sh`.
+There is also no SIMD unit in `jcore-cpu@origin/master` (`e8a5a4e1`). This section is a rule about
+software that would drive hardware, and neither exists.
 
 ---
 
@@ -1611,6 +1668,8 @@ Both selections honour the layout convention of v0.5 §3 (top-op | Vn-or-Vd | Vm
 
 This appendix summarises the architectural evolution that led to this consolidated specification. The full per-version delta history is preserved in [archive/spec-v0.5.md Appendix B](archive/spec-v0.5.md).
 
+- **2026-09-09 — Wave-3 C1c: FP SIMD requires FPU ownership, not just FP-scalar writeback (§2.4.1).** §2.1's "no SIMD instruction reads or writes FR/DR/FPUL/FPSCR **except** the FP-scalar writeback" was false against this document's own §2.4 (every governed FP op reads `FPSCR.RM`; under `VCSR.IEE = 1` writes `FPSCR.FLAG`) and §5.7 (`VEXTF.L`/`VINSF.L` read and write `FRn`), and the FPU-ownership requirement it carried covered only the writeback. A **vertical** FP block therefore read and wrote `FPSCR` with `SR.FD = 1` — the control-only escape [../fpu/spec.md §6.3](../fpu/spec.md) says does not exist — taking its rounding mode from, and its sticky flags to, the parked FPU owner's register. **Fixed:** rule S-R1 requires `SR.FD = 0` for any block containing an FP operation. **Cost accepted:** the SR.VD/SR.FD coupling §2.3 accepted for FP *reductions* now covers all FP SIMD; integer SIMD keeps full independence. **Rejected alternative:** shadow `RM`/`FLAG` in `VCSR` — it would decouple the files at the price of `VFIPR`/`VFTRV` rounding differently from scalar `FIPR`/`FTRV` while writing the same `FR0`, and of a SIMD default rounding mode different from the scalar one. **Not a cross-tenant channel:** C1b's FP-R1/FP-R3 already name `FPSCR` in the scrub, so nothing was added to §2.6.1 or to the gang-switch list.
+- **2026-09-09 — Wave-3 C1c: the kernel-mode discipline is a scrub, not a disable bit (§2.6.2).** Setting `SR.VD = 1` on exit from a kernel SIMD critical section does not protect the V file, because the trap it raises lands in §2.6's handler, whose first two branches — owner-unchanged, and no-saved-image — both write nothing. No architecture in `linux@origin/jcore` scrubs at `kernel_fpu_end`; they are safe because their return-to-user reloads unconditionally, which this lazy model does not.
 - **v0.1–v0.3 (archived):** prefix-modal SIMD developed atop SH-4 FPU register aliasing; predicate register P0 added in v0.3.
 - **v0.4 (archived):** dedicated V0..V15 register file introduced; FPU-alias model abandoned; anchor field removed; vector load/store specified.
 - **v0.5 → Tier 0 in this document:** VCSR introduced as dedicated SIMD control register; trap-free SIMD FP exception model (two modes via VCSR.IEE); expanded reduction operators (add/OR/AND/XOR/min/max/min-u/max-u); VGATHER.Q/VSCATTER.Q; VLDI.Q broadcast-immediate; SWIZZLE.I pattern-immediate; VLNS+VEXT/VINS lane-bridge pair; N=1 memory-access rule with restart-from-prefix.

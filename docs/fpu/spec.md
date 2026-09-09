@@ -47,6 +47,7 @@ identical but which is dated 2006 and so cannot serve as prior art.*
    - 6.1 Overview and product applicability
    - 6.2 Endianness migration (BE → LE) — withdrawn, kept as analysis
    - 6.3 SR.FD trap semantics
+   - 6.3.1 Kernel-mode use of the FPU — the `kernel_fpu` discipline
    - 6.4 Full FPSCR layout (PR / SZ / FR / DN / RM / Cause / Enable /
      Flag)
    - 6.5 FRCHG, FSCHG, FPCHG (FPSCR-toggle instructions)
@@ -938,6 +939,17 @@ including FRCHG, FSCHG, FPCHG (control-bit toggles), LDS / STS
 involving FPUL or FPSCR, and FLDS / FSTS. There is no "control-only"
 escape; SR.FD truly disables the FPU end-to-end.
 
+**And a SIMD block containing any FP operation, added 2026-09-09 by
+Wave-3 C1c.** Governed FP instructions
+([../simd/spec.md §5.2](../simd/spec.md)) read `FPSCR.RM` and, under
+`VCSR.IEE = 1`, write `FPSCR.FLAG`, so a SIMD block was exactly the
+control-only escape the paragraph above says does not exist: it reached
+`FPSCR` under `SR.FD = 1`, which `LDS Rm,FPSCR` cannot.
+[../simd/spec.md §2.4.1](../simd/spec.md) rule **S-R1** closes it — the
+requirement is raised against the **prefix**, and it covers a purely
+*vertical* block that writes no FR/DR at all, not only the FP-scalar
+writeback of a horizontal reduction / `VFIPR` / `VFTRV`.
+
 **Instructions that do NOT trap under SR.FD:** integer-only
 instructions, branches, MMU control, hypervisor control. The SR.FD
 trap is strictly scoped to FPU instructions.
@@ -958,6 +970,117 @@ slot of a branch traps with SPC pointing at the branch (not the
 delay-slot instruction), per the SH-4 convention. The trap handler
 must inspect SPC and read the instruction at SPC+2 to find the
 offending FPU instruction. This matches SH-4 silicon exactly.
+
+### 6.3.1 Kernel-mode use of the FPU — the `kernel_fpu` discipline (normative for the OS). [T1]
+
+**Wave-3 task C1c**, second half. [../j4-remediation-plan.md §C1](../j4-remediation-plan.md) asks
+for "a `kernel_fpu_begin`-equivalent discipline and a scrub requirement for kernel crypto that
+stages key material in V registers". This section is the FP-file half — `FR`, `XF`, `FPUL`,
+`FPSCR`, which this document owns; the V-file half is
+[../simd/spec.md §2.6.2](../simd/spec.md).
+
+This is a **software** rule, on the OS, not on hardware. It is written down because the hardware
+rules that look like they cover it do not: §7.7's FP-R3 scrub fires on a hyperprivileged `FPDS`
+write at a *cross-tenant* switch, and a kernel→user transition inside one guest is not one.
+
+#### What the tree does today, and why that is the starting point
+
+`linux@origin/jcore` (`128e8958`, checked 2026-09-09):
+
+- **Kernel-mode FP is banned, and the ban has a detector.** `arch/sh/kernel/cpu/fpu.c`
+  `fpu_state_restore()` opens with `if (unlikely(!user_mode(regs))) { printk(KERN_ERR "BUG: FPU is
+  used in kernel mode.\n"); BUG(); }`. An `SR.FD` trap taken from kernel mode is a `BUG()`. That is
+  a **stronger** rule than the generic kernel contract, which does not forbid kernel FP at all.
+- **The detector is compiled out on this target.** `fpu_state_restore()` is inside
+  `#ifdef CONFIG_SH_FPU`; `arch/sh/Kconfig`'s `CPU_SUBTYPE_JCORE` selects `CPU_JCORE` and `MMU` and
+  reaches no `select CPU_HAS_FPU` by any path, and `arch/sh/Kconfig.cpu`'s `SH_FPU` is
+  `depends on CPU_HAS_FPU`. So `CONFIG_SH_FPU` cannot be set on a J-Core build and
+  `arch/sh/include/asm/fpu.h` reduces `save_fpu`, `restore_fpu`, `release_fpu`, `grab_fpu` and
+  `fpu_state_restore` to `do { } while (0)`.
+- **There is no `kernel_fpu_begin` under `arch/sh` at all** — no definition and no call, checked
+  case-insensitively along with `kernel_neon`, `fpu_begin`, `fpu_end` and `may_use_simd` — and
+  `arch/sh` is not among the architectures selecting `ARCH_HAS_KERNEL_FPU_SUPPORT` (`arch/Kconfig`
+  line 1794; the five that do are arm64, loongarch, powerpc, riscv, x86).
+- **There is no consumer either.** No `arch/sh/crypto`, no `lib/crypto/sh`, no
+  `lib/raid/raid6/sh`, and no SH hook in generic `crypto/`, `lib/crc/` or `lib/raid/`. Nothing
+  under `arch/sh` uses FP in kernel context: every FP touchpoint is user-context lazy
+  save/restore, the soft-float emulator, or a mnemonic table.
+
+So the honest answer to "what does kernel-`fpu` discipline mean on this tree" is: **the ban is the
+discipline, it is already written, and it is switched off by the same Kconfig gap that switches off
+the FPU.** The rules below are what must hold *if and when* the ban is lifted, and K-R1 is what must
+hold until then.
+
+#### The rules (normative)
+
+**K-R1 — Kernel-mode FP stays banned until every other rule here is implemented, and the ban keeps
+its detector.** The `BUG()` above is not to be relaxed as a side effect of enabling
+`CONFIG_SH_FPU`. When SIMD arrives, the `EXC_SIMD_DISABLED` trap
+([../simd/spec.md §2.6](../simd/spec.md)) gets the same treatment: taken from kernel mode with no
+critical section open, it is a bug and not a lazy-restore event.
+
+**K-R2 — If the ban is lifted, the API is the generic one, and `arch/sh` owes three things it does
+not have.** `Documentation/core-api/floating-point.rst` is the contract, and meeting it is not a
+matter of writing two functions:
+
+1. **The header name is already taken.** `include/linux/fpu.h` is `#include <asm/fpu.h>` and
+   nothing else, and `arch/sh/include/asm/fpu.h` is the per-task lazy header holding `save_fpu`,
+   `unlazy_fpu` and `clear_fpu`. A file doing `#include <linux/fpu.h>` on `sh` today gets that
+   header and no `kernel_fpu_begin()`. Resolving the collision is a precondition, not a detail.
+2. **The build-time half has no flags.** The contract's `CC_FLAGS_FPU` / `CC_FLAGS_NO_FPU` do not
+   exist in `arch/sh/Makefile`; the compilation-unit isolation it requires is currently supplied by
+   the *ISA* — `CONFIG_CPU_SUBTYPE_JCORE` adds only `-m2`, and SH-2 has no FP encodings for the
+   compiler to emit. **That stops being true the moment the FPU lands**, and nothing in the build
+   would notice.
+3. **`may_use_simd()` would come from the wrong place.** There is no `arch/sh/include/asm/simd.h`,
+   so `sh` inherits `include/asm-generic/simd.h`'s `return !in_interrupt();`, whose stated reason is
+   that architectures do not preserve the SIMD file across an interrupt. On this design the gate is
+   `SR.FD` / `SR.VD` ownership, not interrupt context, and the two are not the same question.
+
+**K-R3 — A kernel FP critical section MUST scrub on exit. This is the rule no other architecture
+has, and the reason is architectural, not a difference of taste.** On exit the physical
+`FR`/`XF`/`FPUL`/`FPSCR` hold kernel data — key material, for the case
+[../j4-remediation-plan.md §C1](../j4-remediation-plan.md) names. Every architecture in
+`linux@origin/jcore` leaves it there: x86's `kernel_fpu_end()` (`arch/x86/kernel/fpu/core.c:499`)
+writes one per-CPU boolean and unlocks, touching no FP register; arm64's `kernel_neon_end()`
+(`arch/arm64/kernel/fpsimd.c:1956`) clears a thread flag and a pointer. **They are safe because the
+return to user reloads unconditionally**: `kernel_fpu_begin_mask()` sets `TIF_NEED_FPU_LOAD` and
+saves the user state (`core.c:483-488`), and `arch_exit_work()`
+(`arch/x86/include/asm/entry-common.h:56-57`) calls `switch_fpu_return()` on that flag before the
+task runs again. riscv and loongarch are safe for the blunter reason that their `end` restores
+`current`'s state over the kernel's.
+
+**§7.3's lazy model has no such unconditional reload, and that is the whole difficulty.** Its
+handler has a branch that writes nothing when the incoming context is already the owner, and a
+branch that writes nothing when there is no saved image — the same no-saved-image branch §7.7 exists
+to close, reappearing one privilege level down and out of reach of FP-R3. Setting `SR.FD` on the way
+out does not help: the trap it raises lands in that handler. So the section must write the FP-R1
+scrub values over every register it may have touched, itself, before re-enabling preemption, and
+must not rely on a later restore to do it.
+
+**K-R4 — A kernel FP critical section claims the FPU the same way a task does.** It must
+`unlazy_fpu()` the current task first — save the previous owner's state, exactly as riscv's
+`kernel_fpu_begin()` does `fstate_save(current, task_pt_regs(current))` — and then clear `SR.FD`
+(`arch/sh/include/asm/processor_32.h`'s `enable_fpu()`). Both helpers already exist in the tree.
+§2.4.1 of [../simd/spec.md](../simd/spec.md) rule **S-R1** applies to kernel code with no
+exemption: a kernel routine issuing FP SIMD needs FPU ownership for the same reason a user task
+does, and for a kernel routine "the current owner" is a *user task's* `FPSCR`.
+
+**K-R5 — Process context only, non-reentrant, preemption disabled.** The three limits
+`Documentation/core-api/floating-point.rst` states, adopted verbatim. **x86's wider allowance is
+not adopted**: `irq_fpu_usable()` permits softirq and hardirq-with-softirqs-enabled, and it is safe
+there because of `fpregs_lock()`'s `local_bh_disable()` *and* the unconditional reload K-R3
+describes, neither of which exists here. Nothing in this design earns a contract wider than the
+documented one.
+
+#### What is vacuous today, said plainly
+
+K-R2 through K-R5 have **no site** in `linux@origin/jcore`: no `CONFIG_SH_FPU` on this target, no
+kernel-FP API, and no caller that would use one. K-R1 has a site and is already satisfied, by code
+the build removes. **The `linux` implementation half of C1c is therefore not dispatchable**, for the
+same shape of reason C1a's and C1b's were not, and the reason is recorded in
+[../j4-execution-plan.md](../j4-execution-plan.md) rather than absorbed. What these rules buy now is
+that the task which lands `CPU_HAS_FPU` cannot land it without meeting them.
 
 ### 6.4 Full FPSCR layout. [T1]
 
@@ -1914,6 +2037,13 @@ writable only at `SR.HPRIV = 1`, with no guest-visible encoding at all:
   from any mode**, including a write by hyperprivileged software. Mode-independence is deliberate:
   a rule of the form "except when the hypervisor is restoring" is transition detection wearing a
   different hat, and the restore ends with an explicit `FPDS` write anyway.
+- **The SIMD FP datapath is one of those writers, and it is the one an implementer will miss.**
+  A governed FP operation under `VCSR.IEE = 1` OR-accumulates into `FPSCR.FLAG`
+  ([../simd/spec.md §2.4.1](../simd/spec.md)); that is an architectural write to `FPSCR` and sets
+  `FPDS` = `10` exactly as `LDS Rm,FPSCR` does. Named here because `simd/spec.md` §2.1 used to
+  say no SIMD instruction writes `FPSCR` at all, and an implementer who believed it would leave
+  `FPDS` reading CLEAN over a file the SIMD unit had modified — wrong in the direction the `11` →
+  `10` rule below exists to forbid.
 - **Only a hyperprivileged write clears it.** No guest instruction reads or writes `FPDS`, so it
   adds nothing to any guest-visible ABI and nothing to the SH-4 surface a guest can probe.
 - **`11` is read as `10`, and the direction is the point.** An unknown or corrupted state must
@@ -2308,6 +2438,19 @@ Inherited from j2-spec.md §9:
 
 ## 11. Revision history
 
+- **2026-09-09 — Wave-3 C1c** (no version bump; §7.7 landed the same day for
+  Wave-3 **C1b** without one either, and inventing a number for someone else's
+  change retroactively would be worse than the gap). §6.3's no-escape rule had
+  one: a SIMD block containing any FP operation reads `FPSCR.RM` and, under `VCSR.IEE = 1`,
+  writes `FPSCR.FLAG`, and `simd/spec.md` required FPU ownership only for the
+  FR/DR writeback of a horizontal reduction. §6.3 now names the SIMD case and
+  points at [../simd/spec.md §2.4.1](../simd/spec.md), which owns the rule;
+  §7.7's FP-R4 names the SIMD FP datapath as a `FPSCR` writer, which its
+  dirty-bit logic must be wired to. New §6.3.1 states the kernel-`fpu`
+  discipline for the FP file: the ban that `arch/sh` already implements, the
+  three things `arch/sh` owes if the ban is lifted, and the exit scrub that no
+  other architecture needs because no other architecture's return-to-user path
+  is a lazy branch that may write nothing.
 - **v1.1 (2026-08-25).** The Tier-2 FPU image is **136 bytes**, not 132.
   Corrected in §7.4 (which carries the detail as a `HISTORICAL` note), §1.1,
   §7.2's `fpu_image[]`, §7.6, §9.3 and Appendix A, and in
