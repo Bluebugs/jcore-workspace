@@ -120,9 +120,13 @@ LDC Rm, HSQCR    : 0100 mmmm 1001 1111   = 0x409F | m<<8
 STC HSQCR, Rn    : 0000 nnnn 1001 1111   = 0x009F | n<<8
 LDC Rm, PDID     : 0100 mmmm 1010 1111   = 0x40AF | m<<8
 STC PDID, Rn     : 0000 nnnn 1010 1111   = 0x00AF | n<<8
+LDC Rm, HTCR     : 0100 mmmm 1011 1111   = 0x40BF | m<<8
+STC HTCR, Rn     : 0000 nnnn 1011 1111   = 0x00BF | n<<8
+LDC Rm, HMRC     : 0100 mmmm 1100 1111   = 0x40CF | m<<8
+STC HMRC, Rn     : 0000 nnnn 1100 1111   = 0x00CF | n<<8
 ```
 
-This carves a new control-register family with capacity for up to 16 hyperprivileged control registers (slots 0–15). After allocation of HEMUB, HEMUM, HPAR, HMDR, HMCR, and HSQCR in slots 4–9 and `PDID` in slot 10 (§2.8), **five free slots (11–15) remain** for future hyperprivileged register extensions. All accesses in this family, executed with `SR.HPRIV=0`, raise the **hyperprivileged-register access exception**, delivered to the hypervisor and not delegatable to a guest. Its cause code, HEDR bit and vector are specified once, in [§3.4](#34-privileged-register-access-from-supervisor-mode), and are deliberately not restated here; the HEDR bit assignment is tabulated in [§2.3.1](#231-expevt-to-hedr-bit-mapping-normative). This enforces that only hyperprivileged code can read or write these registers.
+This carves a new control-register family with capacity for up to 16 hyperprivileged control registers (slots 0–15). After allocation of HEMUB, HEMUM, HPAR, HMDR, HMCR, and HSQCR in slots 4–9, `PDID` in slot 10 (§2.8), `HTCR` in slot 11 (§2.10) and `HMRC` in slot 12 (§2.11), **3 free slots** (13–15) remain for future hyperprivileged register extensions. All accesses in this family, executed with `SR.HPRIV=0`, raise the **hyperprivileged-register access exception**, delivered to the hypervisor and not delegatable to a guest. Its cause code, HEDR bit and vector are specified once, in [§3.4](#34-privileged-register-access-from-supervisor-mode), and are deliberately not restated here; the HEDR bit assignment is tabulated in [§2.3.1](#231-expevt-to-hedr-bit-mapping-normative). This enforces that only hyperprivileged code can read or write these registers.
 
 The choice of low nibble `0xF` avoids collision with SH-4's existing `0xE` (LDC/STC) and `0xB`/`0xA`/`0x7`/`0x3` (LDC.L/STC.L variants) low nibbles in the 0100 family.
 
@@ -354,7 +358,31 @@ PDID    Predictor Domain ID     6 bits, [31:6] RAZ/WI
 
 - The hypervisor writes `PDID` on every world switch, before `HRTE` into a guest.
 - Distinct guests MUST receive distinct `PDID` values. A hypervisor that runs more than 64 concurrent guests must recycle values, and must issue the predictor-invalidate control ([../ooo/j32ooo-spec.md §20.4](../ooo/j32ooo-spec.md)) when it does — the same generation problem `ASID_TAG` solves with its generation field, in a register too small to carry one.
-- An unvirtualized kernel writes `PDID` at `switch_mm`, or leaves it at 0 and relies on the invalidate control alone.
+- An unvirtualized kernel **cannot write `PDID`** and leaves it at 0, relying on the
+  predictor-invalidate control alone. *(Corrected 2026-09-09, Wave-3 **C2c**. This bullet
+  previously read "writes `PDID` at `switch_mm`, or leaves it at 0"; the first half was
+  unimplementable and the second is the whole contract.)*
+
+**The defect that correction closes, recorded because it was invisible from any one section.**
+`PDID` is allocated in the §2.2 hyperprivileged family, whose own rule is that *every* access in
+the family from `SR.HPRIV = 0` traps. §3.4 declares itself "the canonical description of that
+mechanism" and enumerated ten registers, **omitting `PDID`** — so by the canonical list, an
+`LDC Rm, PDID` from supervisor mode did not trap, and a **guest kernel** could choose its own
+predictor domain number. That is precisely the `ASIDR` property this section's *"Why this exists
+rather than reusing `ASIDR`"* paragraph gives as the reason `PDID` had to be a new register: a
+guest that can write the domain tag can set it to a co-resident or previous tenant's value and
+collapse the separation the tag exists to provide. The third software-contract bullet above was
+the sentence that made the omission look intentional, because an unvirtualized kernel runs at
+`SR.HPRIV = 0` — on a machine where `HPRIV` is never set (§6, §9 point 8) that write could only
+ever have trapped to a hypervisor that is not loaded. §3.4's enumeration and §9's verification
+point 7 now name `PDID`, and this bullet says what the unvirtualized kernel actually does, which
+is the alternative the bullet already offered.
+
+**Found by C2c** while choosing the register the tenancy check of §4.7.2 sits on, and it is the
+reason that check is **not** built on `PDID`. The generalisation is Wave-3 **C1b**'s: before
+siting a control on a register, check who can write it — C1b's case was `HEDR` delegation handing
+a trap to the guest, and this one is an enumeration in the section that claims to be canonical
+disagreeing with the family rule two sections above it.
 
 **Why this exists rather than reusing `ASIDR`.** Two reasons, both discovered only when speculation and virtualization were considered together:
 
@@ -371,7 +399,7 @@ Prior art: sun4v's `PRIMARY_CONTEXT`/`SECONDARY_CONTEXT` with the hyperprivilege
 
 Every register this specification calls "per-vCPU, saved and restored across VM exit and entry" —
 `SR.HPRIV`, `HSPC`, `HSSR`, `VBR_HYP`, `HEDR`, `HEMUB`, `HEMUM`, `HPAR`, `HMDR`, `HMCR`, `HSQCR`,
-`PDID` — assumes a core that runs one vCPU at a time.
+`PDID`, `HTCR` (§2.10) — assumes a core that runs one vCPU at a time.
 
 **On an FGMT implementation that assumption is false and the save/restore contract cannot hold.**
 [../ooo/j32ooo-spec.md §13](../ooo/j32ooo-spec.md) runs two thread contexts concurrently and
@@ -419,6 +447,19 @@ this list:
   which is the exact property the second bit exists to remove
   ([../bi-endian-spec.md §6.2](../bi-endian-spec.md)).
 
+**`HTCR` is on that list and `HMRC` is not, and the discrimination is `HLE`'s again.** `HTCR`
+names the tenant a vCPU belongs to, so it is per-vCPU and, on an FGMT implementation, per thread
+context. `HMRC` (§2.11) names an action on the physical core; it holds no vCPU's state and must
+not be added.
+
+**`HTCR` is written on every entry, never merely restored, and §4.7.2 is what makes the
+difference safe.** A *fresh* vCPU has no saved image — the case
+[../sq/spec.md §6.5](../sq/spec.md) and §4.7.1 item 7 exist for — so a hypervisor that only
+restores `HTCR` from a saved context enters a fresh vCPU with `VALID = 0`. That is the same
+omission C1a found in the store queue, and here it costs nothing: `VALID = 0` fails §4.7.2's
+check, the `HRTE` is refused, and the fresh vCPU does not run. The failure mode of forgetting is a
+vCPU that will not start, not a vCPU that starts in someone else's company.
+
 Neither bit exists in `jcore-cpu` today, and neither has been allocated a register or a bit
 position — [../bi-endian-spec.md §10](../bi-endian-spec.md) records that allocation as an open item
 owned by **§2.2 of this document**.
@@ -431,6 +472,72 @@ This mirrors [../mmu/hardware-spec.md](../mmu/hardware-spec.md)'s per-context re
 `ASIDR`, `PTEH`, `TEA`, `MMUFSR` and `TSBPTR`, already recorded in
 [../ooo/j32lt-spec.md §11](../ooo/j32lt-spec.md). The reasoning and the failure mode are identical:
 silent attribution of one context's state to another.
+
+### 2.10 HTCR — Hypervisor Tenancy Control Register
+
+```
+HTCR    Hypervisor Tenancy Control      [5:0] TENANT, [6] VALID, [7] VIOL, [31:8] RAZ/WI
+```
+
+**Per thread context** (§2.9), hyperprivileged, present on every implementation
+with more than one thread context. `CPUINFO` bit `[18] = TENANCY_CHECK` reports
+its presence.
+
+| Field | Written by | Meaning |
+|---|---|---|
+| `TENANT[5:0]` | hypervisor | The tenant this context's vCPU belongs to. Hardware never interprets the number; it only compares it against the other contexts' (§4.7.2) |
+| `VALID` | hypervisor | 1 when `TENANT` names a tenant. 0 means *no tenant assigned*, which §4.7.2 treats as failing the check rather than as matching everything |
+| `VIOL` | hardware sets, software clears | Sticky. Set on the returning context when §4.7.2 refuses its `HRTE`. Write 1 to clear; writing 0 leaves it set |
+
+**Reset value:** 0 — every context starts `VALID = 0`, `VIOL = 0`.
+
+**`TENANT` is six bits for `PDID`'s reason and inherits `PDID`'s recycling
+obligation** (§2.8): 64 concurrent tenants, and a hypervisor that recycles a
+number must complete a gang switch (§4.7.1) on every core the retired tenant
+occupied before the number is reused. The width is deliberately the same as
+`PDID`'s so a hypervisor can carry one tenant number, but the two registers are
+**not** interchangeable and §4.7.2 explains why the check is not built on `PDID`.
+
+**Why this is a new register and not a field of an existing one.** Every
+per-context register this specification already defines is either written by the
+guest (`ASIDR` — §5 of [design-spec.md](design-spec.md) leaves it untrapped, which
+is the property [../security/threat-model.md §1](../security/threat-model.md)
+builds its adversary on), or optional (`PDID`, §2.8: "Not required on the in-order
+J2/J32 cores", reported by `CPUINFO[17]`), or already carries a different owner's
+meaning (`TSBBR`, which a Configuration-A guest manages itself). A check built on
+a register the adversary writes is not a check, and a check built on an optional
+register is absent on exactly the implementations
+[../decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md) makes
+the default path — dual-issue **in-order** with 2-thread FGMT.
+
+Prior art: a short, hyperprivileged, software-written domain number per hardware
+context, compared by hardware rather than interpreted by it, is sun4v's
+`PRIMARY_CONTEXT`/`SECONDARY_CONTEXT` per strand with a distinct hyperprivileged
+nucleus context (UltraSPARC Architecture 2005, hyperprivileged edition) — the same
+source §2.8 cites for `PDID`, used here for the register's shape rather than for
+its predictor role. The comparison itself is prior-art'd in §4.7.2.
+
+### 2.11 HMRC — Hypervisor Microreset Control
+
+```
+HMRC    Hypervisor Microreset Control   [0] SCRUB, [31:1] RAZ/WI
+```
+
+**Per core**, not per thread context, and deliberately so: everything it clears is
+core-shared state that no thread context owns. It is therefore *not* in §2.9's
+save/restore list, for the reason that section gives about `HLE` — a register that
+describes the physical core rather than the vCPU is lost across a migration
+without losing anything.
+
+| Field | Behaviour |
+|---|---|
+| `SCRUB` | Write 1 to start the microreset of §4.7.1a. Reads 1 while the scrub is in progress and 0 when every structure in scope is clear. Writing 0 has no effect; the bit clears itself |
+
+**Reset value:** 0.
+
+The scrub's scope, its four constraints, and why it is a separate action from the
+per-structure invalidates already on §4.7.1's list are specified in §4.7.1a. This
+section allocates the register and nothing else.
 
 ## 3. New Instructions
 
@@ -507,7 +614,7 @@ The hypervisor's handler reads PTEH (the guest's intended VPN), ASIDR (the guest
 
 ### 3.4 Privileged register access from supervisor mode
 
-When `SR.HPRIV = 0`, attempting to access any hyperprivileged register of the §2.2 family (HSPC, HSSR, VBR_HYP, HEDR, HEMUB, HEMUM, HPAR, HMDR, HMCR, HSQCR) raises the **hyperprivileged-register access exception**: `EXPEVT = 0x1F0`, HEDR bit 2, which is hard-wired non-delegatable (§2.3), so the trap always goes to the hypervisor. It is delivered at **`VBR_HYP + 0x300`** (§4.2) — the dedicated offset for the hyperprivileged-register / sensitive-instruction trap. `linux-spec.md` §3.3 names the entry point `jcore_hyp_entry_0x300`.
+When `SR.HPRIV = 0`, attempting to access any hyperprivileged register of the §2.2 family (HSPC, HSSR, VBR_HYP, HEDR, HEMUB, HEMUM, HPAR, HMDR, HMCR, HSQCR, PDID, HTCR, HMRC) raises the **hyperprivileged-register access exception**: `EXPEVT = 0x1F0`, HEDR bit 2, which is hard-wired non-delegatable (§2.3), so the trap always goes to the hypervisor. It is delivered at **`VBR_HYP + 0x300`** (§4.2) — the dedicated offset for the hyperprivileged-register / sensitive-instruction trap. `linux-spec.md` §3.3 names the entry point `jcore_hyp_entry_0x300`.
 
 **This section is the canonical description of that mechanism.** It is one exception with one cause code, not a family: §2.2 (LDC/STC encodings) and §2.7 (`HSQCR` writes) both refer here rather than restating it, and §9 verification point 7 checks it by `EXPEVT` value. `0x1F0` is a code point of its own: it is **not** shared with the SH-4 slot-illegal-instruction cause, which keeps `0x1A0` and its `+0x100` vector exclusively (HEDR bit 13, delegatable). The two causes differ in both vector and EXPEVT, so no context rule or HEDR-bit inspection is needed to tell them apart.
 
@@ -1309,7 +1416,7 @@ Critical RTL verification:
 4. **HCALL from any mode:** Traps to VBR_HYP+0x180 with `EXPEVT = 0x1D0`, regardless of HPRIV. Behaviour of `HCALL` executed at HPRIV=1 is implementer-defined per §3.1 (no-op or illegal-instruction trap); verify whichever the implementation documents.
 5. **HRTE:** Correctly restores SR (including HPRIV bit) and PC.
 6. **HEDR delegation:** Exceptions with HEDR[cause]=1 deliver to VBR (S-mode); with HEDR[cause]=0 deliver to VBR_HYP (HS-mode). Always-to-hyp exceptions ignore HEDR.
-7. **Hyperprivileged register protection:** Access to any §2.2 hyperprivileged register (HSPC, HSSR, VBR_HYP, HEDR, HEMUB, HEMUM, HPAR, HMDR, HMCR, HSQCR) from S or U mode raises the hyperprivileged-register access exception with `EXPEVT = 0x1F0`, delivered to the hypervisor regardless of HEDR (bit 2 is non-delegatable).
+7. **Hyperprivileged register protection:** Access to any §2.2 hyperprivileged register (HSPC, HSSR, VBR_HYP, HEDR, HEMUB, HEMUM, HPAR, HMDR, HMCR, HSQCR, PDID, HTCR, HMRC) from S or U mode raises the hyperprivileged-register access exception with `EXPEVT = 0x1F0`, delivered to the hypervisor regardless of HEDR (bit 2 is non-delegatable).
 8. **Backward compatibility:** With HPRIV never set (Phase 1 binary), all behavior matches Phase 1 exactly.
 9. **Vector dispatch:** Correct offset selected based on EXPEVT and delivery destination.
 10. **Emulated-MMIO trap on aperture match:** A guest access (`MMUCR.AT = 0` bare-metal or `MMUCR.AT = 1`) whose translated PA satisfies `(PA & HEMUM) == HEMUB` traps to `VBR_HYP + 0x200` with `EXPEVT = 0x1E0`, `HPAR` holding the faulting **physical** address (bit-identical to the PA presented to the aperture comparator), and `HMCR` correctly capturing `{SQ, DIR, SIZE, BANK, REGN}` for every access in the **representable set of §4.6** — that is, for each addressing mode (`@Rn`, `@Rn+`/`@-Rn`, `@(disp,Rn)`, `@(R0,Rn)`, `@(disp,GBR)`) and each access width (byte, word, longword) of the plain `MOV.{B,W,L}` load and store family, and for the 32-byte store-queue burst. Accesses outside that set are covered by verification point 16 instead. A translated PA one byte outside the aperture on either boundary does not trap and reaches the bus normally.
