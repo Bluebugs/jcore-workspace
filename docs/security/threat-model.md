@@ -100,8 +100,12 @@ it eventually shares a board, an L2, and a core-over-time with any other tenant.
 process attacking its own guest kernel — the classic AnC/ASLR setting, and the
 one §7.1 turns on. (b) A tenant-controlled DMA-capable device, if the service
 ever offers device passthrough (§8, item **L2**). (c) A GPU shader, once the
-GPU exists — currently unprotected, and a launch blocker in its own right
-([j4-remediation-plan.md §C2](../j4-remediation-plan.md)).
+GPU exists — a launch blocker in its own right
+([j4-remediation-plan.md §C2](../j4-remediation-plan.md)). **Specified, unbuilt
+since 2026-09-09:** the isolation mechanism is now stated
+([simd/gpu/simd-gpu-spec.md §16](../simd/gpu/simd-gpu-spec.md), Wave-3 **C2a**),
+covering **6** address producers; there is still no GPU RTL in either repo to run
+it on, and the outer boundary it leans on is **L2**, which is `NOT MET`.
 
 ---
 
@@ -817,8 +821,33 @@ from tenant A, gang-switch, and prove tenant B cannot recover it. A list with no
 per-structure test is a list, not a control — which is this item's own argument
 turned on itself.
 
+**A scoping question this item does not answer, raised by C2a on 2026-09-09 and
+recorded rather than decided here.** The requirement says "one core" and "Cross-
+tenant fine-grained MT is out of bounds for launch". The GPU's SM is described by
+its own architecture as a **barrel-threaded jcore core** running the existing
+SIMD datapath as its lane ISA, holding **4–8 warps resident** so the scheduler
+can issue a ready one each cycle
+([simd/gpu/architecture.md §1.1, §3.1, §3.2](../simd/gpu/architecture.md)). That
+is fine-grained MT by this document's own definition. So:
+
+- **If an SM is "a core" for L1**, then a GPU with warps from two tenants
+  resident is out of bounds at launch *independently of C2a* — and C2a's windows
+  are then intra-tenant separation plus defence in depth, not the cross-tenant
+  mechanism [j4-remediation-plan.md §C2](../j4-remediation-plan.md) asks them to
+  be. The only launch-legal GPU is the single-tenant one
+  ([simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md) G-R10.3).
+- **If it is not**, the GPU needs an L1-equivalent that nobody has written, and
+  its absence is invisible because L1 looks satisfied.
+
+L1's ratification reaches only CPU-side text
+([hypervisor/hardware-spec.md §4.7](../hypervisor/hardware-spec.md),
+[glossary.md §4](../glossary.md)), so the text does not decide it either way. It
+belongs to **C2c**, which owns this item, or to a revision of this document — not
+to C2a, which would be marking its own homework by choosing the reading that lets
+its mechanism do the job it was scoped to do.
+
 **Gated Wave-3 items:** C2c (microreset), C2b (predictor invalidate), C1a/C1b
-(the added clause).
+(the added clause), C2a (the scoping question above).
 
 ### L2 — IOMMU default-deny
 
@@ -1070,7 +1099,7 @@ which bar they must clear.
 | **C1a** SQ residue *(design landed 2026-09-09; no RTL possible — see §7.8)* | **L6**, and **L1**'s added clause | The gang-switch list of [hypervisor §4.7.1](../hypervisor/hardware-spec.md) did not mention the store queue; adding the scrub without adding it to *that list* would have left L1 unmet. It is item 7 there now. The clause most likely to be missed **next** is that neither bar item moved to `MET`: there is no store-queue RTL to test |
 | **C1b** eager FP/SIMD switch *(design landed 2026-09-09; no RTL possible — see §7.8)* | **L3**, **L6**, **L1**'s added clause | L3's *no-saved-image* branch — an eager save/restore between two established owners passes without touching it (§7.8). The clause most likely to be missed **next** is that the branch is not the only one: `HEDR[3]`/`HEDR[24]` delegation hands the first-use trap to the guest, so a scrub written into that handler is switched off by configuration |
 | **C1c** FPSCR ownership *(design landed 2026-09-09; **the fix is above this bar, not on it** — see §8 L3)* | **L3**, and it turns out **none of L3** | That the defect is **not** cross-tenant. C1b's FP-R3 already scrubs `FPSCR`, so the exposure is between two tasks inside one guest: wrong rounding mode from the parked FPU owner's `FPSCR.RM`, sticky flags accumulated into it. The clause most likely to be missed **next** is [simd/spec.md §2.4.1](../simd/spec.md) **S-R2** — the natural optimisation is to require ownership only when `VCSR.IEE = 1`, since that is when `FPSCR` is *written*, and it leaves the `FPSCR.RM` read open in the **default** mode. The second is **S-R3**: §3.2's prefix encodes `H`/`ww`/`rrr`/`N` and nothing that says FP, so "checked at prefix decode" is unimplementable without scanning the block's governed opcodes |
-| **C2a** GPU protection | **L2** | L2 is `N/A` only while no tenant-influenced DMA master exists. The GPU *is* one, so C2a flips L2 to blocking |
+| **C2a** GPU protection *(design landed 2026-09-09; no RTL possible — no GPU exists in either repo)* | **L2**, **L6**, and a scoping question against **L1** | L2 is `N/A` only while no tenant-influenced DMA master exists. The GPU *is* one, so C2a flips L2 to blocking — and C2a does **not** move L2, because L2 is about the IOMMU and the GPU's windows are inside the GPU. The clause most likely to be missed **next** is that the row's single bar item was wrong in two directions. **L6:** [simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md) **G-R8** makes the tile buffer, texture cache and per-warp register files ownership-change sites, so L6 gains three *specified, unbuilt* structures; G-R7 adds no `undefined` site because it defines the blocked-access result. **L1:** see §8 L1's scoping note — L1's own text may already bar the multi-tenant GPU that C2a is written to enable, which is not C2a's to decide |
 | **C2b** speculation coverage | **L4**, **L7** part 4 | The **TSB walk** is a frontend transmitter (§7.2), and the I-side arm is on the *in-order* core too. Also: §12's code-level trigger — making the walk uncacheable flips §7.1 |
 | **C2c** FGMT microreset | **L1** | The detector. "An unenforceable rule with no detector is not a control" |
 | **C2d** IOMMU | **L2** | Two of the five clauses are inherited without C0 backing and owe a derivation (§7.7) |
@@ -1082,11 +1111,11 @@ which bar they must clear.
 | Item | Status | Blocking |
 |---|---|---|
 | L1 | **NOT MET** — rule specified; gang-switch list complete as a specification (item 7 C1a, item 8 C1b); no detector, and no item on the list demonstrated | C2c |
-| L2 | **NOT MET** — reset is all-bypass | C2d |
+| L2 | **NOT MET** — reset is all-bypass, and that reset is a *specification* value: no IOMMU RTL exists in `jcore-cpu` or `jcore-soc` at `origin/master` (case-insensitive `iommu`, `bmid`: zero files). C2a's design landed and does **not** move this item — its windows sit inside the GPU, one master port down from where L2 acts | C2d |
 | L3 | **NOT MET** — eager-across-tenants specified by C1b; *specified, unbuilt* — no FPU and no SIMD unit exists to run the five residue tests on. C1c's design landed and does **not** bear on this item: its defect is intra-tenant (§8 L3) | the RTL that builds an FPU |
 | L4 | **NOT MET** — specified for cores that do not exist; I-side walk arm uncovered on the core that does | C2b |
 | L5 | **NOT MET** — way-partitioning specified; metadata, L2 MSHRs, bandwidth, KSM, flush-op gating all open | C2e |
-| L6 | **NOT MET** — **1** open `undefined` site, was three; the store-queue and FP/SIMD sites are *specified, unbuilt* — the scrubs are stated and `jcore-cpu` has neither queues nor an FPU to run the residue tests on | C2e, and the RTL that builds the queues and the FPU |
+| L6 | **NOT MET** — **1** open `undefined` site, was three; the store-queue and FP/SIMD sites are *specified, unbuilt* — the scrubs are stated and `jcore-cpu` has neither queues nor an FPU to run the residue tests on. C2a adds three more *specified, unbuilt* sites and no new `undefined` one: the GPU tile buffer, texture cache and per-warp register files ([simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md) G-R8) | C2e, and the RTL that builds the queues, the FPU and the GPU |
 | L7 | **NOT MET** — both preconditions absent; walker already merged | hypervisor Phase 3 |
 
 Seven of seven. That is the correct reading of the current state and it is not a

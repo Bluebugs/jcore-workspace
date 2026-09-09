@@ -906,6 +906,18 @@ fetches fill. Each resident context has a numeric **`GCID`** and a window:
 >    handover between single tenants is precisely an ownership change. This is
 >    recorded as a supported degraded mode rather than left as an implication, so
 >    that shipping it is a decision somebody made.
+> 4. **The multi-tenant mode needs one more thing that is not C2d.** **L1** reads
+>    "no two tenants occupy thread contexts of one core at any instant" and
+>    "cross-tenant fine-grained MT is out of bounds for launch", and an SM is a
+>    barrel-threaded core holding 4–8 warps resident
+>    ([architecture.md §1.1, §3.1](architecture.md)). Whether an SM is "a core"
+>    for L1 is undecided in the text, and the two readings differ on whether the
+>    multi-tenant mode is legal at launch at all
+>    ([../../security/threat-model.md §8, item L1](../../security/threat-model.md)).
+>    Until that is resolved by whoever owns L1, clause 3's single-tenant mode is
+>    the only mode this section claims is launch-legal. G-R1..G-R9 remain
+>    required in it: they are what separates *processes* inside the one tenant,
+>    and what keeps a shader bug inside the tenant that wrote it.
 
 ### 16.4 Rejected alternatives
 
