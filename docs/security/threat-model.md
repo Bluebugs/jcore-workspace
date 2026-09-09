@@ -1141,7 +1141,20 @@ nobody maintains.
    this and explains why — "Both properties fail together and silently; neither
    produces a fault of its own."
 4. The walker's guest-observable counters at `0xFF000054` are **virtualized or
-   denied**, never forwarded raw.
+   denied**, never forwarded raw — **and `0xFF000058` with them.** *(Widened by
+   C2b, 2026-09-09.)* `TLBINST` at `0xFF000058` is a second read-only counter of
+   exactly this kind ([soc/p4-mmio-map.md](../soc/p4-mmio-map.md)), reporting ITLB
+   and DTLB slot writes, and it is the *sharpest* of the two for this bar: it counts
+   the speculative DTLB installs of §7.2 directly, and it counts slots **actually
+   written**, so a skipped speculative install is absent from it and "nothing
+   happened on the D side" is readable from software. That map already says a
+   hypervisor may deny it "for the same guest-observability reason as `TSBCNT`" —
+   **may** is the gap this part closes, since a permission is not a requirement.
+   Privilege is not the boundary: P4 is unreadable to a *user* process, and the
+   adversary of §1 is a guest kernel. The clause's own wording is what generalises —
+   *the walker's guest-observable counters*, plural and by role — so an
+   implementation that virtualizes the one address the clause used to name has met
+   the letter of an older draft and not this item.
 
 **Why this is a new bar item rather than a Wave-3 detail.** Every other item on
 this list buys resistance to a *side channel*. This one is the difference
@@ -1165,7 +1178,7 @@ which bar they must clear.
 | **C1b** eager FP/SIMD switch *(design landed 2026-09-09; no RTL possible — see §7.8)* | **L3**, **L6**, **L1**'s added clause | L3's *no-saved-image* branch — an eager save/restore between two established owners passes without touching it (§7.8). The clause most likely to be missed **next** is that the branch is not the only one: `HEDR[3]`/`HEDR[24]` delegation hands the first-use trap to the guest, so a scrub written into that handler is switched off by configuration |
 | **C1c** FPSCR ownership *(design landed 2026-09-09; **the fix is above this bar, not on it** — see §8 L3)* | **L3**, and it turns out **none of L3** | That the defect is **not** cross-tenant. C1b's FP-R3 already scrubs `FPSCR`, so the exposure is between two tasks inside one guest: wrong rounding mode from the parked FPU owner's `FPSCR.RM`, sticky flags accumulated into it. The clause most likely to be missed **next** is [simd/spec.md §2.4.1](../simd/spec.md) **S-R2** — the natural optimisation is to require ownership only when `VCSR.IEE = 1`, since that is when `FPSCR` is *written*, and it leaves the `FPSCR.RM` read open in the **default** mode. The second is **S-R3**: §3.2's prefix encodes `H`/`ww`/`rrr`/`N` and nothing that says FP, so "checked at prefix decode" is unimplementable without scanning the block's governed opcodes |
 | **C2a** GPU protection *(design landed 2026-09-09; no RTL possible — no GPU exists in either repo)* | **L2**, **L6**, and a scoping question against **L1** | L2 is `N/A` only while no tenant-influenced DMA master exists. The GPU *is* one, so C2a flips L2 to blocking — and C2a does **not** move L2, because L2 is about the IOMMU and the GPU's windows are inside the GPU. The clause most likely to be missed **next** is that the row's single bar item was wrong in two directions. **L6:** [simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md) **G-R8** makes the tile buffer, texture cache and per-warp register files ownership-change sites, so L6 gains three *specified, unbuilt* structures; G-R7 adds no `undefined` site because it defines the blocked-access result. **L1:** see §8 L1's scoping note — L1's own text may already bar the multi-tenant GPU that C2a is written to enable, which is not C2a's to decide |
-| **C2b** speculation coverage *(design landed 2026-09-09; **the implementation half is dispatchable in part, which no earlier Wave-3 item was** — see §8 L4)* | **L4**, **L7** part 4 | The **TSB walk** is a frontend transmitter (§7.2), and the I-side arm is on the *in-order* core too. Also: §12's code-level trigger — making the walk uncacheable flips §7.1. The clause most likely to be missed **next** is that three of this row's four named mechanisms target structures no repository contains *and are already specified* for the paused design points, so an implementer who works the list in order builds nothing that runs; the fourth, delayed speculative TLB/PTW fill, is the whole of the live work. The second is that an abort path in `core/tlb_walk.vhd` looks like the same mitigation and is not — [mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) **W-R2**: it closes the two installs and leaves the cacheable TSB reads, which are §7.1's observable |
+| **C2b** speculation coverage *(design landed 2026-09-09; **the implementation half is dispatchable in part, which no earlier Wave-3 item was** — see §8 L4)* | **L4**, **L7** part 4 | The **TSB walk** is a frontend transmitter (§7.2), and the I-side arm is on the *in-order* core too. Also: §12's code-level trigger — making the walk uncacheable flips §7.1. The clause most likely to be missed **next** is that three of this row's four named mechanisms target structures no repository contains *and are already specified* for the paused design points, so an implementer who works the list in order builds nothing that runs; the fourth, delayed speculative TLB/PTW fill, is the whole of the live work. The second is that an abort path in `core/tlb_walk.vhd` looks like the same mitigation and is not — [mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) **W-R2**: it closes the two installs and leaves the cacheable TSB reads, which are §7.1's observable. On **L7 part 4**, the clause named one counter address and there are two: `TLBINST` at `0xFF000058` counts the speculative DTLB installs this task is about, and it is the register a reader arriving from C2b will meet first |
 | **C2c** FGMT microreset | **L1** | The detector. "An unenforceable rule with no detector is not a control" |
 | **C2d** IOMMU | **L2** | Two of the five clauses are inherited without C0 backing and owe a derivation (§7.7) |
 | **C2e** cache isolation | **L5**, **L6** | Five mechanisms, five tests. The MSHR one must target the **L2** pool, not the core-side pool that already has evidence |
@@ -1181,7 +1194,7 @@ which bar they must clear.
 | L4 | **NOT MET** — the I-side walk arm is now *specified* ([mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) W-R1–W-R5, C2b) and unimplemented; the frontend rules of the paused specs are tightened but remain specified for cores that do not exist. **Not the same category as L2/L3/L6:** the transmitters are on `origin/master` today, so what is missing is RTL against shipping hardware, not hardware to test | C2b |
 | L5 | **NOT MET** — way-partitioning specified; metadata, L2 MSHRs, bandwidth, KSM, flush-op gating all open | C2e |
 | L6 | **NOT MET** — **1** open `undefined` site, was three; the store-queue and FP/SIMD sites are *specified, unbuilt* — the scrubs are stated and `jcore-cpu` has neither queues nor an FPU to run the residue tests on. C2a adds three more *specified, unbuilt* sites and no new `undefined` one: the GPU tile buffer, texture cache and per-warp register files ([simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md) G-R8) | C2e, and the RTL that builds the queues, the FPU and the GPU |
-| L7 | **NOT MET** — both preconditions absent; walker already merged | hypervisor Phase 3 |
+| L7 | **NOT MET** — both preconditions absent; walker already merged. C2b widened **part 4** to a second counter (`0xFF000058`, `TLBINST`) without moving the item: the register is decoded in RTL and nothing virtualizes either address | hypervisor Phase 3 |
 
 Seven of seven. That is the correct reading of the current state and it is not a
 crisis: none of the speculative hardware exists yet, the exposure is latent, and

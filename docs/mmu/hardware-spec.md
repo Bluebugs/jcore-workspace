@@ -1180,10 +1180,15 @@ answered.
   inside one tenant — [security/threat-model.md §8](../security/threat-model.md)'s
   **L1** places both in the same tenant, exactly as it does for §7.1's AnC
   primitive — so no item of that bar requires this to be closed, and it is filed
-  in §10 with the other intra-guest channel rather than fixed. `TLBINST`
-  ([soc/p4-mmio-map.md](../soc/p4-mmio-map.md)) makes it directly countable, but
-  `TLBINST` is in P4 and P4 is privileged, so the counter is not the channel; the
-  channel is the DTLB hit it records.
+  in §10 with the other intra-guest channel rather than fixed. **The counter is a
+  separate matter and is not disposed of by privilege.** `TLBINST`
+  ([soc/p4-mmio-map.md](../soc/p4-mmio-map.md)) reports DTLB slot writes and
+  therefore reports shadow installs directly. It sits in P4, which a *user* process
+  cannot read — but the adversary of
+  [security/threat-model.md §1](../security/threat-model.md) is a **guest kernel**,
+  which runs privileged inside its guest, so P4 residency is not the boundary here
+  and trapping is. That is precisely the obligation of that document's **L7** part
+  4, and part 4 names only `TSBCNT`; the widening is recorded there.
 
 #### What this costs, and the experiment that prices it
 
