@@ -76,7 +76,11 @@ which is why the `cache/l2-spec.md` finding above is handled as a retraction,
 not a re-tag — see that file's diff.
 
 **3. `` `[FPGA]` `` names the Phase-1 target precisely: the ULX3S board, a
-Lattice ECP5, ~40 MHz.** A figure measured on a different FPGA family —
+Lattice ECP5, ~40 MHz.** *(The "~40 MHz" in this rule is retired by [0009](0009-in-order-fgmt-is-the-default-path.md) — it is J2's
+measured row and J2 has no MMU, so it was never the target of a roadmap
+building J4. The rule itself is untouched and its substance never depended on
+the number: what makes a figure `` `[FPGA]` `` is the **part**, not the clock.
+The measured per-variant baseline is [platform-baseline.md §3](../platform-baseline.md).)* A figure measured on a different FPGA family —
 Spartan, Artix, Kintex, Virtex, all Xilinx, none of them what this project
 builds on — is not made `` `[FPGA]` `` by tagging it, because the tag would then
 assert it describes current hardware, which it does not. **The second half of

@@ -66,7 +66,12 @@ the previous convention kept it: **deleted.** This is the half of
 its third point — and the two that do not are its first and second.
 
 **4. Budgets, goals and targets are kept, and must read as goals.** A target
-frequency (~400 MHz+ `` `[ASIC]` ``, ~40 MHz `` `[FPGA]` ``), an area budget (the
+frequency (~400 MHz+ `` `[ASIC]` ``, ~40 MHz `` `[FPGA]` `` — *this example is
+stale as of [0009](0009-in-order-fgmt-is-the-default-path.md): the real `` `[FPGA]` `` goal is `ECP5_TARGET_MHZ`,
+higher than 40, and it is now code-bound in
+[fact-ownership.md](../fact-ownership.md). The rule is unaffected; it is the
+illustration that was wrong, and a rule about keeping goals illustrated with a
+goal nobody set is worth correcting*), an area budget (the
 ULX3S 85F's 208 EBRs, a LUT4 allowance), a tier-selection intent — these are
 not results and were never claims about a measurement. They stay, because the
 project needs something to aim at and to be judged against. Where one could be

@@ -23,7 +23,14 @@ plus two cross-cutting tracks that make the above trustworthy:
 
 1. **Two platforms, stated explicitly, everywhere.** Phase-1 is the ULX3S /
    ECP5 FPGA at ~40 MHz: the goals there are **correctness, area (LUT/BRAM
-   fit), and boot-to-Linux**, and **energy is explicitly out of scope**. The
+   fit), and boot-to-Linux**, and **energy is explicitly out of scope**.
+   *(The "~40 MHz" in this sentence is retired — it is J2's row, and J2 has no
+   MMU. The measured `[FPGA]` baseline, per core variant, is owned by
+   [platform-baseline.md §3](platform-baseline.md), which carries the
+   retirement; the Phase-1 deliverable is restated against it by
+   [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md) D4.
+   Everything else in this principle stands, including the goals list, which is
+   what the rest of the plan actually leans on.)* The
    later ASIC (a *new* design — the gf180 target is only a proof the RTL can
    reach an ASIC flow, not the product) aims at ~400 MHz+ where **frequency and
    energy efficiency** become first-class. Every quantitative claim in every
@@ -486,6 +493,20 @@ compatibility policy has to say:
 
 ### B3. Re-frame the microarchitecture roadmap around the two platforms
 
+> **B3 — decided 2026-09-08. The decision is [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md) and the question below is answered there: dual-issue in-order + 2-thread switch-on-miss FGMT is the default path, new OoO RTL effort pauses, and the reopening trigger is recorded.** The record went to `decisions/` rather than inline because the path it makes the default has no spec to be inline *in*, and because the two specs it most affects are the two it pauses.
+>
+> **Four corrections to the text below, recorded rather than silently applied**, since three of them are to *this* section's own premises and the fourth is to the evidence §E.1 supplies it.
+>
+> **(1) "which core actually fits and boots at ~40 MHz" has no answer, because ~40 MHz is not a J4 number.** Against [platform-baseline.md §3](platform-baseline.md) — measured, and code-bound to `jcore-cpu@master`'s `synth-cpu` workflow — ~40 MHz is the **J2** row, and J2 has no MMU, so it cannot host a hypervisor, a guest or a tenant. The core this project builds is **J4**, and it measures materially lower. There is no J4 measurement, floor or goal equal to 40 MHz anywhere in that workflow; the only 40 in it is J2's `ECP5_FMIN_MHZ`. The figure entered this plan at guiding principle 1 and propagated to [decisions/0004](decisions/0004-platform-tag-convention.md) rule 3, [decisions/0005](decisions/0005-unmeasured-figures-are-removed.md) rule 4 and two SIMD implementation guides. It is retired; platform-baseline.md §3 owns the replacement.
+>
+> **(2) "adding dual-issue or FGMT" is not free, and the margin it spends is now measured.** The J4 CI gate reads **one** `nextpnr` seed against its floor, on a distribution whose seed-to-seed `sd` the workflow puts at ~1.2 MHz. Under the placement weighting CI runs, the 16-seed minimum clears the floor by about one `sd`; under `nextpnr`'s default weighting the 16-seed minimum fell *below* it. So the Phase-1 deliverable is a core with roughly one standard deviation of timing headroom, and every structure the default path adds comes out of that. Recorded here because §B3 asked for the Phase-1 deliverable to be stated and this is the part of the answer that is easy to omit.
+>
+> **(3) The "~10× the LUTs on the ECP5" in the paragraph below does not survive checking, and §E.1 is where it comes from.** See the correction note at §E.1. In one line: the survey §E.1 names measured a different device family, and the sentence's "on an 84K-LUT ECP5-85F" is not that survey's platform. The area leg of this section's argument is therefore weaker than it reads. **The decision still went the way §B3 expected**, because it never rested on that leg alone and because what it does is shift a burden of proof rather than close a question — 0009 §Context says so explicitly, including what the honest outcome would have been if the area leg had been load-bearing.
+>
+> **(4) "The OoO fails at hiding SDRAM latency (its stated purpose) regardless of platform" is the strongest claim here and it checked out.** Mutlu, Stark, Wilkerson & Patt, HPCA 2003, pp. 129–140: a machine with a 128-entry window "spends 71% of its cycles in full instruction window stalls", and removing the main-memory latency rather than the scheduler is what fixes it. One precision point that makes the claim *stronger* than §E.1 states it: the 128 entries are micro-operations, not instructions.
+>
+> **What did not change.** The direction, the burden-of-proof flip and the pause are all as this section directs. The reversal is in one of the three supporting arguments, not in the conclusion.
+
 Fold the dual-target principle into the service plan and the OoO/FGMT specs.
 Concretely: state the Phase-1 FPGA deliverable (which core actually fits and
 boots at ~40 MHz), and separate it from the ASIC ambitions (frequency/energy).
@@ -785,6 +806,37 @@ cost.
   *removes* hazard/forwarding logic and can raise Fmax (Fort, FCCM 2006;
   Labrecque, FPL 2007). MIPS 34K measured **~60% throughput for ~14% area** from
   FGMT on an in-order Linux core (EE Journal, 2006).
+
+  > **Two of the three citations in this bullet were checked at source on
+  > 2026-09-08 by Wave-2 **B3** and do not hold. The bullet is left as written,
+  > per this plan's practice of correcting rather than rewriting the review text
+  > it quotes; the corrections are load-bearing and are in
+  > [decisions/0009 §Context](decisions/0009-in-order-fgmt-is-the-default-path.md)
+  > and §Citations that did not survive checking.**
+  >
+  > **The device is wrong.** The survey is Dörflinger et al., *A Comparative
+  > Survey of Open-Source Application-Class RISC-V Processor Implementations*,
+  > ACM Computing Frontiers (CF '21) — and its abstract states its results are
+  > for "the Xilinx Virtex UltraScale+ family and GlobalFoundries 22FDX ASIC
+  > technology". There is no ECP5 in it, and UltraScale+ LUTs are 6-input where
+  > the ECP5's are 4-input, so "84K-LUT ECP5-85F" is not a restatement of that
+  > survey. [decisions/0004](decisions/0004-platform-tag-convention.md) rule 3
+  > names this exact defect by part family. What survives is that a third-party,
+  > peer-reviewed comparison under forced-common parameters puts an
+  > out-of-order RISC-V core at a *multiple* of an in-order one on both FPGA and
+  > ASIC — evidence about the shape of the cost, not a magnitude for this board.
+  >
+  > **The MIPS 34K attribution is wrong and the result is narrower than stated.**
+  > It is Kissell, *Demystifying multithreading and multi-core*, **EDN, 26
+  > September 2007** — not EE Journal 2006 — and it reads: "an increase in area
+  > of 14% can buy an increase of throughput of 60% relative to a comparable
+  > single-threaded core (as measured using the EEMBC PKFLOW and OSPF
+  > benchmarks, run sequentially on a MIPS32 24KE core versus concurrently on a
+  > **dual-threaded** MIPS32 34K core)". A vendor-authored trade-press claim on
+  > two networking kernels, not a general result. Note what it *is*, though:
+  > two threads on an in-order embedded core is precisely the configuration
+  > §B3's decision adopts, so this is the piece of §E.1 that transfers most
+  > directly to J-Core and it was the piece cited least precisely.
 - **The Niagara precedent.** Kongetira et al., *Niagara*, IEEE Micro 2005 —
   8 single-issue in-order cores × 4 threads, zero-cycle switch, no per-core branch
   predictor, chosen *specifically* because memory stalls dominate and OoO gives

@@ -96,8 +96,8 @@ Family naming uses the convention: **J<width>[-<variant>]** where width is the i
 | **J2-MT2x2**| J2 + dual-core + MSI L1 coherence         | none               | Tier 0                | none           | no  | FGMT 2-way  | proposal      |
 | **J3**      | SH-2 + MMU                                | yes (SH-4 model)   | Tier 0                | none           | no  | none        | roadmap       |
 | **J32**     | SH-2 + MMU + (optional FPU/SIMD coprocs)  | yes                | Tier 1 (SH4-complete) | Tier 0+1       | no  | none        | planned       |
-| **J32-OOO** | J32 + 2-wide out-of-order                 | yes                | Tier 1                | Tier 0+1       | yes | FGMT 2-way  | spec'd        |
-| **J32-LT**  | J32 + 2-wide light OoO (no rename)        | yes                | Tier 1                | Tier 0+1       | light | FGMT 4-way (barrel) | spec'd        |
+| **J32-OOO** | J32 + 2-wide out-of-order                 | yes                | Tier 1                | Tier 0+1       | yes | FGMT 2-way  | spec'd, **paused** ([0009](decisions/0009-in-order-fgmt-is-the-default-path.md)) |
+| **J32-LT**  | J32 + 2-wide light OoO (no rename)        | yes                | Tier 1                | Tier 0+1       | light | FGMT 4-way (barrel) | spec'd, **paused** ([0009](decisions/0009-in-order-fgmt-is-the-default-path.md)) |
 | **J32-FM**  | J32-OOO + full memory subsystem (L2 v2)   | yes                | Tier 1+2 (hyp-aware)  | Tier 0+1+2     | yes | FGMT 2-way  | target        |
 | **J64**     | J32-FM + wider integer regs (per §3 naming) + COMPAT | yes ([VA width](mmu/design-spec.md)) | Tier 1+2              | Tier 0+1+2+3   | yes | FGMT 2-way  | research      |
 
@@ -107,6 +107,20 @@ Notes:
 - J32-OOO is the spec name used in [docs/ooo/j32ooo-spec.md](ooo/j32ooo-spec.md); product-shipped variant is J32-FM once memory subsystem is reconciled.
 - **J32-LT** ([docs/ooo/j32lt-spec.md](ooo/j32lt-spec.md)) is a *sibling* of J32-OOO, not a successor. "Light OoO" means in-order issue with out-of-order completion: a future-file RAT maps architectural registers to ROB slots, but there is **no register renaming**, no physical register file, and no issue queue. It targets throughput per joule via 4 thread contexts rather than single-thread latency via renaming. Neither variant supersedes the other; they are separate design points at comparable area.
 - J64 OoO is out of scope for the ULX3S 85F (would consume the whole device).
+- **"Paused" is a status, not a supersede — added 2026-09-08 by
+  [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md).** Both
+  OoO rows keep every other cell they had, because nothing about either design
+  changed: what changed is that the project's default microarchitecture path is
+  now **dual-issue in-order with 2-thread switch-on-miss FGMT**, and RTL effort
+  against the two out-of-order specs stops until 0009's trigger fires. The
+  specs stay live and are not superseded.
+- **The default path has no row in this table, and that is correct rather than
+  an omission.** A product point is something with an FPU tier, a SIMD tier and
+  a threading model, and the default path has no specification yet from which to
+  read those off — 0009 §What this does not decide says so and names who writes
+  it. A row invented ahead of the spec would be this document doing exactly what
+  [decisions/0001](decisions/0001-one-authority-per-fact.md) demoted it for. It
+  gets a row when it gets a spec.
 
 ---
 
@@ -115,7 +129,7 @@ Notes:
 This project uses **one and only one** threading term: **FGMT**.
 
 - **FGMT — Fine-Grained Multi-Threading.** Each cycle the front-end selects one hardware thread context and issues instructions from it. On an *N*-wide machine the selected thread fills all *N* issue slots or leaves the surplus empty; slots are never filled from a second thread in the same cycle (that would be SMT — see below). Prior art: CDC 6600 PPU barrel processor (1964); Tera MTA (1990); SPARC T1 "Niagara" specification material pre-2006.
-  - **FGMT 2-way** (J2-MT2x2, J32-OOO, J32-FM, J64): each cycle picks one of two thread contexts. Selection is a ready-thread arbiter.
+  - **FGMT 2-way** (J2-MT2x2, J32-OOO, J32-FM, J64, and the default path of [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md)): each cycle picks one of two thread contexts. Selection is a ready-thread arbiter. On the default path the arbiter switches **on a cache miss** rather than every cycle — which is *block* or *coarse* multithreading in the vocabulary of the prior art, and the pre-2006 source that draws the distinction against cycle-by-cycle interleaving by name is MIT Alewife's Sparcle (Agarwal et al., IEEE Micro 13(3), June 1993, pp. 48–61). It is still FGMT by this section's naming rule, since the rule is about how many threads may fill one cycle's issue slots and not about how often the choice changes.
   - **FGMT 4-way, barrel** (J32-LT): the thread count equals the front-end depth ahead of issue, so each front-end stage holds a different thread each cycle and thread identity is *positional* rather than tagged. Selection degenerates to a counter while all threads are ready. See [ooo/j32lt-spec.md §3.1](ooo/j32lt-spec.md). Pure barrels collapse single-thread throughput to `1/depth`, so J32-LT applies a **period floor** — a thread is granted a fetch slot no more often than once every `max(k, 2)` cycles for *k* ready threads — which costs the positional-identity property below `k = 4`. Prior art for the barrel proper: CDC 6600 peripheral processors (Thornton 1964).
 - "SMT" (Simultaneous Multi-Threading, where multiple threads issue in the *same* cycle) is **not used** in this project. Earlier drafts mixed the terms; FGMT is now the only correct term. Update old text on sight.
 - "MT", "barrel", "hardware threads" are colloquial; FGMT is the spec term.

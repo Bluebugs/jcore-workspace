@@ -324,6 +324,21 @@ themselves are kept, as bounds, because the *spread* is the finding:
 
 They differ by ~4× and neither is measured, so neither wins — 0005 rule 6.
 
+**A third number circulates and it is not a candidate at all, because it is not
+ours.** [j4-remediation-plan.md §E.1](j4-remediation-plan.md) cites a published
+RISC-V soft-core survey (Dörflinger et al., ACM Computing Frontiers 2021)
+putting BOOM, an out-of-order core, at a multiple of Rocket, an in-order one.
+Real measurement, real evidence about the shape of the cost — of **BOOM against
+Rocket, by its authors, on the Xilinx Virtex UltraScale+ family** (and GF 22FDX
+for the ASIC leg). §E.1 states it as "~10× … on an 84K-LUT ECP5-85F"; that
+device attribution was checked against the survey on 2026-09-08 and does not
+hold, so it is not a bound for this table and must never be listed as one.
+UltraScale+ LUTs are 6-input and the ECP5's are 4-input, so it is not even the
+same unit as the column heading. See
+[decisions/0009 §Context](decisions/0009-in-order-fgmt-is-the-default-path.md).
+The only thing that fills this row is `nextpnr-ecp5` on RTL that does not
+exist.
+
 **The gate, re-pointed by [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md):** synthesize a representative OoO subset (rename + ROB + 1 ALU + L1$) on ECP5-6 with nextpnr; measure actual LUT count. This was a Phase-6 midpoint gate on *how* to build OoO; it is now a gate on *whether* to resume it at all, and it is one of the triggers 0009 lists. If the empirical number trends toward the pessimistic end, that confirms the area leg of 0009 and the five mitigations below are moot. **If it trends toward the optimistic end the decision is genuinely reopened**, because the BOOM-versus-Rocket proxy 0009 leans on would then be shown not to describe *our* core. The five options below are what a resumed OoO path would still have to pick between:
 
 1. **Asymmetric SMP:** one OoO core + one in-order J32 core (host on OoO, lighter VMs on in-order). Saving: unknown at this stage — needs measurement; it is a *difference* of two unmeasured core costs, so it is the least knowable of these five.

@@ -952,6 +952,26 @@ On ULX3S 85F:
   **budget** it was serving is kept and lives in
   [jcore-ulx3s-service-plan.md §5](../jcore-ulx3s-service-plan.md), labelled as
   a budget.
+- **The one third-party number that bears on this, stated with its provenance
+  so it cannot be mistaken for ours.**
+  [j4-remediation-plan.md §E.1](../j4-remediation-plan.md) cites a published
+  RISC-V soft-core survey — Dörflinger et al., ACM Computing Frontiers (CF '21)
+  — comparing BOOM (out-of-order) against Rocket (in-order) under forced-common
+  parameters, and finding the out-of-order core a **multiple** of the in-order
+  one in both FPGA resources and ASIC core area. That is a real, peer-reviewed
+  measurement, and it is legitimate evidence about the *shape* of what an
+  out-of-order core costs. It is not a J-Core figure, and three things about it
+  have to travel with it: the cores measured are **BOOM and Rocket**, the
+  measurer is **its authors**, and the device is the **Xilinx Virtex
+  UltraScale+ family** (6-input LUTs) with the ASIC leg on GlobalFoundries
+  22FDX — **not** the ECP5-85F, whose LUTs are 4-input.
+  §E.1 states the figure as "~10× … on an 84K-LUT ECP5-85F"; that device
+  attribution was checked against the survey on 2026-09-08 and is wrong, which
+  [decisions/0009 §Context](../decisions/0009-in-order-fgmt-is-the-default-path.md)
+  records in full. Nothing in this section is derived from it, and nothing
+  should be: the row above still reads
+  unknown at this stage — needs measurement, and only the action item in §15.1
+  changes that.
 - **EBRs: ~105 for one core's L1 pair plus the L2** (§11.5), or ~141 for the
   dual-core configuration ([cache/l2-spec.md §20.1](../cache/l2-spec.md)).
   Structural, not measured. This bullet previously called the 104 "stale" and
