@@ -335,6 +335,38 @@ On TSB miss in step 4, guest calls `HCALL_HV_MMU_MAP` after walking its own page
 
 The IOMMU's BMID space is partitioned by the hypervisor: each guest gets a slice of BMIDs corresponding to the devices passed through to it. When a guest sets up DMA, it calls `HCALL_HV_IOMMU_MAP(iova, ra, perms, bmid)`. The hypervisor translates RA→HPA and programs the IOTLB entry with the resolved HPA and the guest's BMID. The IOTLB sees no difference from a non-virtualized environment.
 
+> **`bmid` is a guest-supplied argument, and the hypervisor MUST validate it —
+> 2026-09-09, Wave-3 task C2d.** This paragraph said the hypervisor *"programs the
+> IOTLB entry with … the guest's BMID"* without saying which BMID that is: the one the
+> guest passed, or the one the guest owns. They are not the same value, and the
+> difference is a cross-guest break.
+>
+> **Normative:** `HCALL_HV_IOMMU_MAP` and `HCALL_HV_IOMMU_UNMAP` return an error
+> unless `bmid` lies in the slice assigned to the **calling** guest
+> ([bus/fabric-spec.md §4.4](../bus/fabric-spec.md) allocates `0x80`–`0xEF` to
+> pass-through, and §4.5 works an example where guest *G* owns `0x80 + G`). This is
+> [iommu/hardware-spec.md §3.10](../iommu/hardware-spec.md) `I-R10`.
+>
+> **What an unvalidated `bmid` buys an attacker**, since the argument for the check is
+> not the usual one. It is not that the guest gains access to memory it does not own —
+> the hypervisor still resolves `ra` through *the caller's* RA map, so the HPA is the
+> caller's. It is that the guest gains control of **another guest's device**: it can
+> install an IOVA→its-own-memory mapping under a peer's BMID, so the peer's next DMA
+> to that IOVA lands in the attacker's buffer (an integrity break on the victim's
+> input, or a disclosure of the victim's output); and `HCALL_HV_IOMMU_UNMAP` with a
+> peer's BMID silently revokes a live ring, whose next descriptor then faults and
+> whose documented software response is *"disable the offending device"*
+> ([iommu/design-spec.md §4.4](../iommu/design-spec.md)).
+>
+> This is the one IOMMU control that is **delegated** to the adversary of
+> [security/threat-model.md §1](../security/threat-model.md). Every other control is
+> MMIO in the IOMMU's P4 block, and a guest access to P4 traps
+> ([hardware-spec.md §4.4.3](hardware-spec.md), fail-closed with no exempt address) —
+> so the checking that matters happens here, in a hypercall handler, and not in the
+> hardware. `hcall_hv_mmu_map`'s handler is written out in full in
+> [linux-spec.md §3.5](linux-spec.md); its IOMMU counterpart is not, which is how the
+> missing check stayed invisible.
+
 For DMA initiated by host devices (not passed through to any guest), the hypervisor handles them directly, no changes from Phase 2.
 
 ## 5. Performance Characteristics
