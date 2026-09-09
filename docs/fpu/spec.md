@@ -1765,7 +1765,8 @@ same reason.
 #### The exposure
 
 [../security/threat-model.md §1](../security/threat-model.md)'s adversary is a guest kernel handed
-a core another tenant used. §7.3's restore branch hands it the previous tenant's registers:
+a core another tenant used. §7.3's restore branch handed it the previous tenant's registers. Until
+this section it read:
 
 > Else: reset the physical FPU to post-reset defaults (FPSCR = …, FR/XF/FPUL = undefined per
 > SH-4, but the hypervisor must write at least FPSCR to its default to ensure determinism).
@@ -1878,7 +1879,11 @@ requirement: §6.4 gives `FPSCR` a reset value and nothing gave the register fil
 
 **FP-R3 — Scrub on ownership installation.** A hyperprivileged write of `FPDS` = `00` applies
 FP-R1 to the whole file — both banks, `FPUL` and `FPSCR` — in the same step as the write.
-Unconditional, idempotent, no transition detection, no new instruction, no new trap.
+Unconditional, idempotent, no transition detection, no new instruction, no new trap. **The scrub
+is never skipped**, including when `FPDS` was already `00`: FP-R4's state is what a *switch* may
+use to skip the save, and it is deliberately not an input to FP-R3, because a scrub that consults
+a state bit is a scrub that a wrong state bit turns off. **The scrub is not an architectural write
+and does not itself set `FPDS` = `10`**; the write that performs it leaves `FPDS` = `00`.
 
 Three consequences, and the third is the one this task exists for.
 
@@ -1900,7 +1905,7 @@ writable only at `SR.HPRIV = 1`, with no guest-visible encoding at all:
 
 | `FPDS` | Name | Meaning | What a switch away may skip |
 |---|---|---|---|
-| `00` | **RESET** | the file holds the FP-R1 values | the save *and* the scrub |
+| `00` | **RESET** | the file holds the FP-R1 values | the save |
 | `01` | **CLEAN** | the file holds exactly the current owner's saved image | the save |
 | `10` | **DIRTY** | the current owner has written the file since it became `00` or `01` | nothing |
 | `11` | reserved | treated as `10` | nothing |

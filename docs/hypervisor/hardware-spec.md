@@ -1170,7 +1170,7 @@ the boundary:
 | 4 | Invalidate L1-I and L1-D | SH-4 `CCR.ICI` / `CCR.OCI`. **L1-D is write-through** ([../ooo/j32ooo-spec.md §11.2](../ooo/j32ooo-spec.md)), so there is no dirty data to write back and this is an invalidate, not a flush | one register write each |
 | 5 | Flush the TLB | tens of entries; `ASID_TAG` tagging makes this unnecessary for *correctness*, and it is done for the channel | negligible |
 | 6 | Switch `TSBBR`, `PDID`, `L2WAYMASK` | already per-guest (§2.8, design-spec §3.8, [../cache/l2-spec.md §16.1](../cache/l2-spec.md)) | three register writes |
-| 7 | **Scrub the store-queue buffers, per context** | [../sq/spec.md §6.5](../sq/spec.md) rule **SQ-R3**: the hyperprivileged `HSQCR` write clears the buffer of every queue whose written `VALIDn` is 0, so the `HSQCR` write that ends [../sq/spec.md §7](../sq/spec.md)'s restore **is** the scrub | none — it is item 8's own `HSQCR` write |
+| 7 | **Scrub the store-queue buffers, per context** | [../sq/spec.md §6.5](../sq/spec.md) rule **SQ-R3**: the hyperprivileged `HSQCR` write clears the buffer of every queue whose written `VALIDn` is 0, so the `HSQCR` write that ends [../sq/spec.md §7](../sq/spec.md)'s restore **is** the scrub | none — it is item 9's own `HSQCR` write |
 | 8 | **Scrub the FP and SIMD register files, per context** | [../fpu/spec.md §7.7](../fpu/spec.md) rule **FP-R3** and [../simd/spec.md §2.6.1](../simd/spec.md) rule **V-R3**: the hyperprivileged `FPDS` / `VDS` write that records the change of owner applies each file's defined scrub value to every bit of it, in the same step | the two writes, plus each file's save and only where the dirty state says the outgoing tenant wrote it |
 | 9 | Restore the incoming guest's vCPU contexts, enter | §2.9 | — |
 
@@ -1181,7 +1181,7 @@ hold, and that restore is conditional — a queue the incoming vCPU never filled
 and a **fresh** vCPU has no image at all. Without item 7 those queues would resume holding the
 outgoing tenant's bytes, which the incoming tenant can publish to an address of its own choosing
 with one store and one `PREF` ([../security/threat-model.md §7.8](../security/threat-model.md)).
-The cost column reads "none" because SQ-R3 is a hardware side effect of a register write item 8
+The cost column reads "none" because SQ-R3 is a hardware side effect of a register write item 9
 already performs; what item 7 adds is not an action but the requirement that the write happen for
 **every** context, including the ones with nothing to restore.
 
