@@ -17,9 +17,20 @@ model, and the execution model on top of what the rest of the plan actually says
   `VTFETCH` texture-sample (§9, drives the §4.2 sampler), transcendentals
   `VFSRRA/VFSCA/VFSQRT` (§10), blend/raster-op `VBLEND/VROP` (§11), and the raster
   back-end `VZTEST/VEDGE/VINTERP` (§12) — all pre-2006-anchored.
-- [../../no-gpu-decision.md](../../no-gpu-decision.md) — Option B: SIMT = FGMT+SIMD+
+- [simd-gpu-spec.md §16](simd-gpu-spec.md) — **memory protection and tenant
+  isolation**: the per-context relocate-and-bound window, the **6** address
+  producers it covers ([simd-gpu-spec.md §16.2](simd-gpu-spec.md)), and why the
+  IOMMU is the outer boundary and not the inner one. That section owns the rules;
+  §5.4 below states only what they mean for this document's machine.
+- `../../no-gpu-decision.md` — Option B: SIMT = FGMT+SIMD+
   predication; TBDR mandatory; sort-middle binning as a compute kernel; toolchain
-  is the bigger half; 85F caps at one ~8-lane SM.
+  is the bigger half; 85F caps at one ~8-lane SM. **This file does not exist**
+  in the workspace or anywhere in its git history, and is cited eight times
+  across this document and
+  [../../no-gpu-dual-ecp5-asic.md](../../no-gpu-dual-ecp5-asic.md) as the record
+  holding the GPU decision itself. The links below are left unlinked for the same
+  reason; recovering or rewriting it is not this document's work, but a reader
+  should not be sent chasing it.
 - [../../no-gpu-dual-ecp5-asic.md §6](../../no-gpu-dual-ecp5-asic.md) — the target
   hardware: **single Artix-7 XC7A200T, unified DDR3 via the jcore-soc controller, accept-HLE.**
 
@@ -85,11 +96,25 @@ DSP and BRAM are *abundant* here (the 85F's second bottleneck is gone), so the
 follow-on second SM is LUT-bound, not DSP/BRAM-bound — exactly the good scaling
 property the no-gpu-decision note wanted.
 
+**What this table does not contain, said plainly because it is load-bearing
+elsewhere.** There is no TLB row, no page-table-walker row and no ASID storage.
+That is a deliberate consequence of §3.2's "reuse the SIMD datapath, add the SIMT
+wrapper" — the SM is not a J4 core with an MMU — and it is the reason GPU
+addresses are physical and need their own protection mechanism
+([simd-gpu-spec.md §16.1](simd-gpu-spec.md)). The window checkers that mechanism
+adds (one adder and one unsigned comparator per address-producer port, plus the
+window register file) are not costed in this table either: their area and Fmax
+effect is *unknown at this stage — needs measurement*, and the A/B that would
+settle it is [simd-gpu-spec.md §16.5](simd-gpu-spec.md) experiment 1. That
+experiment also needs something this workspace does not yet have: an `Fmax` floor
+registered for the XC7A200T in [../../platform-baseline.md §3](../../platform-baseline.md),
+whose floors are all ECP5 ones.
+
 ---
 
 ## 3. Execution model: SIMT = FGMT + SIMD + predication
 
-Per [../../no-gpu-decision.md](../../no-gpu-decision.md), a GPU "warp" is just:
+Per `../../no-gpu-decision.md` (missing — see the reads-with note), a GPU "warp" is just:
 a **shared-PC SIMD** vector issue over W lanes, **barrel-threaded (FGMT)** across
 N resident warps so the scheduler issues a *ready* warp each cycle and hides
 memory/texture latency, plus a **per-lane execution mask + reconvergence stack**
@@ -266,6 +291,37 @@ at tile granularity). Per-tile list build = **parallel prefix-sum** (Laine–Kar
 hardware**. Tile size trades cull efficiency against triangle replication and
 tile-buffer BRAM (a sizing knob, not an architectural fork).
 
+### 5.4 Protection: one window per context, and who checks it
+
+Unified memory is what makes the protection question sharp: the GPU's addresses
+land in the *same* DDR bank as the J4 CPU's, through the same multiport arbiter
+(§5.1). Nothing in §5.1–§5.3 constrains which part of that bank a shader reaches.
+
+The rules are owned by [simd-gpu-spec.md §16](simd-gpu-spec.md) and are not
+restated here. What matters for *this* document is which of its blocks are
+address producers, because §16's G-R1 requires every one of them to carry the
+owning context's `GCID` and pass the window check:
+
+| This document's block | Producer in [simd-gpu-spec.md §16.2](simd-gpu-spec.md) |
+|---|---|
+| SM lane load/store/gather, and the §5.3 binning kernel that runs on those lanes | P1 |
+| Shader I-cache (§2) | P2 |
+| Shared texture sampler (§4.2) — descriptor fetch, then texel/mip/palette/VQ fetch | P3, P4 |
+| Tile write-out burst DMA (§4.3, §5.2) | P5 |
+| Command processor and HDMI/DVI scanout (§2) | P6 |
+
+Two consequences land on this document's design rather than on the ISA:
+
+- **The sampler must carry `GCID` with each in-flight request.** It is one block
+  shared across the SM (§4.2) and its latency is hidden by parking the warp and
+  running others (§3.1). The requesting warp is therefore *not* the warp on the
+  pipe when the texel address is generated, so the identity has to travel with
+  the request rather than be read from the scheduler.
+- **The tile buffer, the texture cache and the per-warp register files are
+  ownership-change sites.** §16's G-R8 requires them scrubbed when their owner
+  changes, not merely saved and restored — a fresh context has no image to
+  restore, so a restore-based scheme leaves the predecessor's data in place.
+
 ---
 
 ## 6. Ray tracing (software / SPMD, optional)
@@ -299,7 +355,7 @@ renders PVR2 semantics correctly where fixed-function can't" resolution from the
 no-gpu-decision note. (An open fixed-function alternative,
 [polly2-rtl](https://github.com/skmp/polly2-rtl), exists but is Altera/hybrid and
 does not fit this single-FPGA unified-memory plan — see
-[../../no-gpu-decision.md](../../no-gpu-decision.md) 2026-07 update.)
+`../../no-gpu-decision.md` 2026-07 update (missing — see the reads-with note).)
 
 ---
 
@@ -307,6 +363,16 @@ does not fit this single-FPGA unified-memory plan — see
 
 Matches the no-gpu-decision ladder, re-anchored to the A200T:
 
+0. **Protection before step 1 runs anybody else's code.** Step 1 runs a user
+   OpenCL kernel, which is the exact trigger
+   [../../j4-remediation-plan.md §C2](../../j4-remediation-plan.md) names. Two
+   states are supported and they differ in what has to exist first:
+   **single-tenant** — one tenant owns the whole GPU at a time, with §16's G-R8
+   scrub on handover — needs only the window checkers; **multi-tenant** needs
+   those *and* task C2d, because the IOMMU is the outer boundary and today it
+   resets to all-bypass ([simd-gpu-spec.md §16.3](simd-gpu-spec.md) G-R10).
+   Bringing the GPU up before either exists is allowed only in the single-tenant
+   state, and only as a decision somebody recorded.
 1. **ISA + toolchain spine.** Define the SIMT/vector extension on jcore; simulate;
    run an **OpenCL kernel via PoCL** (compute only, no graphics) on one SM.
 2. **First pixels.** Add the fixed-function **texture sampler + rasterizer setup**;
