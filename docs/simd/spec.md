@@ -303,6 +303,84 @@ The same layout in prose (J32): `V0..V15` (512 bytes) + `P0` (4 bytes, all 32 bi
 - **4.4BSD lazy-FP context switch** (McKusick et al., 1996) — the OS-side pattern, identical for SIMD.
 - **UltraSPARC II lazy-FP via FPRS.FEF** (1997) — the hypervisor-side cross-call pattern for vCPU migration.
 
+### 2.6.1 Cross-tenant SIMD ownership: eager switch, dirty tracking, scrub (normative)
+
+**Wave-3 task C1b.** [../fpu/spec.md §7.7](../fpu/spec.md) states the invariant, the rules, the
+options that were priced and the experiment that would settle them, for the scalar FP file. This
+section is the SIMD half and states only what is this document's to state: the registers covered,
+the scrub value for each, and the two ways the SIMD file differs from the FP one. It is here and
+not in `../decisions/` for the reason [../decisions/README.md](../decisions/README.md) gives —
+this document owns `V0..V15`, `P0` and `VCSR`.
+
+**The exposure is the same shape and larger.** §2.6's hypervisor-aware lazy SIMD ABI restores a
+vCPU's image "if any" in the `EXC_SIMD_DISABLED` handler. A fresh vCPU has no image, so the branch
+that runs is the one that writes nothing, and the incoming tenant reads `V0..V15` — the largest
+single block of architectural state in the design (§2.5) — as the outgoing tenant left it.
+`HEDR[24] = 1` delegates the trap to the guest exactly as `HEDR[3]` does for the FPU
+([../fpu/spec.md §7.1](../fpu/spec.md)), with the same consequence: the hypervisor's ownership
+transition never runs.
+
+**V-INV.** At every instant, every bit of `V0..V15`, `P0` and `VCSR` is either a bit the file's
+current owner wrote since the file's last scrub, or the corresponding **scrub value** below.
+
+**V-R1 — The scrub value.** `V0..V15` = zero; `P0` = zero; `VCSR` = zero. `VCSR` = 0 is `MKE = 0`
+and `IEE = 0`, which §2.4 already gives as both bits' default, so the scrub value and the
+architectural default are the same value and there is nothing for an implementer to choose
+between. `P0` = 0 is defined and inert: with `MKE = 0` every lane is active regardless of `P0`
+(§2.4), so a scrubbed `P0` cannot silently disable a tenant's lanes.
+
+**V-R2 — Reset.** Out of reset the SIMD file holds the V-R1 values and `VDS` is `00`.
+
+**V-R3 — Scrub on ownership installation.** A hyperprivileged write of `VDS` = `00` applies V-R1
+to `V0..V15`, `P0` and `VCSR` in the same step as the write. Unconditional, idempotent, no
+transition detection. The consequences are [../fpu/spec.md §7.7](../fpu/spec.md)'s three, verbatim
+in this file's terms, including that a fresh vCPU with no saved image is covered by construction.
+
+**V-R4 — `VDS`, the two dirty bits.** `VDS[1:0]`, per thread context, hyperprivileged-only, with
+[../fpu/spec.md §7.7](../fpu/spec.md)'s `FPDS` encoding and semantics: `00` RESET, `01` CLEAN, `10`
+DIRTY, `11` reserved and read as `10`. Hardware sets `10` on any architectural write to
+`V0..V15`, `P0` or `VCSR` from any mode. **`VDS` is not `SR.VD`** — `SR.VD` is a guest-visible
+disable bit in `SR` and `VDS` is hypervisor-only state that no guest instruction can read. `VDS`
+adds no bytes to §2.5's SIMD image and no row to
+[../hypervisor/hardware-spec.md §2.9](../hypervisor/hardware-spec.md), for the reason
+[../fpu/spec.md §7.7](../fpu/spec.md) gives at length: it describes the physical file, which the
+next owner's installation overwrites, not the owner.
+
+**V-R5 — Eager across tenants, lazy within.** §2.6's lazy pattern and its hypervisor-aware ABI are
+unchanged *within* a tenant, including the delegated `HEDR[24] = 1` form. Across tenants the save
+(when `VDS` = `10`) and the scrub both complete before the incoming guest's first instruction, and
+neither may depend on that guest executing a SIMD instruction.
+
+**Two things are genuinely different from the FP file, and both make the SIMD half harder.**
+
+1. **`P0` is a jcore integer register (§2.5), not a member of `V0..V15`.** A scrub that walks the
+   vector file and stops there leaves the predicate mask holding the outgoing tenant's lane
+   pattern — a small leak, but one that survives every test written against the vector registers.
+   V-R1 names `P0` explicitly for that reason.
+2. **FP SIMD couples the two files.** Since `VFPUL`'s retirement (§2.3, Appendix B) FP horizontal
+   reductions, `VFIPR` and `VFTRV` write the SH-4 FP file directly at block exit, so a task doing
+   FP SIMD owns **both** facilities. An implementation that scrubs the file it believes the
+   incoming tenant will use therefore has a live hole in each direction. The scrubs are specified
+   as two independent rules over two independent registers precisely so that "which facility does
+   this tenant use" is never asked at a switch; both are always scrubbed. Test 4 of
+   [../fpu/spec.md §7.7](../fpu/spec.md), and its mirror with the roles of FP and SIMD exchanged,
+   are what demonstrate it.
+
+**Residue tests.** [../fpu/spec.md §7.7](../fpu/spec.md)'s four, with `V0..V15`, `P0` and `VCSR`
+substituted for the FP registers, plus a fifth that has no FP analogue: tenant A leaves a lane
+pattern in `P0` and nothing in `V0..V15`; tenant B reads `P0`. It recovers A's mask on any
+implementation whose scrub covers the vector file alone, with the other four green.
+**L6** requires each demonstrated red before the fix, and there is nothing to run them on: no
+`*.vhd`/`*.vhm` file in `jcore-cpu@origin/master` (`e8a5a4e1`) matches `entity simd`,
+`component simd` or `vcsr`, checked case-insensitively on 2026-09-09. **This section is a rule
+about hardware that does not exist, and nothing in it is met because it has been written.**
+
+**Cost.** The structural count is §2.5's Tier 0 architectural addition — every bit of it is
+scrubbed — plus two flip-flops per thread context for `VDS`. Everything else, including whether
+the clear enable moves `Fmax` and how often a tenant leaves the file dirty at a quantum boundary,
+is `unknown at this stage — needs measurement`, and the experiment and its kill criteria are
+[../fpu/spec.md §7.7](../fpu/spec.md)'s, run over both files together.
+
 ---
 
 ## 3. Instruction Encoding
