@@ -112,7 +112,7 @@ minimize-loss step is settled.
 | C1c | Vertical-FP-SIMD FPSCR ownership fix + kernel-fpu discipline. **Design DONE 2026-09-09** — [simd/spec.md §2.4.1](simd/spec.md), [fpu/spec.md §6.3.1](fpu/spec.md), [simd/spec.md §2.6.2](simd/spec.md). **The defect is real and is *not* the bar item this row is filed under; the implementation half is not dispatchable in `linux`** — see below. | docs → linux | Opus | *blocked on an FPU existing* |
 | C2a | GPU memory protection (base+bounds or IOMMU/BMID) — launch blocker before user shaders. **Design DONE 2026-09-09** — [simd/gpu/simd-gpu-spec.md §16](simd/gpu/simd-gpu-spec.md), [simd/gpu/architecture.md §5.4](simd/gpu/architecture.md). **The `or` is a false alternative, the "launch blocker" is not blocking any scheduled launch, and the implementation half is not dispatchable in any repo** — see below. | docs → jcore-cpu | Opus | *blocked on a GPU program existing* |
 | C2b | Speculation: delay-on-miss + frontend coverage (commit-time predictor updates, tenant-tagged BTB, degenerate-STT taint, delayed spec TLB/PTW). **Design DONE 2026-09-09** — [mmu/hardware-spec.md §5.0a](mmu/hardware-spec.md) W-R1–W-R5, [ooo/j32ooo-spec.md §8.2a, §11.1a](ooo/j32ooo-spec.md), [ooo/j32lt-spec.md §7.4a, §7.5a](ooo/j32lt-spec.md), [security/threat-model.md §7.2, §7.3, §8 L4, §10](security/threat-model.md). **Three of the four named mechanisms target structures no repository contains and were already specified; the implementation half is dispatchable in part, and it is the first Wave-3 row of which that is true** — see below. | docs → jcore-cpu | Opus | Opus |
-| C2c | FGMT single-tenant-core + fence.t-style microreset on realloc. | docs → jcore-cpu | Opus | Opus |
+| C2c | FGMT single-tenant-core + microreset on realloc. **Design DONE 2026-09-09** — [hypervisor/hardware-spec.md §2.10, §2.11, §4.7.1a, §4.7.2, §4.7.1b](hypervisor/hardware-spec.md), [security/threat-model.md §8 L1](security/threat-model.md). **The row's mechanism name is post-2006 and had to be replaced, its figures were nobody's, and the implementation half is not dispatchable in any repo** — see below. | docs → jcore-cpu | Opus | *blocked on FGMT and a hypervisor existing* |
 | C2d | IOMMU default-deny + per-device block + no global-match IOTLB + coherent-DMA owner. | docs → jcore-cpu + jcore-soc + linux | Opus | Opus |
 | C2e | Cache isolation beyond ways (DAWG-semantics metadata + MSHR reservation + bandwidth QoS + per-tenant KSM + privileged flush ops). | docs → jcore-cpu + linux | Opus | Opus |
 
@@ -324,6 +324,76 @@ D2 stops RTL being written against those specs regardless.
 L2, L3 and L6: those three wait for hardware to be built, and L4's transmitters are on
 `origin/master` today. Nothing in Wave 3 has moved a bar item to `MET`, and this row does not
 either.
+
+**C2c reverses this row four times, and the first reversal is the row's own title.**
+
+1. **`fence.t` is 2020 work and cannot be this project's mechanism name.**
+   [glossary.md §2](glossary.md) is a hard requirement: a technology with no pre-2006 prior art is
+   either adapted from a pre-2006 equivalent or dropped. `fence.t` — Wistoff, Schneider, Gürkaynak,
+   Benini and Heiser, *Prevention of Microarchitectural Covert Channels on an Open-Source 64-bit
+   RISC-V Core* (2020), and its DATE 2021 successor — appeared **four** times across this plan and
+   [j4-remediation-plan.md §E.10](j4-remediation-plan.md) with figures attached and **no prior-art
+   section anywhere**. Escape (a) applies: the mechanism is pre-2006 at three levels — TCSEC object
+   reuse (DoD 5200.28-STD, 1985) for the rule, Hu 1992 (*Lattice scheduling and covert channels*,
+   IEEE S&P, pp. 52–61) for closing the cache channel at a switch of security class, and SH-4
+   `CCR.ICI`/`CCR.OCI` (1998) for the control shape — so it is kept, renamed **microreset**, and
+   grounded in [hypervisor/hardware-spec.md §4.7.1a](hypervisor/hardware-spec.md). One of the two
+   candidate citations this task was handed did **not** survive checking: Hu's *Reducing timing
+   channels with fuzzy time* (1991) is clock fuzzing, not state clearing.
+
+2. **The figures attached to it are not this design's and two of them are not the cited paper's
+   either.** §E.10 carried "<1% perf", "0.13% area", "~21,755 cycles" and "a ~16-cycle reset".
+   Wistoff et al. 2020 report **320 cycles** on Ariane, of which **256** are the write-through
+   invalidate at one set per cycle, and "the number of deployed LUTs remains within 1% of the
+   original size" on **FPGA**. All four numbers are removed rather than annotated
+   ([decisions/0005](decisions/0005-unmeasured-figures-are-removed.md)) and none is reproduced in
+   any spec — C2a's precedent, applied to the item C2a was declining to borrow from.
+   [security/threat-model.md §9](security/threat-model.md) had already listed the area figure as
+   `LITERATURE`, with "ECP5 synthesis of the microreset, **under C2c**" as its discharge; C2c
+   cannot discharge it, and that cell now says so.
+
+3. **The item's flush half named a structure that means two different things.**
+   [security/threat-model.md §8](security/threat-model.md) **L1** requires the gang switch to flush
+   "MSHRs". The L2's pool is shared across banks *and cores*
+   ([cache/l2-spec.md §12.3](cache/l2-spec.md)), so no core-granular gang switch can ever reach it
+   — that word was **L5**'s all along. The core's own pool
+   ([ooo/j32lt-spec.md §7.4](ooo/j32lt-spec.md)) is L1's, is partitioned per *thread* rather than
+   per *tenant*, and had no item on the list. Asking *which structures had no software-visible
+   control to be reached through* — rather than which structures leak — found three more in the
+   same position: L1/TLB replacement state, the FGMT thread-select state, and the write buffer
+   below a write-through L1-D. They are item 9 now, and
+   [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md)'s list is **10** items.
+
+4. **The detector exists and the obvious design for it was wrong twice.** It sits on a **new**
+   register rather than on `PDID`, because `PDID` is optional
+   ([hypervisor/hardware-spec.md §2.8](hypervisor/hardware-spec.md): not required on in-order
+   cores) and would therefore be absent on exactly the path
+   [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md) made the default — and
+   because `PDID`'s privilege was stated three incompatible ways, one of which let a **guest**
+   write it. And it **refuses** the `HRTE` rather than trapping it, because
+   [hypervisor/hardware-spec.md §4.1](hypervisor/hardware-spec.md)'s trap path at `SR.HPRIV = 1`
+   overwrites `HSPC`/`HSSR` — the guest resume state the refused entry needs in order to retry.
+   That also saves an `EXPEVT` code point and an `HEDR` bit.
+
+**The implementation half is not dispatchable in any repo, and this row's `Implement Opus` is
+wrong as written.** `jcore-cpu@origin/master` has **no FGMT** — case-insensitive searches for
+`fgmt`, `thread_id` and `multithread` over `*.vhd`/`*.vhm` return nothing, and `barrel` returns
+only `core/shifter.vhd`, `core/shifter_seq.vhd` and `tests/shifter_seq_tap.vhd`, which are the
+barrel *shifter* — and **no hypervisor**: `hpriv`, `hcall`, `hrte`, `vbr_hyp`, `pdid` and `hedr`
+all return nothing over the same files. Without a second thread context there is no violating
+placement to refuse, and without `HRTE` there is nothing to refuse it at; without either there is
+nothing to microreset. Unlike C2a's GPU, though, the missing hardware is **not** a parked program:
+[decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md) makes 2-thread switch-on-miss
+FGMT the project's default microarchitecture, so C2c's rules land inside whatever task first builds
+it, exactly as C1a's do inside the store-queue task. Naming that dependency is the deliverable.
+
+**L1 does not move.** It stays `NOT MET`. Both of its open halves are now *specified and unbuilt*:
+the detector ([hypervisor/hardware-spec.md §4.7.2](hypervisor/hardware-spec.md) T-R1–T-R5) and the
+per-structure residue tests (§4.7.1b T-E3). C2c did settle the scoping question C2a filed against
+L1 — an SM **is** a core for L1, so a two-tenant SM is out of bounds at launch independently of
+C2a's windows, and the SM's own L1-equivalent detector becomes an entry condition on un-parking the
+GPU program rather than a launch blocker. Nothing in Wave 3 has moved a bar item to `MET`, and this
+row does not either.
 
 ### Final
 
