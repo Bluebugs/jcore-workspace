@@ -37,10 +37,14 @@ On `jcore-cpu@origin/master`, before any change:
 | `cpugen collisions` | `swept 466 instructions over 13 variants; 2 same-variant identical-encoding collision(s), 2 baselined, 0 new` |
 | `insns2asm -emit check` | `excluded 40 DSP/coproc instructions` / `ok: 318 instructions round-trip` |
 
-The 466 rows carry 13 variant columns and 94 `collides` annotations. 318 of the
-466 reach `insns2asm`; the remaining 148 are DSP rows and rows in groups
-`loader.emittedGroups` does not list, and **the second kind is dropped without a
-count** — see [decisions/0008 §Enforcement](decisions/0008-documented-but-unimplemented-encodings.md).
+The 466 rows carry 13 variant columns and 94 `collides` annotations. They
+account for exactly: **108** rows whose `group` starts with `DSP`, dropped by
+`loader`'s group filter with no count; **40** dropped by its DSP-operand and
+DSP-only filters, which *are* counted and printed; and **318** that round-trip.
+There is today **no row in a group `loader.emittedGroups` does not list**, which
+is why the silent-drop path has never been exercised and why a new group is
+invisible to the checker rather than rejected by it — see
+[decisions/0008 §Enforcement](decisions/0008-documented-but-unimplemented-encodings.md).
 
 ## 2. Live collisions in shipping RTL, with proposed re-homings
 
@@ -87,7 +91,8 @@ which reports `0100mmmm10011000` and `0100mmmm10011001` virgin with
 run likewise for the store side. Applying the four moves to a scratch copy of
 `spec/system.toml` and regenerating produced four rows with **no `collides`
 annotation at all**, `cpugen collisions` still `0 new`, and `insns2asm` still
-`ok: 318`.
+`ok: 318`. `internal/insns`, `internal/freespace` and `cmd/cpugen` pass their
+own test suites with the moves applied, as they do without them.
 
 **Three properties of this proposal, stated so a reviewer can attack them:**
 
