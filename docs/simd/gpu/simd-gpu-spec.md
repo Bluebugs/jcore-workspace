@@ -380,7 +380,8 @@ independently. Coordinates are **SoA** — `Vu` holds u per lane, `Vv` holds v p
 lane (FP32, or FP16 §8 for compact packing). `Vd` receives **packed RGBA8** per
 lane by default (VLEN/32 lanes of 32-bit); a descriptor bit can request FP16×4 or
 FP32×4 unpacked output for HDR/compute. The **active descriptor index** and LOD
-mode live in a control register **`VTEXSEL`** (`LDS Rm, VTEXSEL`), set before the
+mode live in a control register **`VTEXSEL`** (`LDS Rm, VTEXSEL`; shader-writable,
+and bounded by the privileged `VTEXCNT` per §16.3 G-R5), set before the
 block, so the 16-bit instruction word needs only the two V operands (exact
 coordinate packing — SoA pair vs FP16 AoS — is settled in the opcode-map audit,
 like other §5.x encodings). Explicit LOD/bias is taken from `VTEXSEL`; implicit LOD
@@ -400,6 +401,10 @@ texture-unit count without a post-2006 dependency. Each descriptor carries:
 - `filter` (nearest / bilinear / trilinear), `wrap_u`, `wrap_v` (repeat / clamp / mirror)
 - `mip_base`, `mip_count`; `palette_base` (PAL4/8); `vq_codebook_base` (VQ)
 - `out_format` (RGBA8 / FP16×4 / FP32×4)
+
+**Every address in the list above is a context-relative offset, relocated and
+bounded per §16.3 before it reaches memory** — a descriptor is tenant-writable
+data, so nothing in it is trusted; see §16.2 producer P4.
 
 Sampler and image state are folded into one descriptor for simplicity (as DC binds
 them together); a separable texture/sampler split — sampler state bound per stage
@@ -542,7 +547,7 @@ Optional companion for 2D / HLE / windowing: per bit, `d = f(a,b,c)` where the
   Blitter 256-minterm `LF` control byte** (Commodore-Amiga Hardware Reference
   Manual, **1985**); Windows GDI ternary raster ops (ROP3).
 - **Scope:** DC 3D uses only fractional alpha (`VBLEND`); `VROP` is for 2D/desktop
-  and is an open-question inclusion (§16).
+  and is an open-question inclusion (§17).
 
 ## 12. Raster back-end: depth/stencil and coverage/interpolation
 
@@ -689,7 +694,338 @@ art; no post-2006 GPU-vendor ISA (AMD, NVIDIA, SPIR-V, Vulkan) is a design sourc
 
 ---
 
-## 16. Open questions
+## 16. Memory protection and tenant isolation
+
+**What this section changes, stated first.** Before it, this specification carried
+no protection story at all. Searched case-insensitively, *physical*, *base
+address*, *protection*, *isolation*, *MMU* and *IOMMU* did not occur anywhere in
+it, and none of §17's eleven open questions raised one. Protection was
+therefore not *deferred* here — it was **absent**, which is the harder failure,
+because a deferred item is visible to a reader and an absent one is not.
+
+Adding this section makes the site **specified**. It does not make it **met**. No
+GPU RTL exists in `jcore-cpu` or `jcore-soc` at `origin/master`: a
+case-insensitive search for `gpu|shader|opencl|simt|warp|texel|rasteriz` returns
+two matches in `jcore-cpu` and none in `jcore-soc`, and both are false positives
+(`vpiSimTime` in `sim/sim/vpibridge.c`, the label `_movwarpr` in
+`testrom/tests/testmov.s`). Nothing below can be made to fail on hardware, which
+is the precondition for ever seeing it pass.
+
+### 16.1 Why the CPU's mechanisms do not reach a shader
+
+The base SIMD memory instructions are already translated. `VLD.Q`, `VST.Q`,
+`VGATHER.Q` and `VSCATTER.Q` take standard SH-4 memory exceptions — address
+error, TLB miss, page fault, bus error ([../spec.md §6.4](../spec.md)) — and
+§6.5 there specifies the instruction-side hazard once `MMUCR.AT = 1`. That covers
+a shader **only where the shader runs on something with an MMU.** The SM is not
+such a thing. [architecture.md §2](architecture.md)'s indicative budget lists ten
+blocks and contains no TLB, no page-table walker and no ASID storage; the SM
+reaches memory through the "Command processor + DDR-controller ports + DMA" line
+into the shared DDR bank ([architecture.md §5.1](architecture.md)).
+[../../bus/fabric-spec.md §3.2](../../bus/fabric-spec.md) recognises exactly two
+kinds of initiator, and the SM is the second of them: "DMA masters bypass the CPU
+MMU but go through the IOMMU… CPU cores never bypass the IOMMU."
+
+So a GPU address is a physical address **by omission**: no document in this tree
+states that GPU addresses are physical, and none states that they are translated.
+[../../j4-remediation-plan.md §C2](../../j4-remediation-plan.md) reads "user
+shaders get raw physical base addresses" — the right conclusion, reached from
+silence rather than from text. This section is what replaces the silence.
+
+### 16.2 The six address producers
+
+Isolation has to be stated over the set of things that emit an address, not over
+the instruction that is easiest to think about. Reading this document and
+[architecture.md](architecture.md) together, a GPU-originated address comes from
+exactly **6** address producers:
+
+| # | Producer | Address comes from | Controlled by |
+|---|---|---|---|
+| P1 | Shader load / store / gather | `VLD.Q`, `VST.Q`, `VGATHER.Q`, `VSCATTER.Q` operands ([../spec.md §5.6](../spec.md)) | the shader |
+| P2 | Shader instruction fetch | the warp PC, via the shader I-cache ([architecture.md §2](architecture.md)) | the shader |
+| P3 | Texture-descriptor fetch | `VTEXBASE` + `VTEXSEL` × descriptor stride (§9.3) | `VTEXSEL` is the shader's |
+| P4 | Texel / mip / palette / VQ-codebook fetch | the sampler's address generation from the descriptor's `base_addr`, `mip_base`, `palette_base`, `vq_codebook_base` (§9.3, §9.6) | the descriptor's contents |
+| P5 | Tile write-out burst | the raster back-end bursting the finished colour+Z tile to the DDR framebuffer ([architecture.md §4.3, §5.2](architecture.md)) | the tile's owner |
+| P6 | Command processor and scanout | command-buffer fetch and the HDMI/DVI scanout read of the framebuffer ([architecture.md §2](architecture.md)) | privileged host code |
+
+Two entries are not on that list because they collapse into P1: **binning and
+per-tile display-list traffic** is a compute kernel running on the SM lanes and
+not dedicated hardware ([architecture.md §5.3](architecture.md)), and the
+**gather path** P4 borrows is P1's datapath reached from a different address
+source (§9.6).
+
+> **G-R1 — every producer is checked.** All six of P1–P6 are subject to §16.3's
+> window check. This is stated as a rule rather than left implicit because the
+> obvious mitigation — bounding the texture path, which is where the
+> attacker-supplied `base_addr` visibly is — leaves five producers open, and P5
+> is the one that *writes*.
+
+### 16.3 The mechanism: per-context relocate-and-bound
+
+The unit of isolation is the **GPU context**: the owner of a warp slot, of the
+tile-buffer region its fragments resolve into, and of the texture-cache lines its
+fetches fill. Each resident context has a numeric **`GCID`** and a window:
+
+| Register | Meaning |
+|---|---|
+| `GBASE` | physical base of the context's private window |
+| `GLIMIT` | length of that window in bytes |
+| `GBASE_RO`, `GLIMIT_RO` | *optional* second window, read-only (shared immutable data: an HLE texture atlas, a shared shader image) |
+
+> **G-R2 — identity travels with the request.** Every request from any of P1–P6
+> carries its `GCID` from the producer to the memory port. The `GCID` is **not**
+> recovered by asking "which warp is running now" at completion time.
+>
+> This is a correctness requirement, not an implementation convenience. The
+> sampler is one shared block per SM ([architecture.md §4.2](architecture.md))
+> and `VTEX` is explicitly long-latency and asynchronous: the issuing warp parks
+> and a scoreboard wakes it (§9.7), while the scheduler runs other warps. By the
+> time P4's texel fetch presents an address, the warp that asked for it is not
+> the warp on the pipe. A check that reads the current warp's window would check
+> the wrong tenant's window, and would do so *more* often the better the
+> latency-hiding works.
+
+> **G-R3 — relocate and bound, do not merely bound.** For a request with offset
+> `a` and identity `GCID`, the emitted physical address is `GBASE[GCID] + a`, and
+> the access faults per G-R7 unless `a < GLIMIT[GCID]` compared as unsigned (or
+> `a < GLIMIT_RO[GCID]` with `GBASE_RO`, for a read matched to the read-only
+> window). A context therefore cannot *name* an address outside its window: no
+> shader-computed address, no descriptor field, no interpolated coordinate and no
+> wrapped texture coordinate can express one, whatever value it holds.
+>
+> Bounding without relocating was considered and rejected in §16.4. Prior art is
+> pre-2006 and predates the ISA this project descends from: CDC 6600 `RA`/`FL`
+> relocation-address plus field-length (Thornton, 1964), GE-645 descriptor
+> base-and-bound (1965), Cray-1 `BA`/`LA` base and limit (1976).
+
+> **G-R4 — the window registers are unreachable from the GPU, and
+> non-delegatable.** `GBASE`, `GLIMIT`, `GBASE_RO`, `GLIMIT_RO` and the
+> slot→`GCID` binding are written only by privileged host code. There is no
+> `LDS`/`STS` form, no MMIO alias and no command-buffer opcode that reaches them
+> from a shader, a command buffer, or any GPU-resident agent. They occupy pages
+> of the GPU's control window **distinct from** any page a guest may be given
+> under GPU pass-through, and no delegation control may hand a guest authority
+> over them or over the fault of G-R7.
+>
+> This clause exists because the analogous escape is already in the tree twice.
+> `HEDR[3]` / `HEDR[24]` delegation hands the FP/SIMD first-use trap to the
+> guest, so a scrub written into that handler is switched off by configuration
+> ([../../security/threat-model.md §8](../../security/threat-model.md)); and
+> `HEDR[23]` — IOMMU fault forwarded as exception — is likewise delegatable
+> ([../../hypervisor/hardware-spec.md §2.3.1](../../hypervisor/hardware-spec.md)).
+> Delegating `HEDR[23]` does **not** unblock the transaction, and the distinction
+> matters: what it removes is the hypervisor's *visibility* of the violation, on
+> a bar item whose own text requires that an unclaimed master's DMA "must latch a
+> fault". A GPU protection scheme that leaned on that report for detection would
+> inherit a control that configuration can switch off.
+
+> **G-R5 — the descriptor index is bounded, and the bound is not load-bearing.**
+> `VTEXBASE` and a new descriptor-count register `VTEXCNT` are privileged
+> per-context state (G-R4). `VTEXSEL` remains shader-writable (`LDS Rm, VTEXSEL`,
+> §9.2). A `VTEX`/`VTFETCH` whose `VTEXSEL` selects an index ≥ `VTEXCNT` faults
+> per G-R7. That check is a diagnostic, not the containment: the descriptor fetch
+> P3 generates is *also* put through G-R3, so a `VTEXCNT` programmed too large
+> cannot reach outside the window — it can only read the context's own memory as
+> if it were a descriptor.
+
+> **G-R6 — the texture check is sited at the sampler's address-generation output,
+> not at prefix decode.** For P4, the address to be checked does not exist at
+> decode. It is produced many cycles later, inside a shared fixed-function block,
+> after wrap/clamp/mirror, after LOD selection, after the Morton twiddle, and
+> after a memory round-trip that fetched the descriptor whose fields it is
+> computed from (§9.3, §9.5, §9.6). The prefix encodes `H`/`ww`/`rrr`/`N` (§3.2
+> of [../spec.md](../spec.md)) and nothing about any of that. An implementation
+> that asserts this check "at prefix decode" has asserted something it cannot
+> perform. P1 and P2 are checked in the SM's own address and fetch paths, P3 at
+> the descriptor-fetch address, P5 at the write-out DMA's address generator, P6
+> at the command processor's and scanout's address generators — in every case at
+> the point that first holds the final address together with the `GCID` G-R2
+> carried there.
+
+> **G-R7 — a violation is a fault; never a wrap, a clamp, a truncation or a
+> zero.** For the synchronous producers P1–P4 the fault is delivered to the
+> issuing (parked) warp and reports the **prefix PC**, per the restart-from-prefix
+> contract of [../spec.md §6.4 and §6.5](../spec.md); the block carries no
+> committed state, so the report is well-defined even though the warp parked. For
+> the asynchronous producers P5 and P6 the transaction is suppressed — the data
+> phase for a read, the write dropped — and the GPU latches `{GCID, offending
+> offset, producer, R/W}` in a fault register and raises a protection interrupt
+> to privileged host code, and the offending context is halted rather than
+> allowed to continue. No path may define the result of a blocked access as
+> "undefined": that word is banned at an ownership boundary by bar item **L6**
+> ([../../security/threat-model.md §8](../../security/threat-model.md)).
+
+> **G-R8 — handover scrubs; saving is not scrubbing.** On any change of owner of
+> a warp slot, an SM, a tile-buffer region or a texture-cache line, the state
+> tagged to the outgoing `GCID` — the per-warp V/P0/`VCSR` window, the tile
+> buffer's colour and Z lines, the texture-cache lines, and any in-flight
+> sampler request queue entries — is scrubbed to a defined value before the
+> resource is offered to the next context. A save-and-restore discipline is not a
+> substitute: a **fresh** context has no saved image, so restoring "its" state
+> restores nothing and leaves the predecessor's, which is exactly the branch a
+> save/restore test between two established owners passes without touching.
+
+> **G-R9 — what joins the context image, and what does not.** State *about the
+> owner* must survive the owner's absence and is saved with the context. State
+> *about the structure* is overwritten by the next owner's installation and is
+> not.
+>
+> | State | Class | In the tenant-visible context image? |
+> |---|---|---|
+> | `VTEXSEL` | about the owner — shader-written, shader-observable | **yes** |
+> | `GBASE`, `GLIMIT`, `GBASE_RO`, `GLIMIT_RO` | about the structure — installed by the binder for whoever occupies the slot | **no** |
+> | slot → `GCID` binding | about the structure | **no** |
+> | `VTEXBASE`, `VTEXCNT` | about the structure — privileged per-context state, reinstalled on every bind | **no** |
+>
+> The window registers being *per-context* does not make them the context's:
+> nothing in them survives to be restored, because the binder writes them from the
+> host's record before the context runs a single instruction.
+
+> **G-R10 — this is the inner boundary only, and the outer one is not built.**
+> G-R1..G-R9 separate tenants *inside* the GPU. They do not contain a GPU that is
+> itself faulty or misprogrammed, because they are enforced by the GPU. The outer
+> boundary is the IOMMU on the GPU's fabric master ports, and it is task **C2d**.
+> Consequently:
+>
+> 1. **Multi-tenant GPU operation requires both halves**, and the ordering is
+>    hard: C2d before any GPU bring-up that runs more than one tenant. Today the
+>    IOMMU resets with `BMID_BYPASS_*` all-ones — every master bypasses — and
+>    `ENABLE = 0` ([../../iommu/hardware-spec.md §8](../../iommu/hardware-spec.md)),
+>    so routing GPU traffic through it buys nothing until C2d changes that. It is
+>    weaker still than "unconfigured": no IOMMU RTL exists in `jcore-soc` or
+>    `jcore-cpu` at `origin/master` either (case-insensitive `iommu`, `bmid`:
+>    zero files).
+> 2. **The GPU has no BMID.** [../../bus/fabric-spec.md §4.4](../../bus/fabric-spec.md)'s
+>    normative allocation policy has no GPU row and its §4.5 worked example has
+>    none, although [../../iommu/design-spec.md §4.1](../../iommu/design-spec.md)'s
+>    topology diagram draws a GPU as an initiator. Assigning one is fabric-spec
+>    work that no task currently schedules, and it is a precondition of clause 1.
+> 3. **If the GPU arrives before either half, it runs single-tenant.** Exactly one
+>    tenant owns the whole GPU at a time — the shape bar item **L1** already
+>    imposes on a core — and G-R8's scrub still applies on handover, because
+>    handover between single tenants is precisely an ownership change. This is
+>    recorded as a supported degraded mode rather than left as an implication, so
+>    that shipping it is a decision somebody made.
+
+### 16.4 Rejected alternatives
+
+[../../j4-execution-plan.md](../../j4-execution-plan.md) offers this task a
+choice — "base+bounds **or** IOMMU/BMID". **That disjunction does not survive
+contact with the fabric spec: the two act at different granularities, and only
+one of them acts at tenant granularity.** They are not alternatives; §16.3 is the
+inner mechanism and G-R10 keeps the IOMMU as the outer one.
+
+**Rejected: the IOMMU with per-tenant BMIDs as the tenant-separation mechanism.**
+Three independent reasons, any one sufficient.
+
+1. **The fabric forbids it.** BMID is "an 8-bit identifier held in a register
+   inside the fabric (**not inside the master**)" which the fabric "drives onto
+   every transaction the port emits, overwriting any BMID-like field the master
+   itself might assert"; a conformant master port "MUST NOT expose its BMID
+   register to software running on the master"
+   ([../../bus/fabric-spec.md §4.1, §4.2](../../bus/fabric-spec.md)). That
+   unforgeability is the whole security value of BMID — and it means the GPU
+   *cannot* present a different BMID for each of the 4–8 warps per SM it holds
+   resident ([architecture.md §1.1](architecture.md)) without one physical
+   fabric master port per resident tenant. Per-tenant BMID is not expensive here;
+   it is structurally unavailable.
+2. **The granularity is wrong even where it is available.** A BMID identifies a
+   master. The GPU is one master hosting many tenants at once, by construction:
+   FGMT with several resident warps is the mechanism the whole design rests on
+   (§9.7, [architecture.md §3](architecture.md)). An IOMMU keyed on BMID can stop
+   the GPU reaching outside the GPU's aperture. It cannot stop warp A reading
+   warp B's texture, because both requests carry the same BMID.
+3. **The performance class is wrong.** The IOMMU has no hardware page-table
+   walker; the IOTLB is 64 entries, fully associative, and **written directly by
+   software**, and a miss blocks the transaction and raises a fault
+   ([../../iommu/design-spec.md §3.1, §3.4](../../iommu/design-spec.md),
+   [../../iommu/hardware-spec.md §4.1](../../iommu/hardware-spec.md)). Putting a
+   GPU's texture and framebuffer working set behind that turns every capacity
+   miss into a blocked transaction plus a host-software refill, on a path whose
+   entire premise is that a multi-hundred-cycle sample costs no throughput
+   because FGMT hides it (§9.7). A host round-trip is not a latency FGMT hides.
+
+**Rejected: an MMU and TLB per SM.** This is the mechanism that would generalise
+best, and it is the right answer at ASIC scale. It is rejected for the first cut
+on three grounds: [architecture.md §2](architecture.md) budgets no TLB, walker or
+ASID storage, and the LUT budget is the binding constraint the whole document is
+written against; demand paging is the feature it buys and a GPU working set is
+pinned; and it does not remove any of §16.3's work, because the shared sampler
+would still have to carry the requesting context's identity with each in-flight
+request (G-R2) for a per-context translation to be applied to it. Recorded as the
+successor, not as a discarded idea — see §16.6.
+
+**Rejected: bounds-checking without relocation.** Checking `GBASE ≤ addr <
+GBASE + GLIMIT` on an address the shader computes in full is one comparator
+cheaper and strictly weaker: it leaves the tenant able to *name* every address in
+the machine, so the mechanism's correctness rests on the comparator being present
+on all six producers with no gap, rather than on the tenant's address space not
+containing the words in the first place. Under G-R1 the two would be equivalent;
+relocation is what makes a gap in G-R1 a bug rather than a breach.
+
+### 16.5 Minimize-loss — what this costs, and the experiments that would say
+
+**No figure is given here, because none has been measured.** Per
+[../../decisions/0005](../../decisions/0005-unmeasured-figures-are-removed.md) an
+unmeasured figure is removed rather than annotated, and the honest value for the
+area, frequency and throughput cost of G-R1..G-R8 is
+*unknown at this stage — needs measurement*. [../../j4-remediation-plan.md §E.10](../../j4-remediation-plan.md)
+prices three classes — speculation defences, eager state switch and scrub, cache
+isolation — and **has no line for an address-path check at all**; the nearest
+thing it prices is the *scrub* half ("fence.t full on-core scrub is <1% perf /
+0.13% area"), which speaks to G-R8 by analogy and says nothing about G-R1..G-R7.
+Its sub-1% conclusion must not be borrowed for this item.
+
+Three experiments, each with the result that ends it. A human runs them; none is
+runnable before the first SM RTL exists.
+
+1. **Synthesis A/B on the first SM.** Build the SM with and without the window
+   checkers — one adder and one unsigned comparator per producer port, the
+   `GCID` field widened onto each request, and the window register file — and
+   record ΔLUT4, ΔFF and ΔFmax. **Kill criterion:** ΔFmax takes the SM below the
+   `Fmax` floor registered for its target in
+   [../../platform-baseline.md §3](../../platform-baseline.md). *No such floor
+   exists for the Artix-7 XC7A200T the GPU targets* ([architecture.md §1.1](architecture.md));
+   the floors registered there are ECP5 ones. **Registering a floor for the GPU's
+   target is a precondition of running this experiment**, and inventing one to
+   have a criterion would be the failure 0005 exists to prevent.
+2. **Texture throughput.** Sustained texels/cycle through P4 with and without the
+   G-R6 check, at the 4 and 8 resident-warp points
+   ([architecture.md §1.1](architecture.md)). This is the only producer on a
+   bandwidth-critical inner loop. **Kill criterion:** the check adds a pipeline
+   stage the warp scheduler cannot fill — i.e. sustained texels/cycle falls at
+   *both* warp counts, which distinguishes a real throughput loss from latency
+   FGMT absorbs.
+3. **Shader memory latency.** Added cycles on P1's address path. **Kill
+   criterion:** the relocation add cannot be folded into the SM's existing
+   address adder and costs a whole cycle in the memory stage — in which case the
+   fallback is the rejected bounds-only form of §16.4 for P1 alone, with the
+   consequence recorded there accepted explicitly.
+
+### 16.6 What would reopen this
+
+- **An SM that gains an MMU.** If §16.4's per-SM MMU becomes affordable — the
+  ASIC scaling of [architecture.md §8](architecture.md) is the obvious trigger —
+  the window becomes a redundant second check and should be retired, not kept
+  "for safety", because two mechanisms of different granularities that both claim
+  to be the isolation boundary is how a gap hides.
+- **A GPU working set that stops being one contiguous region.** The single window
+  per context is what makes base-and-bound sufficient. Virtual texturing, tenant
+  memory that must grow without relocation, or sharing that needs more than the
+  one read-only window all break that premise and argue for the MMU.
+- **A fabric that can vary BMID per request.** §16.4's first reason is a property
+  of [../../bus/fabric-spec.md §4.1](../../bus/fabric-spec.md), not a law. If a
+  future fabric admits a fabric-checked sub-master identity, the IOMMU option
+  returns to the table for the inner boundary too.
+- **C2d landing with a different shape than default-deny.** G-R10's ordering
+  constraint is written against the IOMMU that C2d is specified to build. If C2d
+  argues its clauses down (§7.7 of the threat model notes two of five are
+  inherited without backing), the outer boundary this section assumes changes
+  with it.
+
+---
+
+## 17. Open questions
 
 1. **G = 3 / non-power-of-two groups.** Homogeneous 3-vectors (xyz) are common;
    G=4 with a zeroed w-lane covers them, but a native G=3 could save a lane. Decide
