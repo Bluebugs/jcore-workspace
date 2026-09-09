@@ -380,6 +380,19 @@ simultaneously; there is no exit at which to run a save sequence. **On such impl
 register in the list above is per thread context**, and so are the store-queue buffers and
 `QACR0`/`QACR1` ([../sq/spec.md §7](../sq/spec.md)).
 
+**The FP and SIMD register files are per thread context for the same reason, and are not in the
+list above because they are architectural registers rather than registers this specification
+introduces.** [../fpu/spec.md §7.7](../fpu/spec.md) and
+[../simd/spec.md §2.6.1](../simd/spec.md) make that requirement normative and give the failure
+mode, which is the ordinary one for shared architectural state: two vCPUs of one guest silently
+overwriting each other's FP results.
+
+Their dirty-state bits are deliberately **not** on this list either:
+`FPDS` ([../fpu/spec.md §7.7](../fpu/spec.md)) and `VDS` ([../simd/spec.md §2.6.1](../simd/spec.md))
+describe the physical file rather than the vCPU, and the installation that resumes a vCPU writes
+them, so losing them across a migration loses nothing. That is the `HLE` discrimination below
+applied to a second pair of bits.
+
 The store queue is the one that fails without any speculation involved: §4.4.3 carves the SQ region
 out of the guest-mode P4 trap so a guest can use it at native speed, and two vCPUs writing the same
 32-byte buffer interleave their bytes into whichever one issues the `PREF`. That is direct cross-vCPU
@@ -1145,7 +1158,7 @@ Consequences, stated plainly because they are a capacity statement as much as a 
 ### 4.7.1 Gang switching (normative, when the gang-scheduled mode is used)
 
 All contexts of a core switch guests together, at a quantum boundary, never individually. The
-hypervisor **MUST** perform the following **8** numbered items before the first entry to the
+hypervisor **MUST** perform the following **9** numbered items before the first entry to the
 incoming guest. Each item is a channel that would otherwise carry the outgoing guest's state across
 the boundary:
 
@@ -1158,7 +1171,8 @@ the boundary:
 | 5 | Flush the TLB | tens of entries; `ASID_TAG` tagging makes this unnecessary for *correctness*, and it is done for the channel | negligible |
 | 6 | Switch `TSBBR`, `PDID`, `L2WAYMASK` | already per-guest (§2.8, design-spec §3.8, [../cache/l2-spec.md §16.1](../cache/l2-spec.md)) | three register writes |
 | 7 | **Scrub the store-queue buffers, per context** | [../sq/spec.md §6.5](../sq/spec.md) rule **SQ-R3**: the hyperprivileged `HSQCR` write clears the buffer of every queue whose written `VALIDn` is 0, so the `HSQCR` write that ends [../sq/spec.md §7](../sq/spec.md)'s restore **is** the scrub | none — it is item 8's own `HSQCR` write |
-| 8 | Restore the incoming guest's vCPU contexts, enter | §2.9 | — |
+| 8 | **Scrub the FP and SIMD register files, per context** | [../fpu/spec.md §7.7](../fpu/spec.md) rule **FP-R3** and [../simd/spec.md §2.6.1](../simd/spec.md) rule **V-R3**: the hyperprivileged `FPDS` / `VDS` write that records the change of owner applies each file's defined scrub value to every bit of it, in the same step | the two writes, plus each file's save and only where the dirty state says the outgoing tenant wrote it |
+| 9 | Restore the incoming guest's vCPU contexts, enter | §2.9 | — |
 
 **Item 7 is new, and the reason it is a separate row from item 2 is the whole point of it.** Item 2
 already saves the outgoing guest's store-queue buffers, because §2.9 makes them per-context state.
@@ -1171,13 +1185,26 @@ The cost column reads "none" because SQ-R3 is a hardware side effect of a regist
 already performs; what item 7 adds is not an action but the requirement that the write happen for
 **every** context, including the ones with nothing to restore.
 
-**This list is still incomplete, and the missing entry is named rather than left to be
-discovered.** [../security/threat-model.md §8](../security/threat-model.md)'s **L1** requires both
-the store-queue buffers *and* the **FP/SIMD register files** on this list; §7.8 of that document
-shows both carry the previous owner's data by specification. Item 7 adds the store queue (Wave-3
-**C1a**). The FP/SIMD half is owed by **C1b** and is **not here yet**, so L1 is not `MET` and this
-list must not be read as the complete control that
-[../security/threat-model.md §10](../security/threat-model.md) item 8 calls it.
+**Item 8 is new, and it is the entry this list was missing.**
+[../security/threat-model.md §8](../security/threat-model.md)'s **L1** requires both the
+store-queue buffers *and* the **FP/SIMD register files** here; §7.8 of that document shows both
+carry the previous owner's data by specification. Item 7 added the store queue (Wave-3 **C1a**),
+item 8 adds the register files (Wave-3 **C1b**), and **L1's added clause is discharged at the
+specification level with item 8**. L1 itself is still not `MET`: it also requires a detector for a
+violating placement, which is **C2c**'s, and a residue test per structure on this list, which
+needs hardware none of these three items has. So this list must not be read as the complete
+control that [../security/threat-model.md §10](../security/threat-model.md) item 8 calls it —
+but the reason has changed from *an item is missing* to *no item on it has been demonstrated*.
+
+**Item 8 is separate from item 2 for item 7's reason, and from item 7 for a second one.** Item 2
+would save the register files as part of §2.9's per-context state, and saving is not scrubbing:
+what the incoming guest resumes with is decided by a *conditional* restore, and a fresh vCPU has
+no image at all. That is item 7's argument and it transfers unchanged. The reason item 8 is not
+folded into item 7 is that the FP and SIMD files are reached by a different mechanism from the
+queues — [../fpu/spec.md §7.3](../fpu/spec.md)'s first-use trap, which under `HEDR[3] = 1` or
+`HEDR[24] = 1` is delivered to the **guest** rather than to the hypervisor. A control that a
+per-vCPU delegation bit can route away from the hypervisor cannot be described by the same row as
+one that cannot.
 
 **The L2 is deliberately not flushed.** Way-partitioning ([../cache/l2-spec.md §16.1](../cache/l2-spec.md))
 is what isolates it; a full L2 flush would cost ~655 µs of write-back at ~200 MB/s and dominate every
