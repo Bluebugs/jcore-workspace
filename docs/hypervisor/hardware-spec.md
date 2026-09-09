@@ -304,9 +304,11 @@ HSQCR   Hypervisor Store-Queue Status Register    32-bit
 
 **VALID[1:0] and DIRTY[1:0]:** The SQ hardware sets VALID bits to 1 when the corresponding queue slot is written by the guest, and clears them on a burst (when the queue is flushed to memory). DIRTY bits shadow valid bits until cleared. The hypervisor uses these bits to determine which queue slots hold pending store data. Write access to HSQCR is allowed only at `SR.HPRIV = 1` for context restore (clearing bits after reading them, or setting them to match saved state). Writes at `SR.HPRIV = 0` raise the hyperprivileged-register access exception exactly as for every other register in the §2.2 family. [§3.4](#34-privileged-register-access-from-supervisor-mode) is the canonical description of that exception — its cause code, HEDR bit, delegability and vector are stated there and are deliberately **not** restated here.
 
+**A hyperprivileged write to this register also scrubs.** Per [../sq/spec.md §6.5](../sq/spec.md) rule **SQ-R3**, writing HSQCR clears queue *n*'s 32 buffer bytes to zero for every *n* whose **written** VALID*n* bit is 0. That is what makes the restore sequence of [../sq/spec.md §7](../sq/spec.md) a scrub for the queues it does not restore, including on a fresh vCPU whose saved HSQCR is the reset value below; §4.7.1 item 7 is the gang-switch obligation that depends on it. Buffer *writes* still do not touch this register — the asymmetry is deliberate and [../sq/spec.md §6.2](../sq/spec.md) argues it.
+
 **Per-vCPU context:** HSQCR is per-vCPU state, saved and restored across VM exit and entry as part of the vCPU context-save/restore sequence.
 
-**Reset value:** 0 (both queues empty).
+**Reset value:** 0 (both queues empty, both buffers zero).
 
 **Cross-reference:** The store queue architecture and the format of the queue buffers are specified in [../sq/spec.md §6](../sq/spec.md).
 
@@ -862,7 +864,12 @@ defined. Earlier drafts of this section carved out the full `0xE0000000`-`0xEFFF
 which left `0xE4000000`-`0xEFFFFFFF` reaching the bus undefined; that is corrected here.
 
 The carve-out applies to the *data* path only. A queue-data store to `0xE0000000`-`0xE3FFFFFF` is
-absorbed into the store queue without a trap, exactly as on bare metal. But the burst that a
+absorbed into the store queue without a trap, exactly as on bare metal. **A guest *load* from that
+range is likewise untrapped, and returns zero** ([../sq/spec.md §6.5](../sq/spec.md) rule
+**SQ-R4**): this paragraph specified what an untrapped guest store does and never said what an
+untrapped guest load returns, and the answer inherited from §2 of that specification used to be
+"undefined", which on a carve-out designed to keep the path away from the hypervisor means the
+previous tenant's buffer. But the burst that a
 subsequent `PREF` triggers is still address-translated (per [../sq/spec.md §3](../sq/spec.md), the
 burst target is formed from `QACRn.AREA` and `VA[25:5]`) and the resulting physical burst address
 is still subject to the emulation-aperture test of §2.5. The carve-out means the store-queue *data
@@ -1138,8 +1145,9 @@ Consequences, stated plainly because they are a capacity statement as much as a 
 ### 4.7.1 Gang switching (normative, when the gang-scheduled mode is used)
 
 All contexts of a core switch guests together, at a quantum boundary, never individually. The
-hypervisor **MUST** perform the following before the first entry to the incoming guest. Each item is
-a channel that would otherwise carry the outgoing guest's state across the boundary:
+hypervisor **MUST** perform the following **8** numbered items before the first entry to the
+incoming guest. Each item is a channel that would otherwise carry the outgoing guest's state across
+the boundary:
 
 | # | Action | Mechanism | Cost |
 |---|---|---|---|
@@ -1149,7 +1157,27 @@ a channel that would otherwise carry the outgoing guest's state across the bound
 | 4 | Invalidate L1-I and L1-D | SH-4 `CCR.ICI` / `CCR.OCI`. **L1-D is write-through** ([../ooo/j32ooo-spec.md §11.2](../ooo/j32ooo-spec.md)), so there is no dirty data to write back and this is an invalidate, not a flush | one register write each |
 | 5 | Flush the TLB | tens of entries; `ASID_TAG` tagging makes this unnecessary for *correctness*, and it is done for the channel | negligible |
 | 6 | Switch `TSBBR`, `PDID`, `L2WAYMASK` | already per-guest (§2.8, design-spec §3.8, [../cache/l2-spec.md §16.1](../cache/l2-spec.md)) | three register writes |
-| 7 | Restore the incoming guest's vCPU contexts, enter | §2.9 | — |
+| 7 | **Scrub the store-queue buffers, per context** | [../sq/spec.md §6.5](../sq/spec.md) rule **SQ-R3**: the hyperprivileged `HSQCR` write clears the buffer of every queue whose written `VALIDn` is 0, so the `HSQCR` write that ends [../sq/spec.md §7](../sq/spec.md)'s restore **is** the scrub | none — it is item 8's own `HSQCR` write |
+| 8 | Restore the incoming guest's vCPU contexts, enter | §2.9 | — |
+
+**Item 7 is new, and the reason it is a separate row from item 2 is the whole point of it.** Item 2
+already saves the outgoing guest's store-queue buffers, because §2.9 makes them per-context state.
+Saving is not scrubbing: the *incoming* guest's restore is what determines what the buffers then
+hold, and that restore is conditional — a queue the incoming vCPU never filled has nothing saved,
+and a **fresh** vCPU has no image at all. Without item 7 those queues would resume holding the
+outgoing tenant's bytes, which the incoming tenant can publish to an address of its own choosing
+with one store and one `PREF` ([../security/threat-model.md §7.8](../security/threat-model.md)).
+The cost column reads "none" because SQ-R3 is a hardware side effect of a register write item 8
+already performs; what item 7 adds is not an action but the requirement that the write happen for
+**every** context, including the ones with nothing to restore.
+
+**This list is still incomplete, and the missing entry is named rather than left to be
+discovered.** [../security/threat-model.md §8](../security/threat-model.md)'s **L1** requires both
+the store-queue buffers *and* the **FP/SIMD register files** on this list; §7.8 of that document
+shows both carry the previous owner's data by specification. Item 7 adds the store queue (Wave-3
+**C1a**). The FP/SIMD half is owed by **C1b** and is **not here yet**, so L1 is not `MET` and this
+list must not be read as the complete control that
+[../security/threat-model.md §10](../security/threat-model.md) item 8 calls it.
 
 **The L2 is deliberately not flushed.** Way-partitioning ([../cache/l2-spec.md §16.1](../cache/l2-spec.md))
 is what isolates it; a full L2 flush would cost ~655 µs of write-back at ~200 MB/s and dominate every

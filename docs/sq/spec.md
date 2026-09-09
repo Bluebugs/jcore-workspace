@@ -49,10 +49,17 @@ therefore traps like the rest of P4 — the guest-mode P4 carve-out of
 [../hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spec.md) is exactly
 `0xE0000000`–`0xE3FFFFFF`, the SQ-decoded range and no more.
 
-Reading the queue buffers back (via ordinary load) is architecturally undefined at `SR.MD = 1`
-with `SR.HPRIV = 0`, and on any implementation without the hypervisor extension. The single,
-narrow exception is hyperprivileged software: §6.2 defines queue-buffer readback at
-`SR.HPRIV = 1`. No other software may rely on reading queue contents.
+Reading the queue buffers back (via ordinary load) **returns zero** at `SR.MD = 1` with
+`SR.HPRIV = 0`, and on any implementation without the hypervisor extension. It does not trap and
+it changes nothing. The single, narrow exception is hyperprivileged software: §6.2 defines
+queue-buffer readback at `SR.HPRIV = 1`. No other software may rely on reading queue contents —
+it may only rely on **not** being shown someone else's.
+
+> **SUPERSEDED BY §6.5 — 2026-09-09.** This paragraph previously read that the readback is
+> "architecturally undefined" below `SR.HPRIV = 1`. That is one of the three
+> "undefined = the previous owner's data" instances
+> [../security/threat-model.md §7.8](../security/threat-model.md) enumerates, and it is the one
+> this document owns. §6.5 rule **SQ-R4** replaces it with a defined zero and argues the choice.
 
 ## 3. QACR Layout and Address Formation
 
@@ -99,10 +106,17 @@ mode rather than the host's.
 `PREF @Rn`, where `Rn` holds an address in `0xE0000000`–`0xE3FFFFFF`, drains the selected queue
 (SQ0 or SQ1, chosen by `Rn[5]`) as a single 32-byte burst to the address formed per §3. The burst
 is all-or-nothing: all 32 bytes of the queue are written to the bus in one transaction. Bytes
-within the queue that were never written since the queue's last burst have **undefined** content
-— hardware does not track per-byte validity within a queue, so software filling a queue for a
-burst must write all 8 words. After the burst completes, the queue's internal valid/dirty state
-clears (tracked further in §6.3).
+within the queue that were never written since that queue's last clear are **zero** — hardware
+does not track per-byte validity within a queue, so a burst of a partly-filled queue publishes
+zeros where software wrote nothing, and software filling a queue for a burst must still write all
+8 words. After the burst completes, the queue's internal valid/dirty state clears **and its 32
+buffer bytes are zeroed** (§6.3, and §6.5 rule **SQ-R2** for why the zeroing is here rather than
+left to software).
+
+> **SUPERSEDED BY §6.5 — 2026-09-09.** The sentence above previously read that such bytes "have
+> **undefined** content". A guest that writes one word and bursts would then publish 28 bytes of
+> whoever owned the queue before it, to an address of its own choosing
+> ([../security/threat-model.md §7.8](../security/threat-model.md)).
 
 `PREF` issued with an address outside the SQ aliasing window retains its ordinary
 cache-prefetch meaning and has no interaction with the store queues.
@@ -167,9 +181,18 @@ window and no new encodings, because the hypervisor is already exempt from the g
 of [../hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spec.md).
 
 Hypervisor **writes** to the same range also address the buffers directly and do **not** update
-`HSQCR`. Restoring valid/dirty state is a separate, explicit `LDC` to `HSQCR`. Keeping the two
-paths independent is what lets a restore sequence reproduce any state exactly, including a queue
-whose bytes are fully written but whose `VALID`/`DIRTY` bits are clear.
+`HSQCR`. Restoring valid/dirty state is a separate, explicit `LDC` to `HSQCR`, and that `LDC` is
+why §7's restore writes `HSQCR` last: it is the single point at which restored state becomes
+architecturally live.
+
+**One state is deliberately no longer reproducible, and it is worth saying which.** This paragraph
+previously offered, as evidence of the two paths' independence, that a restore could reproduce "a
+queue whose bytes are fully written but whose `VALID`/`DIRTY` bits are clear". Under §6.5 rule
+**SQ-R3** it cannot: the `HSQCR` write that leaves `VALIDn` clear also zeroes queue *n*'s bytes.
+That state — bytes present, with nothing marking them live — **is** the residue state, and it was
+being described as a capability. The independence of the two paths survives unchanged; what is
+withdrawn is one example of it that [../security/threat-model.md §8](../security/threat-model.md)'s
+**L6** bans outright.
 
 **Prior art, pre-2006.** The store queue itself, including the architectural decision to leave
 buffer readback undefined, is SH-4 (Renesas SH-4 CPU Core Architecture manual, 1998); this section
@@ -190,11 +213,16 @@ here:
 
 ```
 guest store into queue n   : VALIDn <- 1, DIRTYn <- 1
-successful burst of queue n: VALIDn <- 0, DIRTYn <- 0
-trapped burst (HMCR.SQ=1)  : unchanged - the hypervisor decides
-LDC to HSQCR at HPRIV=1    : set directly
-reset                      : all zero
+successful burst of queue n: VALIDn <- 0, DIRTYn <- 0, buffer n <- 0   (SQ-R2)
+trapped burst (HMCR.SQ=1)  : unchanged - the hypervisor decides; the buffer
+                             is NOT cleared, because it is the evidence
+LDC to HSQCR at HPRIV=1    : set directly; buffer n <- 0 for every n whose
+                             written VALIDn is 0                        (SQ-R3)
+reset                      : all zero, buffers included                 (SQ-R1)
 ```
+
+The three annotated rows are §6.5's residue rules seen from this register; §6.5 is where they are
+stated normatively and argued.
 
 The "trapped burst" row agrees with
 [../hypervisor/hardware-spec.md §4.5](../hypervisor/hardware-spec.md) rule 4: for `HMCR.SQ = 1`,
@@ -283,11 +311,232 @@ hypervisor runs at `HLE`, so its loads from a guest's queue buffer assemble in
 the host's byte order — which is what saving and restoring raw bytes requires,
 and what §7's save sequence already assumes.
 
+### 6.5 Buffer residue: a queue holds only its current owner's bytes (normative)
+
+**Wave-3 task C1a**, from [../j4-remediation-plan.md §C1](../j4-remediation-plan.md), argued against
+[../security/threat-model.md §8](../security/threat-model.md)'s bar items **L6** and **L1**.
+
+#### The exposure
+
+The adversary of [../security/threat-model.md §1](../security/threat-model.md) is a *guest kernel*
+that owns a core for a whole quantum and is handed a core another tenant used. Against that
+adversary the queues, as §1–§5 and §6.1–§6.4 previously left them, are three primitives, and not
+one of them needs speculation, timing, or noise:
+
+1. **Publish.** §4's burst is all-or-nothing: `PREF` writes all 32 bytes of the queue to the bus.
+   A guest that writes one word and bursts therefore publishes 28 bytes it did not write, to a
+   physical address it chose through `QACRn.AREA` and `VA[25:5]` (§3), and then reads them back
+   out of its own memory. Committed instructions throughout.
+2. **Read.** §2 previously left a load of the queue region "architecturally undefined" below
+   `SR.HPRIV = 1`. An implementer may satisfy "undefined" with the buffer contents, at which point
+   the exposure is a plain load.
+3. **Read the host.** §6.2 lets hyperprivileged software *write* the buffers. The bytes a queue
+   holds at an ownership change are therefore not necessarily another guest's — they can be the
+   hypervisor's, which is the TCB ([../security/threat-model.md §2](../security/threat-model.md)).
+
+All three run in the corruption direction as well as the disclosure one: a burst carrying stale
+bytes writes them into the *incoming* guest's own memory, silently, on a path nothing inspects.
+
+**This section is about the *temporal* case only** — one thread context, two owners over time. The
+concurrent case, two vCPUs of one core writing one buffer at the same instant, is closed by §7.1's
+per-context replication and is not restated here.
+
+#### The invariant
+
+> **SQ-INV.** At every instant, every byte of a queue buffer is either a byte the queue's current
+> owner stored since that queue's last clear, or **zero**.
+
+Everything below exists to make SQ-INV true and testable. It is stated as an invariant rather than
+as a sequence of steps because L6's failure mode is precisely a step that silently does not run.
+
+#### The rules (normative)
+
+**SQ-R1 — Reset.** Out of reset both queue buffers are zero, and so are `QACR0`, `QACR1` and
+`HSQCR`. [../hypervisor/hardware-spec.md §2.7](../hypervisor/hardware-spec.md) already gives
+`HSQCR`'s reset value; this extends the requirement to the buffers and the area registers, which
+had none.
+
+**SQ-R2 — Clear on burst completion.** When a burst is issued to the bus and completes, the source
+queue's 32 buffer bytes become zero, in the same step as §6.3's `VALIDn`/`DIRTYn` clear.
+**A trapped burst clears nothing.** Under `HMCR.SQ = 1` the buffer is the evidence the hypervisor
+is required to inspect (§6.2, §6.3, and
+[../hypervisor/hardware-spec.md §4.5](../hypervisor/hardware-spec.md) rule 4), so R2 is conditioned
+on the burst reaching the bus and not on `PREF` executing. Getting that condition backwards would
+break complete-on-resume while looking like a stronger scrub.
+
+**SQ-R3 — Scrub on ownership change.** A hyperprivileged write to `HSQCR` clears queue *n*'s 32
+buffer bytes to zero, for every *n* whose **written** `VALIDn` bit is 0. Unconditional, idempotent,
+no transition detection, no new register, no new encoding.
+
+Three consequences, and the third is the one this task exists for.
+
+1. §7's restore writes `HSQCR` **last** and unconditionally, so every queue it does not restore is
+   scrubbed at that write. **§7's sequence needs no change**: a queue whose saved `VALIDn` was 1
+   had its bytes written by step 2 and is not scrubbed; a queue whose saved `VALIDn` was 0 had
+   nothing saved and is scrubbed.
+2. The scrub is a hardware effect of a register write the switch already performs. It cannot be
+   omitted independently of omitting the restore, which is the difference between a control and an
+   item on a checklist.
+3. **A fresh vCPU with no saved image is covered by construction.** Its `HSQCR` is the reset value
+   0 ([../hypervisor/hardware-spec.md §2.7](../hypervisor/hardware-spec.md)), so its restore
+   scrubs both queues. This is the branch
+   [../security/threat-model.md §7.8](../security/threat-model.md) identifies in the lazy-FPU
+   restore and that **L3** requires as its own test case — a save/restore between two *established*
+   owners passes without ever reaching it. Here it is not a second code path that could be
+   forgotten; it is the same write with a different operand.
+
+**SQ-R4 — Guest reads are defined.** At `SR.MD = 1`, `SR.HPRIV = 0`, a load from
+`0xE0000000`–`0xE3FFFFFF` returns **zero**. It does not trap, does not read the buffer, and has no
+effect on `HSQCR`. At `SR.MD = 0` nothing changes: §5's privilege rule governs loads exactly as it
+governs stores. At `SR.HPRIV = 1`, §6.2's readback applies and returns the buffer word selected by
+the same `VA[5]` / `VA[4:2]` decode a queue-data store uses — so §2's aliasing window aliases
+identically for reads and for stores, and §6.2's base addresses are the canonical spelling of that
+decode rather than a second comparator. This closes the last hole in
+[../hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spec.md), whose carve-out is for
+"the *data* path" and which specifies what an untrapped guest **store** into the region does
+without ever saying what an untrapped guest **load** returns.
+
+**SQ-R5 — Nothing here is "undefined".** §4's "bytes … have undefined content" is withdrawn: bytes
+not written since the queue's last clear (R1, R2 or R3) **are zero**, and burst as zero. Software
+filling a queue should still write all eight words, because zeros are not its payload — but that
+is now a correctness obligation about its own data, and no longer a security one.
+
+**SQ-R6 — The hypervisor does not stage its own data in a queue.** Hyperprivileged writes to
+`0xE0000000`–`0xE000003F` are permitted only as §7's restore of the incoming context's saved image.
+R3 keys the scrub on the *incoming* context's `HSQCR`, and no mechanism can distinguish host bytes
+from a restored image, so a queue the hypervisor filled for its own purposes and left marked
+`VALID` would be burst by the guest. This is a discipline on the TCB rather than a hardware
+guarantee, and it is written down because it is otherwise invisible.
+
+#### What discharges the bar, and what does not
+
+**L6** demands "a residue test per site … written as *tenant A stores a recognisable pattern;
+tenant B reads and must not see it*, and each demonstrated **red before the fix**". For this site
+that is three tests, and the third is the one that gets skipped.
+
+| # | Test | What it recovers if the rule is absent |
+|---|---|---|
+| 1 | Tenant A fills SQ0 with a recognisable pattern and is gang-switched out **without** bursting. Tenant B stores one word at the queue base, issues `PREF`, and reads the burst target. | A's remaining 28 bytes — R2 and R3 both absent |
+| 2 | Tenant B loads the SQ region directly at `SR.MD = 1`, `SR.HPRIV = 0`. | A's bytes — R4 absent, "undefined" realised as the buffer |
+| 3 | **Tenant B is a fresh vCPU with no saved image**, so its restore writes no buffer bytes at all; B then runs test 1. | A's bytes, *with tests 1 and 2 green*, on any implementation whose scrub is conditioned on there being an image to restore |
+
+Test 3 is the store-queue form of the no-saved-image branch, and R3 has the shape it has so that
+tests 1 and 3 exercise the same hardware rather than two paths of which one is exercised.
+
+**L1**'s added clause is discharged in another document, deliberately.
+[../hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)'s gang-switch list now
+carries the scrub as a numbered item. A scrub specified here and absent from *that list* would
+leave L1 unmet while looking finished — which is the failure
+[../security/threat-model.md §8](../security/threat-model.md) predicts for this task by name.
+
+#### Minimizing the loss ([../j4-remediation-plan.md §E.10](../j4-remediation-plan.md), gated by §D3)
+
+The guarantee to be bought is SQ-INV. Four ways to buy it were considered.
+
+**Chosen: clear the storage.** R1–R3 are a broadside zeroing of storage §7.1 already requires to
+exist per thread context. It adds **no architectural state**: §7.2's image stays as it is,
+`HSQCR`'s layout is untouched, and §7's sequence is unchanged. Structurally the clear covers
+64 bytes × 8 = **512 bits per thread context** — a structural count, not a measurement — and the
+lever is the one §E.10 names, "per-register zero bit = 1-cycle zeroing".
+
+**Rejected as the specified mechanism, and recorded: an 8-bit word-valid mask per queue**, with the
+burst sourcing zero for any word whose bit is clear. It buys the same invariant with 16 bits per
+context instead of a clear enable across 512, and it is the better answer if the buffers are block
+RAM, where a broadside clear is unavailable and a word-serial clear could not overlap a burst
+reading the same single-ported array. It is rejected because the mask bits are **per-vCPU
+architectural state**: they would have to join
+[../hypervisor/hardware-spec.md §2.9](../hypervisor/hardware-spec.md)'s list, §7's save and
+restore, and §7.2's image, and `HSQCR`'s layout would have to be reopened to carry them. Sixteen
+bits is cheap in gates and expensive in specification surface, and specification surface is where
+L6 says this class of defect comes back. **It remains a permitted implementation of SQ-INV** — the
+invariant does not care which — on the explicit condition that an implementation choosing it
+carries the mask as saved context. An implementation that masks without saving the mask
+reintroduces the residue across exactly the switch the mask was added to survive.
+
+**Rejected: trap the guest read, instead of R4's zero.** A trap needs an `EXPEVT` value, an `HEDR`
+bit, a vector and a hypervisor handler, all to deliver an exception on the one guest path
+[../hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spec.md) carves out of the P4 trap
+in order to keep it untrapped. It also makes the defined behaviour depend on that handler being
+correct, and this item exists because a mitigation that depends on software running is the one that
+silently does not. SH-4 left the read undefined, so no conforming software reads the queues and a
+defined zero can regress nothing.
+
+**Rejected: scrub in hypervisor software** — sixteen word stores per context in the switch path, no
+RTL change at all. Rejected on L6's own argument, that a scrub which silently does not happen
+produces no fault, and on a second ground the bar does not state: §1–§5 are the **non-virtualized**
+baseline, where there is no hyperprivileged mode and no hypervisor to run the loop, and §2's
+readback was undefined there too. A software-only scrub leaves the bare-metal machine exactly as it
+was.
+
+**What this costs, and what is not known.**
+
+- **Per gang switch: no added instruction.** R3 is a side effect of the `HSQCR` write §7's restore
+  already performs.
+- **Per burst:** R2's clear. Whether it adds a cycle to the burst, and whether the clear enable
+  moves the core's `Fmax`, is `unknown at this stage — needs measurement`.
+- **Area:** no added architectural state; a clear enable on storage §7.1 already requires. The gate
+  cost is `unknown at this stage — needs measurement`.
+- **§E.10's conclusion is about a class and is not a number for this mechanism.** It prices "eager
+  state switch + scrub" as sub-1% on this core, and that is why this design has the *shape* it has
+  — cross-tenant only, no per-switch copying, a data-path clear rather than a software loop. It is
+  `LITERATURE` on [../security/threat-model.md §9](../security/threat-model.md)'s provenance scale,
+  it is not evidence about the store queue, and no percentage is stated here for one.
+
+**The experiment that would settle it.** Human-gated: this design prepares it and a person runs the
+board ([../j4-execution-plan.md §5](../j4-execution-plan.md)).
+
+1. **Synthesis A/B.** Build the store-queue block with and without R2/R3's clear; `yosys` +
+   `nextpnr-ecp5` targeting the ULX3S 85F. Report ΔLUT4, ΔFF, ΔEBR and `Fmax` against the CI floor
+   of [../platform-baseline.md §3](../platform-baseline.md). *Kill criterion:* if the clear puts
+   the build under the floor, take the rejected mask variant and pay its context state.
+2. **Streaming throughput.** §6.1's motivating workload shape — a loop of *N* × (eight word stores
+   + `PREF`) into a mapped ring — in bytes per second, with the clear present and absent.
+   *Kill criterion:* any measurable reduction in burst rate means R2 must be realised as the
+   zero-mux rather than as a storage clear. SQ-INV is indifferent between them; this measurement is
+   what decides.
+3. **Switch cost.** Gang-switch latency across a two-guest gang schedule, with and without the
+   scrub, from the PMU cycle counter. Expected to be unmeasurable, because R3 adds no instruction;
+   the experiment exists to confirm that rather than to assume it.
+
+#### Implementation status: specified, not built
+
+§1 already says the store queue does not exist. **This section is a rule about hardware that does
+not exist either, and nothing in it is met because it has been written.** Checked this session at
+`jcore-cpu@origin/master` `e8a5a4e1`: no file under `*.vhd`/`*.vhm` matches
+`store_queue|storequeue|sq_` case-insensitively — case-insensitively being the only honest way to
+ask, since VHDL is case-insensitive and `git grep` is not.
+
+Three consequences, so that nothing here reads as a closure:
+
+- **L6's store-queue site moves from a specified "undefined" to a specified scrub, and no
+  further.** L6's evidence bar is the three residue tests above, each demonstrated red before the
+  fix, and there is no hardware to run them red on.
+- **R1–R6 must land with §1–§5's baseline queues, not after them.** What unblocks the
+  implementation half of C1a is the store queue itself — the region decode, the two buffers,
+  `QACR0`/`QACR1` and SH-4 `PREF` — and the reason is §6.4's reason in another subsystem: the
+  [../hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spec.md) carve-out is enabled when
+  the queues arrive, and after that there is no point at which a guest would notice the scrub was
+  missing.
+- **Two of L6's three "undefined"s are not this document's**, and are named here so the next task
+  does not re-derive the split: the no-saved-image branch of the lazy FPU restore
+  ([../fpu/spec.md §7.3](../fpu/spec.md), Wave-3 **C1b**) and `movca.l`'s partially-defined L2 line
+  ([../cache/l2-spec.md §17.5](../cache/l2-spec.md), Wave-3 **C2e**). L6 also asks for a grep-level
+  CI check that no tenant-visible "undefined" is reintroduced; that check does not exist in
+  `scripts/check-doc-facts.py` today and is owed by **B0c**, not by this task.
+
+**Prior art, pre-2006.** Reading storage whose owner has changed as a defined constant rather than
+as whatever it last held is the object-reuse requirement: TCSEC (DoD 5200.28-STD, 1985) makes it a
+named criterion from class C2 upward, requiring that storage assigned to a subject contain no
+information produced by a prior subject. Clearing state at a change of owner rather than leaving it
+legible is the same System/370 (1970) storage-key discipline §6.2 and §7 already cite for the other
+half of this mechanism. Neither the rule nor the mechanism is new; what is new here is only which
+structure it is applied to.
+
 ## 7. Context Switch
 
 A vCPU's store-queue state — 64 bytes of buffer, two `QACR` values, and `HSQCR` — is per-vCPU
 context that a hypervisor's scheduler must save on VM exit and restore before resuming that vCPU,
-exactly like general-purpose registers. The sequences below are lazy in the ordinary sense: they
+exactly like general-purpose registers. §7.2 lays out the saved image field by field. The sequences below are lazy in the ordinary sense: they
 run only when the scheduler actually switches away from and back to a given vCPU, not on every
 trap.
 
@@ -312,7 +561,9 @@ visible as valid/dirty, and it can be issued only once all other state is alread
 
 **Invariant.** A guest preempted between its eighth queue store and its `PREF` observes nothing:
 all 64 bytes of buffer, both `QACR` values, and `HSQCR` are restored before the guest resumes, so
-the queue is bit-for-bit as the guest left it. No flush is forced across the switch — the point
+the queue is bit-for-bit as the guest left it. **The converse invariant is §6.5's**, and the two
+are the same `HSQCR` write seen from either side: a vCPU with nothing saved for a queue resumes
+with that queue zeroed, never with whatever the previous owner left in it. No flush is forced across the switch — the point
 of the lazy model is that preemption never changes what the guest eventually bursts; the burst
 happens, if at all, only when the guest's own `PREF` next executes.
 
@@ -335,7 +586,10 @@ the hot path [../hypervisor/hardware-spec.md §4.4.3](../hypervisor/hardware-spe
 exists to accelerate — eight untrapped stores plus a `PREF`, by design, for exactly the guest that
 must not see another's data.
 
-Cost: 72 bytes of state per additional context. See
+Cost: the 72-byte store-queue image of §7.2 per additional context, plus `HSQCR`, which is
+counted with the per-context hypervisor register block rather than with the queues — the split
+[../ooo/j32lt-spec.md §16.12](../ooo/j32lt-spec.md)'s per-thread table uses, and the reason this
+line reads 72 and not 76 while the replication list above names `HSQCR`. See
 [../hypervisor/hardware-spec.md §2.9](../hypervisor/hardware-spec.md), which applies the same rule
 to the rest of the per-vCPU register set, and
 [../ooo/j32lt-spec.md §16.12](../ooo/j32lt-spec.md) for the four-context total.
@@ -361,3 +615,27 @@ and the `QACR` registers, and this section adds only the rule that a hypervisor 
 per-vCPU context. The deliberate choice *not* to flush on switch also follows the same 1970
 lineage: a supervisor intervention is required to be transparent to the interrupted program, and
 forcing a burst the guest did not ask for would not be.
+
+### 7.2 The per-context save image (72-byte store-queue image)
+
+The state §7's sequences move, laid out so that the sum is checked rather than asserted. Offsets
+are into the hypervisor's own save area and have nothing to do with the SQ region's addresses.
+
+| Offset | Bytes | Content                          |
+| ------ | ----- | -------------------------------- |
+| 0x00   | 32    | SQ0 buffer (8 × 4 B)             |
+| 0x20   | 32    | SQ1 buffer (8 × 4 B)             |
+| 0x40   | 4     | `QACR0`                          |
+| 0x44   | 4     | `QACR1`                          |
+| 0x48   | —     | end (72 bytes)                   |
+
+**`HSQCR` is deliberately not in this image.** It is a hyperprivileged register and is counted with
+the rest of that set in [../ooo/j32lt-spec.md §16.12](../ooo/j32lt-spec.md)'s per-thread table, not
+with the queues; §7's restore reaches it by the separate `LDC` of step 3, which §6.2 explains and
+§6.5 rule **SQ-R3** now gives a second job. Counting it here would double-count it against that
+table and turn 72 into 76.
+
+**A queue whose `VALIDn` is clear contributes zeros, not stale bytes.** §7's save may skip reading
+such a queue — there is nothing live in it — and §6.5 rule **SQ-R3** guarantees the restore leaves
+it zeroed rather than untouched. The image is therefore complete whether or not the save ran the
+optional steps, which is what makes the skip safe.
