@@ -103,7 +103,11 @@ V0..V15 are saved and restored on context switch by the operating system, using 
 
 **FP scalar results target the SH-4 FPU register file (FR / DR).** A SIMD operation that produces an FP scalar — a horizontal FP reduction (§2.3), `VFIPR`, or `VFTRV` ([gpu/simd-gpu-spec.md](gpu/simd-gpu-spec.md)) — writes its result **directly into an FR (single) or DR (double) register**, exactly as integer reductions write MACL/MACH. There is **no dedicated SIMD-side FP scalar register**; the earlier VFPUL design was retired (see the §2.6 rationale and Appendix B) once the result was written at block exit, which makes it a clean instruction-boundary event rather than a mid-block FPU write. This choice also reproduces SH-4 register semantics for the promoted geometry ops (`VFIPR`→FR0 like SH-4 FIPR, `VFTRV`→FV0 = FR0..FR3 like SH-4 FTRV) and reuses the FPU's existing FTRV/FIPR 4-wide writeback port.
 
-**Relationship to scalar FPU.** FR0..FR15 (front bank) and XF0..XF15 (back bank) are the SH-4 scalar FPU registers, unchanged from SH-4, used by ordinary SH-4 FPU instructions. SH-4 FIPR and FTRV still exist as scalar-FPU instructions operating on FR quartets; the follow-up extension [gpu/simd-gpu-spec.md](gpu/simd-gpu-spec.md) additionally promotes their function into the V-file (segmented horizontal reductions reusing the SWIZZLE crossbar + horizontal add tree) whose **FP scalar results land in FR/DR**. SIMD compute is otherwise register-file-disjoint from the FPU: no SIMD instruction reads or writes FR/DR/FPUL/FPSCR **except** the FP-scalar writeback of a horizontal FP reduction / VFIPR / VFTRV, which commits to FR/DR at block exit and requires FPU ownership (SR.FD = 0), checked at prefix/block decode so any FPU-restore trap fires at a clean instruction boundary, never mid-block (§2.6). Integer SIMD never touches the FPU. See [../fpu/spec.md](../fpu/spec.md) for the FPU's own tier structure. Implementations that omit the FPU entirely (e.g. J2) also omit Tier 0 SIMD, since FP scalar results have nowhere to land and meaningful SIMD-FP workloads need round-trippable scalar values.
+**Relationship to scalar FPU.** FR0..FR15 (front bank) and XF0..XF15 (back bank) are the SH-4 scalar FPU registers, unchanged from SH-4, used by ordinary SH-4 FPU instructions. SH-4 FIPR and FTRV still exist as scalar-FPU instructions operating on FR quartets; the follow-up extension [gpu/simd-gpu-spec.md](gpu/simd-gpu-spec.md) additionally promotes their function into the V-file (segmented horizontal reductions reusing the SWIZZLE crossbar + horizontal add tree) whose **FP scalar results land in FR/DR**. **Integer** SIMD compute is register-file-disjoint from the FPU: no integer SIMD instruction reads or writes FR/DR/FPUL/`FPSCR`. **FP** SIMD is not disjoint from it, in three separate ways, and all three require FPU ownership (`SR.FD = 0`) under §2.4.1: (i) the FP-scalar writeback of a horizontal FP reduction / `VFIPR` / `VFTRV`, which commits to FR/DR at block exit; (ii) `VEXTF.L` / `VINSF.L`, which read and write `FRn` directly (§5.7); and (iii) **every** governed FP operation (§5.2), which reads `FPSCR.RM` and, under `VCSR.IEE = 1`, writes `FPSCR.FLAG` (§2.4) — including in a purely **vertical** block that writes no FR/DR at all.
+
+> **This sentence used to claim that (i) was the only one.** It read: *"SIMD compute is otherwise register-file-disjoint from the FPU: no SIMD instruction reads or writes FR/DR/FPUL/FPSCR **except** the FP-scalar writeback of a horizontal FP reduction / VFIPR / VFTRV, which commits to FR/DR at block exit and requires FPU ownership (SR.FD = 0)…"*. That was false against §2.4 and against §5.7, both in this document, and the ownership requirement it carried reached only the writeback path. Corrected by Wave-3 task **C1c**; the rule, and what the omission cost, are §2.4.1.
+
+Integer SIMD never touches the FPU. See [../fpu/spec.md](../fpu/spec.md) for the FPU's own tier structure. Implementations that omit the FPU entirely (e.g. J2) also omit Tier 0 SIMD, since FP scalar results have nowhere to land and meaningful SIMD-FP workloads need round-trippable scalar values.
 
 **Data movement between scalar FPU and SIMD.** Two-instruction sequences `VLNS`+`VEXTF.L` / `VLNS`+`VINSF.L` and the integer variants `VEXT.B/W/L/Q` and `VINS.B/W/L/Q` (§5.7) move single lane values between a scalar register (`FRn` for FP, `Rn` for integer) and a specified lane of a Vn register. For wider transfers, software stages data through memory using VLD/VST and FMOV.S / MOV.L.
 
@@ -124,7 +128,7 @@ Lane *i* of V*n* at width *w* occupies bits `[w·i + w − 1 : w·i]` of V*n*, i
 
 ### 2.3 Reduction destination
 
-Horizontal (reductive) SIMD operations write their scalar result to the appropriate **scalar bank** for the lane type: the existing SH-4 integer scalar pair (MACL/MACH) for integer reductions, and the SH-4 FPU register **FR0 (single) / DR0 (double)** for FP reductions — symmetric with the integer case, and *implied* exactly as MACL/MACH is (a plain SIMDH+FMUL reduction has no free register field, since both operand fields name V sources). The geometry instructions `VFIPR`/`VFTRV` ([gpu/simd-gpu-spec.md](gpu/simd-gpu-spec.md)) likewise use an **implied FR0 base**: a segmented FP reduction with *G* groups writes FR0..FR(G−1), so `VFIPR` (1 group) → FR0 and `VFTRV` (4 groups) → FR0..FR3 = **FV0**. This keeps the destination implicit (no register field needed — both operand fields name V sources) and symmetric with MACL/MACH; software moves FV0 to another FV afterward if required. The FP-scalar write commits at **block exit** and requires FPU ownership (SR.FD = 0), checked at prefix/block decode so any FPU-restore trap fires at a clean boundary, never mid-block (§2.6). FR0/DR0 (scalar FPU) is a distinct file from V0 (SIMD), so a reduction reading V-register sources and writing FR0 has no register conflict. There is no dedicated SIMD-side FP scalar register (VFPUL was retired; Appendix B).
+Horizontal (reductive) SIMD operations write their scalar result to the appropriate **scalar bank** for the lane type: the existing SH-4 integer scalar pair (MACL/MACH) for integer reductions, and the SH-4 FPU register **FR0 (single) / DR0 (double)** for FP reductions — symmetric with the integer case, and *implied* exactly as MACL/MACH is (a plain SIMDH+FMUL reduction has no free register field, since both operand fields name V sources). The geometry instructions `VFIPR`/`VFTRV` ([gpu/simd-gpu-spec.md](gpu/simd-gpu-spec.md)) likewise use an **implied FR0 base**: a segmented FP reduction with *G* groups writes FR0..FR(G−1), so `VFIPR` (1 group) → FR0 and `VFTRV` (4 groups) → FR0..FR3 = **FV0**. This keeps the destination implicit (no register field needed — both operand fields name V sources) and symmetric with MACL/MACH; software moves FV0 to another FV afterward if required. The FP-scalar write commits at **block exit** and requires FPU ownership (`SR.FD = 0`), checked at prefix decode so any FPU-restore trap fires at a clean boundary, never mid-block (§2.6). §2.4.1 rule **S-R1** generalises that requirement to **every** FP SIMD block, vertical ones included, and rule **S-R3** states what the prefix decoder has to inspect to apply it — because §3.2's prefix does not encode whether the block is FP or integer. FR0/DR0 (scalar FPU) is a distinct file from V0 (SIMD), so a reduction reading V-register sources and writing FR0 has no register conflict. There is no dedicated SIMD-side FP scalar register (VFPUL was retired; Appendix B).
 
 For additive reductions, the destination is **one type-class wider than the lane width** to preserve precision in long accumulation chains and prevent overflow in the common ML and DSP kernels (int8 → int32, FP16 → FP32).
 
@@ -144,11 +148,11 @@ Min/max/bitwise reductions (added in Tier 0) do not widen; the destination match
 
 **No V-register restrictions.** Any V register may be used as a source or destination in any SIMDH variant.
 
-**Implicit clear at prefix decode.** When a SIMDH prefix is decoded, the reduction destination is implicitly cleared to zero: MACL and MACH are zeroed for integer-typed reductions; FR0/DR0 (and, for a *G*-group segmented reduction, FR0..FR(G−1)) is zeroed for FP-typed reductions (the FPU-ownership check has already succeeded at this point, §2.6).
+**Implicit clear at prefix decode.** When a SIMDH prefix is decoded, the reduction destination is implicitly cleared to zero: MACL and MACH are zeroed for integer-typed reductions; FR0/DR0 (and, for a *G*-group segmented reduction, FR0..FR(G−1)) is zeroed for FP-typed reductions (the FPU-ownership check has already succeeded at this point, §2.4.1). **Choosing between those two destinations needs the same information the ownership check needs**, and §3.2's prefix does not carry it: whether a reduction is integer- or FP-typed is a property of the governed opcode (§5.1 versus §5.2), not of `H`, `ww`, `rrr` or `N`. §2.4.1 rule **S-R3** states the governed-opcode scan once; this clear and that check both consume it.
 
 **Chaining cost.** A horizontal reduction's FP result is already in an FR/DR register — no boundary move. To consume it in scalar FP code, use FRn/DRn directly. To chain into another SIMD reduction, target a different FR and combine with `FADD`. To consume it back into a SIMD vector lane, use `VINSF.L` (which now reads FRn) per §5.7. Integer reductions in MACL/MACH consume normally via `STS MACL, Rn` / `STS MACH, Rn`.
 
-**FPU coupling for FP reductions.** A task that issues FP horizontal reductions / VFIPR / VFTRV writes FR/DR and therefore **owns the FPU** (SR.FD = 0) — so for such tasks SIMD lazy save (SR.VD, §2.6) and FPU lazy save (SR.FD, [../fpu/spec.md §6.3](../fpu/spec.md)) are coupled. This is the honest coupling: the task is doing FP math. **Integer SIMD remains fully independent** of the FPU (its reductions go to MACL/MACH), and **FPU-only tasks** never trigger a V reduction, so their independence is preserved. The pre-VFPUL-retirement design decoupled the two universally at the cost of a dedicated register and boundary moves; the trade is recorded in Appendix B.
+**FPU coupling for FP SIMD.** A task that issues FP horizontal reductions / VFIPR / VFTRV writes FR/DR and therefore **owns the FPU** (SR.FD = 0) — so for such tasks SIMD lazy save (SR.VD, §2.6) and FPU lazy save (SR.FD, [../fpu/spec.md §6.3](../fpu/spec.md)) are coupled. This is the honest coupling: the task is doing FP math. **§2.4.1 widens it from FP *reductions* to *all* FP SIMD**, for a reason that has nothing to do with the writeback: §2.4's `FPSCR.RM` read and `FPSCR.FLAG` write are in every FP block, vertical ones included, and a task doing them under `SR.FD = 1` is using another context's register. **Integer SIMD remains fully independent** of the FPU (its reductions go to MACL/MACH), and **FPU-only tasks** never trigger a V reduction, so their independence is preserved. The pre-VFPUL-retirement design decoupled the two universally at the cost of a dedicated register and boundary moves; the trade is recorded in Appendix B.
 
 **FPU register file required for FP SIMD.** FP SIMD reductions write FR/DR, so implementations targeting FP Tier 0 SIMD must implement the SH-4 FPU register file (FR0..FR15, DR, FPUL, MACL, MACH) and **SR.FD** (Tier 1 FPU). This couples SIMD-enabled product points to an FPU-bearing baseline at Tier 1 minimum (J32 and up; see [../glossary.md §3](../glossary.md)). Integer-only SIMD does not require the FPU.
 
@@ -172,7 +176,197 @@ Existing SH-4 FPSCR fields apply unchanged to scalar FPU code. For FP governed S
 - `FPSCR.CAUSE` bits are **not set** by SIMD FP operations.
 - `FPSCR.FLAG` bits are updated only when VCSR.IEE = 1, OR-accumulated across lanes.
 
+**Every field above belongs to the FPU, so a block that reads or writes one must own the FPU.**
+That requirement is §2.4.1, added by Wave-3 task **C1c**. It is what makes the four bullets safe:
+without it, the `FPSCR.RM` read and the `FPSCR.FLAG` write of a purely **vertical** FP block reach
+the register file of whichever context currently owns the FPU, which under the lazy pattern of §2.6
+and [../fpu/spec.md §7.3](../fpu/spec.md) is a different one.
+
 **Naming rationale.** The placement of the mask-enable bit in a dedicated VCSR (rather than in FPSCR) follows the Cray-1 model (1976) of a dedicated vector-control register (VL) separate from the scalar status register. The IEE bit is directly modelled on PowerPC AltiVec's "Java mode" bit in VSCR (1996).
+
+### 2.4.1 FPU ownership for SIMD FP operations (normative)
+
+**Wave-3 task C1c**, from [../j4-remediation-plan.md §C1](../j4-remediation-plan.md)'s
+"vertical FP SIMD ownership hole", argued against
+[../security/threat-model.md §8](../security/threat-model.md)'s bar item **L3**.
+
+*It is here and not in `../decisions/`* on [../decisions/README.md](../decisions/README.md)'s
+rule that a decision goes inline when a spec owns the thing decided. What is decided here is
+**which SIMD instructions require the FPU**, and that is a property of the SIMD decode rules,
+which this document owns. The `FPSCR` fields themselves are
+[../fpu/spec.md §6.4](../fpu/spec.md)'s and are not restated. The one consequence that lands on
+`FPDS` is stated by that document, in §7.7, because it owns that bit.
+
+#### The defect
+
+§2.4 makes **every** governed FP operation a reader of `FPSCR.RM` — in both modes of `VCSR.IEE`,
+explicitly — and, under `VCSR.IEE = 1`, a writer of `FPSCR.FLAG`, OR-accumulated across lanes.
+§2.1, §2.3, §2.6 and §5.8 all attached the FPU-ownership requirement to the **FP-scalar writeback**
+of a horizontal FP reduction / `VFIPR` / `VFTRV`, and to nothing else. A purely **vertical** FP
+block writes no FR/DR, so it satisfied every ownership rule this document had while reading and
+writing `FPSCR` with `SR.FD = 1`.
+
+**That is an escape from a no-escape rule.** [../fpu/spec.md §6.3](../fpu/spec.md) says `SR.FD`
+disables the FPU end-to-end, listing `LDS` / `STS` involving `FPUL` or `FPSCR` among the
+instructions that trap and stating there is no control-only escape. A vertical FP SIMD block was
+one: it read and wrote `FPSCR` under `SR.FD = 1`, which `LDS Rm,FPSCR` and `STS FPSCR,Rn` cannot.
+
+**Three consequences, and the security one is the smallest.**
+
+1. **The rounding mode is somebody else's.** Under `SR.FD = 1` the live `FPSCR` belongs to the
+   **parked FPU owner**, which under the lazy pattern of §2.6 and
+   [../fpu/spec.md §7.3](../fpu/spec.md) is a different context. §2.4 says `FPSCR.RM` "applies
+   normally", so a vertical FP block's results depended on which context last owned the FPU — a
+   schedule-dependent answer to a deterministic computation, and one an autovectoriser must
+   not produce, since the scalar loop it replaced rounds by the mode its own task installed.
+   **This is a wrong answer before it is a leak, and it would need fixing with no adversary in the
+   model at all.**
+2. **Sticky-flag corruption, in both directions.** `FPSCR.FLAG` is sticky and is cleared only by a
+   software write ([../fpu/spec.md §6.4](../fpu/spec.md)). A vertical block OR-accumulated its lane
+   exceptions into the parked owner's live `FPSCR`, from which the owner's next lazy save copies
+   them into the owner's image. The running task's own flags landed in a register it cannot read —
+   `STS FPSCR,Rn` traps under `SR.FD = 1` — and the parked owner read flags it never raised.
+   Inside one guest that is a data-dependent channel between two tasks that share nothing else,
+   and it is a correctness defect in both directions before it is a channel in one.
+3. **A dirty bit that can lie in the unsafe direction.** [../fpu/spec.md §7.7](../fpu/spec.md) rule
+   **FP-R4** sets `FPDS` = `10` on any architectural write to `FPSCR` from any mode. Consequence 2
+   is such a write. An implementer reading §2.1 as it stood would not have wired the SIMD FP
+   datapath into that logic at all, and `FPDS` would have read CLEAN over a file the SIMD unit had
+   modified. What that loses is the tenant's *own* flags at a gang switch rather than another
+   tenant's secrets — FP-R3's scrub is unconditional and is not an input to `FPDS` — but a `FPDS`
+   that can be wrong in the CLEAN direction is one bit from FP-INV, which is the direction
+   [../fpu/spec.md §7.7](../fpu/spec.md) chose `11` → `10` to avoid.
+
+#### What this is **not**: a cross-tenant channel
+
+Stated positively because the opposite reading is the natural one and it does not survive checking.
+[../fpu/spec.md §7.7](../fpu/spec.md) rule **FP-R1** names `FPSCR` in the scrub value, **FP-R3**
+applies it unconditionally at every ownership installation, **FP-R5** forbids the transfer
+depending on the incoming tenant executing an FP instruction, and
+[../hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md) item 8 carries it on the
+gang-switch list. So whatever an outgoing tenant's vertical SIMD left in `FPSCR.FLAG`, the incoming
+tenant reads [../fpu/spec.md §6.4](../fpu/spec.md)'s reset value. **C1b closed the cross-tenant
+direction of this site before C1c looked at it**, and nothing here adds a gang-switch item, a
+scrub, or a hyperprivileged bit.
+
+The exposure is entirely **within** a tenant, on precisely the lazy path
+[../fpu/spec.md §7.7](../fpu/spec.md) deliberately left in place ("within a tenant … §7.3's lazy
+ABI is unchanged"). **L3's boundary is the tenant**, so this section is not what moves L3 from
+`NOT MET`; see *Bar status* below.
+
+#### The rules (normative)
+
+**S-R1 — A SIMD block containing any FP operation requires FPU ownership.** If a block's governed
+instructions include **any** §5.2 FP form — or `VFIPR` / `VFTRV`
+([gpu/simd-gpu-spec.md](gpu/simd-gpu-spec.md)) — the block requires `SR.FD = 0`. With `SR.FD = 1`
+the FPU-disabled exception ([../fpu/spec.md §6.3](../fpu/spec.md)) is raised against the **prefix**,
+before any governed instruction of the block has had any architectural effect. Where `SR.VD` = 1 as
+well, `SR.VD` wins and the retry hits `SR.FD`, unchanged from §2.6. The horizontal FP reduction,
+`VFIPR`, `VFTRV` and (§5.7) `VEXTF.L` / `VINSF.L` cases are **instances** of S-R1, not a separate
+rule beside it; §2.1, §2.3, §2.6, §5.7 and §5.8 now read as consequences of this one.
+
+**S-R2 — The requirement does not consult `VCSR.IEE`, or any other mode bit.** `VCSR` is
+guest-writable (§2.4); a safety property a mode bit can switch off is not a safety property —
+[../fpu/spec.md §7.7](../fpu/spec.md)'s argument about `HEDR[3]`, applied one level down. The
+substantive reason is that `IEE` gates only the `FPSCR.FLAG` **write**; the `FPSCR.RM` **read** is
+in both modes by §2.4, so a check conditioned on `IEE = 1` would leave consequence 1 open in the
+**default** mode.
+
+**S-R3 — The check is at the prefix, and the prefix does not carry the type, so the decoder must
+look at the block.** §3.2's prefix encodes `H`, `ww`, `rrr` and `N` and nothing that separates FP
+from integer: FP-ness is the *governed opcode* (§5.2 versus §5.1), so `SIMDHA.L` is an FP or an
+integer reduction depending on a halfword the prefix decoder has not yet examined. The block is
+`N ≤ 4` contiguous halfwords whose whole fetch extent §6.5 already requires the prefix to have
+validated, so the implementation **MUST** examine the `N` governed opcodes at prefix decode and
+apply S-R1 if any of them is an FP form.
+
+Deferring the check to the FP instruction itself is **not** an alternative. For `N > 1` an FP
+operation may follow integer ones that have already committed lane writes, and §4.3's lane
+operation `V<Rn> ← V<Rn> op V<Rm>` is not idempotent, so the restart-from-prefix of §6.4 / §6.5
+would re-apply them. §6.1's optional ROB atomic-commit group makes restart idempotent for an
+arbitrary block and would permit a later check on that implementation only; S-R3 is stated as a
+prefix-decode requirement so that the in-order implementation, which has no such group, is the one
+the rule is written for.
+
+*The same scan is already owed elsewhere in this document.* §2.3's "implicit clear at prefix
+decode" has to know whether to zero MACL/MACH or FR0/DR0, which is the identical question, and
+§6.5's prefix-time block-fetch validation already reads the block's extent at the prefix. S-R3
+names the scan once rather than leaving three sections to assume it independently.
+
+**S-R4 — `FPSCR` stays in the FPU's ownership domain and in the FPU's context image.** No copy of
+`FPSCR`, and no `RM` or `FLAG` shadow, is added to `VCSR` or to §2.5's SIMD image; §2.5's
+architectural-state list and the 520-byte / 1036-byte image of §2.6 are unchanged by this section.
+Under S-R1 a task running FP SIMD owns the FPU, so its rounding mode and its sticky flags are its
+own, `LDS Rm,FPSCR` is available to it, and both travel in the 136-byte FPU image
+([../fpu/spec.md §7.4](../fpu/spec.md)) as they already did. Two owners for one register is the
+[../decisions/0001](../decisions/0001-one-authority-per-fact.md) failure, and it would additionally
+owe a rule for which of the two images wins on restore.
+
+**S-R5 — Integer SIMD is untouched.** S-R1 does not fire on a block whose governed instructions are
+all §5.1, §5.4, §5.5 or §5.6 forms: those read and write no FPU state, and the `SR.VD` / `SR.FD`
+independence §2.6 claims for integer SIMD is exactly as it was. An `FPU`-only task is likewise
+unaffected. What changes is the set of tasks that must own the FPU, from *those issuing FP
+reductions* to *those issuing any FP SIMD*, which is §2.3's "honest coupling" argument applied to
+the case §2.3 did not cover.
+
+#### What it costs
+
+One `EXC_FPU_DISABLED` trap, once, for a task doing vertical FP SIMD that would previously have
+taken none, plus the 136-byte FPU image it must then carry. **No new architectural state, no new
+instruction, no new trap cause, no new hyperprivileged bit, no change to either context image, and
+no new item on [../hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)'s
+gang-switch list.** The decoder cost is S-R3's `N`-opcode scan, which §2.3 and §6.5 already require
+for other reasons.
+
+The trap is not avoidable by a cheaper rule, because it is **not** what closes the hole — owning
+the register is. A task that wants a rounding mode has to install one, and `LDS Rm,FPSCR` traps
+under `SR.FD = 1`; a task that does not install one and is not the owner is reading a value chosen
+by whoever is.
+
+#### What was priced and rejected
+
+- **Give the SIMD FP path its own rounding mode and sticky flags in `VCSR`.** The obvious
+  decoupling — `VCSR` has 30 reserved bits, is already in the SIMD image, and is already scrubbed
+  by §2.6.1's **V-R1** — and it is wrong on three counts. It would make a horizontal FP reduction,
+  `VFIPR` and `VFTRV` round by a different control from scalar `FIPR` / `FTRV` **while writing the
+  same `FR0` / `FV0`**, discarding the SH-4 register-semantics compatibility §2.3 and Appendix B
+  bought by retiring `VFPUL`. It would make the SIMD default rounding mode differ from the scalar
+  one — `VCSR` = 0 is round-to-nearest-even, and [../fpu/spec.md §6.4](../fpu/spec.md)'s `FPSCR`
+  reset value is round-to-zero — so autovectorised code would silently round differently from the
+  loop it replaced, which is the single thing a vectoriser must not do. And it would cost V-R1 the
+  property its own text argues for: that the scrub value and the architectural default are the same
+  value, with nothing for an implementer to choose between.
+- **Substitute the scrub-value `FPSCR` whenever `SR.FD = 1`.** Closes the channel with no trap and
+  no ownership, and makes FP results depend on `SR.FD` — supervisor state a user task cannot read.
+  A silently schedule-dependent answer with no trap to notice it by is worse than the defect.
+- **Duplicate `FPSCR` into the SIMD image.** Two owners of one register;
+  [0001](../decisions/0001-one-authority-per-fact.md). Rejected under S-R4.
+- **Ban vertical FP SIMD.** Deletes §5.2, which is the reason FP Tier 0 SIMD exists.
+
+#### Tests
+
+Three, and the third is the one that gets skipped. Each is red before S-R1 and green after; none
+of them is a cross-tenant residue test, because §2.4.1's exposure is not cross-tenant.
+
+| # | Test | What it shows if the rule is absent |
+|---|---|---|
+| 1 | Task A owns the FPU with `FPSCR.RM` = `00` (nearest-even). Task B, not the FPU owner, runs `SIMDV.L` + `FADD` on a lane pair whose exact sum is a tie. B compares its result against the same computation with `RM` = `01`. | B rounded by A's mode. Repeat with A installing `01`: B's answer changes with no change to B. |
+| 2 | A owns the FPU and clears `FPSCR.FLAG`. B, not the owner, runs a vertical FP block under `VCSR.IEE = 1` in which exactly one lane overflows. A executes `STS FPSCR,Rn`. | A reads `FLAG.O` set by B's data. |
+| 3 | **The default mode.** Test 1 repeated with `VCSR.IEE = 0`. | The same wrong rounding, *with test 2 green*, on any implementation whose ownership check was conditioned on `IEE` — the natural optimisation, since `IEE = 0` performs no `FPSCR` write. This is S-R2's test and it has no analogue in test 1 or 2. |
+
+#### Bar status
+
+**This section does not move L3.** L3's boundary is the **tenant**
+([../security/threat-model.md §8](../security/threat-model.md)), the cross-tenant direction of this
+site was already closed by C1b's FP-R3, and what C1c fixes is an intra-tenant correctness defect
+and an intra-guest channel. L3 remains `NOT MET` for the reason C1b left it there: the five residue
+tests it does require have nothing to run on.
+
+**Implementation status: specified, not built.** There is no FPU and no SIMD unit in
+`jcore-cpu@origin/master` (`e8a5a4e1`): no file whose path contains `fpu`, `simd`, `float` or
+`vector`, and no `*.vhd`/`*.vhm` matching `fpscr`, `vcsr`, `sr_fd` or `simd`, all checked
+case-insensitively on 2026-09-09. The three tests above are written against hardware that does not
+exist, and **nothing in this section is met because it has been written.**
 
 ### 2.5 Architectural and pipeline state
 
@@ -217,7 +411,7 @@ The SR layout authoritative source is [../hypervisor/hardware-spec.md §2.1](../
 | Mode toggles | `VMKCHG`, `SWIZZLE.I` |
 | Control-register access | `LDS Rn, P0`, `STS P0, Rn`, `LDS Rn, VCSR`, `STS VCSR, Rn` |
 
-The rule is simple: **any decode that would access V0..V15, P0, or VCSR, or that would set SIMD_VAL in the decode shadow, traps under SR.VD = 1.** There is no SIMD-control escape; SR.VD truly disables the facility end-to-end. This mirrors the FPU's no-escape rule for SR.FD and is what makes the lazy-context-switch idiom reliable. (A horizontal FP reduction / VFIPR / VFTRV additionally requires SR.FD = 0 for its FR/DR writeback; that check is independent and is applied at prefix/block decode — §2.3, and the rationale below.)
+The rule is simple: **any decode that would access V0..V15, P0, or VCSR, or that would set SIMD_VAL in the decode shadow, traps under SR.VD = 1.** There is no SIMD-control escape; SR.VD truly disables the facility end-to-end. This mirrors the FPU's no-escape rule for SR.FD and is what makes the lazy-context-switch idiom reliable. (A block containing **any** governed FP operation additionally requires `SR.FD = 0` — §2.4.1 rule **S-R1**. That check is independent of `SR.VD` and is applied at prefix decode. It is not only the FR/DR writeback of a horizontal FP reduction / VFIPR / VFTRV that needs it: §2.4's `FPSCR.RM` read is in every FP block, including a vertical one that writes no FR/DR at all.)
 
 **Trap classification.**
 
@@ -261,7 +455,7 @@ Cost per context switch when neither outgoing nor incoming task touches SIMD: **
 
 **Interaction with FGMT.** SR is per-thread on a J32-OOO/J32-FM core under FGMT ([../ooo/j32ooo-spec.md §13.1](../ooo/j32ooo-spec.md)). SR.VD is therefore naturally per-thread; one thread using SIMD does not impose save/restore overhead on the sibling thread that does not.
 
-**Interaction with the scalar FPU.** Integer SIMD instructions write only SIMD-side state (V0..V15, P0, VCSR) and the integer MAC pair, never the FPU — so for integer SIMD the SR.VD and SR.FD lazy-save mechanisms are fully independent (own SIMD without owning FPU and vice versa). **FP** SIMD reductions / VFIPR / VFTRV do write the FPU register file (FR/DR) at block exit; a task issuing them therefore owns the FPU, coupling SR.VD and SR.FD **for that task** (§2.3). Because the FP-scalar writeback happens at block exit and the FPU-ownership (SR.FD) check is applied at **prefix/block decode**, an FP-reduction instruction traps first on SR.VD if SIMD is disabled and, once SIMD is enabled, on SR.FD if the FPU is not owned — both at a clean instruction boundary. When both bits are set, **SR.VD wins** (the trap is `EXC_SIMD_DISABLED`); after the SIMD handler clears SR.VD, the retry hits SR.FD if still set, matching Linux's expectation that lazy save reports the higher-level (SIMD) extension first.
+**Interaction with the scalar FPU.** Integer SIMD instructions write only SIMD-side state (V0..V15, P0, VCSR) and the integer MAC pair, never the FPU — so for integer SIMD the SR.VD and SR.FD lazy-save mechanisms are fully independent (own SIMD without owning FPU and vice versa). **FP** SIMD couples them for the task doing it, and §2.4.1 rule **S-R1** is where that is stated: reductions / VFIPR / VFTRV write FR/DR at block exit, *and* every governed FP operation reads `FPSCR.RM` and may write `FPSCR.FLAG` (§2.4), so a purely **vertical** FP block owns the FPU too (§2.3). Because the FP-scalar writeback happens at block exit and the FPU-ownership (SR.FD) check is applied at **prefix/block decode**, an FP-reduction instruction traps first on SR.VD if SIMD is disabled and, once SIMD is enabled, on SR.FD if the FPU is not owned — both at a clean instruction boundary. When both bits are set, **SR.VD wins** (the trap is `EXC_SIMD_DISABLED`); after the SIMD handler clears SR.VD, the retry hits SR.FD if still set, matching Linux's expectation that lazy save reports the higher-level (SIMD) extension first.
 
 **No mid-block FPU trap.** An FP reduction produces its scalar only at block exit (§4.4), so the FR/DR writeback — and its SR.FD-ownership requirement — is an instruction-boundary event, not a mid-block one. The SR.FD check is hoisted to prefix/block decode, so if it must trap (to restore the task's FPU context) it does so **before** the block runs; the block never abandons-and-restarts for an FPU trap (§4.2 atomicity preserved). This is what makes writing FP results straight to FR/DR safe, and is why the dedicated VFPUL register and the §5.8 boundary moves it required could be retired (Appendix B).
 
@@ -322,6 +516,12 @@ transition never runs.
 
 **V-INV.** At every instant, every bit of `V0..V15`, `P0` and `VCSR` is either a bit the file's
 current owner wrote since the file's last scrub, or the corresponding **scrub value** below.
+
+**`FPSCR` is deliberately not on this section's list.** [../fpu/spec.md §7.7](../fpu/spec.md) owns
+it and rule **FP-R1** names it in the FP scrub value, so a gang switch scrubs it whether or not the
+outgoing tenant's SIMD touched it. That is why the `FPSCR` defect Wave-3 **C1c** found (§2.4.1) is
+*not* a cross-tenant one, and why C1c adds nothing to this section, to
+[../hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)'s list, or to `VDS`.
 
 **V-R1 — The scrub value.** `V0..V15` = zero; `P0` = zero; `VCSR` = zero. `VCSR` = 0 is `MKE = 0`
 and `IEE = 0`, which §2.4 already gives as both bits' default, so the scrub value and the
@@ -540,7 +740,7 @@ for each governed insn:
     MAC ← reduce(SIMD_RED, MAC, t[0..(VLEN/w − 1)])
 ```
 
-For FP add-reductions the reduction respects IEEE 754 rounding using `FPSCR.RM`; the reduction order is implementation-defined.
+For FP add-reductions the reduction respects IEEE 754 rounding using `FPSCR.RM` — which the block owns, per §2.4.1 rule **S-R1**; the reduction order is implementation-defined.
 
 **Cross-block accumulation.** Each SIMDH block produces a complete reduction; the destination is not preserved across block entries. Software combines partial sums with explicit scalar add operations across blocks.
 
@@ -863,7 +1063,7 @@ Bridging individual lanes between V registers and a SIMD-side scalar register us
 
 The pair must be **adjacent and atomic**: any instruction between VLNS and a following VEXT/VINS raises slot-illegal, and external interrupts are deferred between the two instructions. This makes the lane-select latch microarchitectural (not architecturally visible, never saved on exception).
 
-**Scalar-side targets.** Integer variants (`VEXT.B/W/L/Q`, `VINS.B/W/L/Q`) read/write a SH-2 integer scalar register Rn. FP variants (`VEXTF.L`, `VINSF.L`) read/write an **FR register (FRn) directly** — the same scalar FP bank the reductions target (§2.3). No intermediate register and no boundary move: `VEXTF.L` extracts a lane to FRn, `VINSF.L` inserts FRn into a lane. Because these touch FR, the FP variants require FPU ownership (trap under SR.FD as well as SR.VD; SR.VD first per §2.6).
+**Scalar-side targets.** Integer variants (`VEXT.B/W/L/Q`, `VINS.B/W/L/Q`) read/write a SH-2 integer scalar register Rn. FP variants (`VEXTF.L`, `VINSF.L`) read/write an **FR register (FRn) directly** — the same scalar FP bank the reductions target (§2.3). No intermediate register and no boundary move: `VEXTF.L` extracts a lane to FRn, `VINSF.L` inserts FRn into a lane. Because these touch FR, the FP variants require FPU ownership (trap under SR.FD as well as SR.VD; SR.VD first per §2.6) — an instance of §2.4.1 rule **S-R1**, and one of the three cases §2.1's disjointness sentence used to omit.
 
 **Encodings** (full table in Appendix A): VLNS at `0100 mmmm llll 1011`; VEXT.B/W/L/Q at `0100 nnnn {1000..1011} 1011`; VINS.B/W/L/Q at `0000 nnnn {1000..1011} 1011`; VEXTF.L at `0100 nnnn 1100 1011` (nnnn = destination FRn); VINSF.L at `0000 nnnn 1100 1011` (nnnn = source FRn). Valid inside and outside SIMD blocks.
 
@@ -897,7 +1097,7 @@ The pair must be **adjacent and atomic**: any instruction between VLNS and a fol
 
 The former `FMOV.VS` / `FMOV.VD` boundary instructions existed **only** to move scalar FP between the dedicated VFPUL register and the FR/DR file. With **VFPUL retired** (Appendix B) and all FP scalar results — reductions (§2.3), `VFIPR`, `VFTRV` — written **directly to FR/DR at block exit**, there is nothing to bridge: these instructions are **removed**. FP lane↔scalar movement uses `VEXTF.L`/`VINSF.L` (§5.7), which now target FR directly. The section number is retained so cross-references resolve; the opcode space it reserved is returned to the reserved pool (Appendix A).
 
-The four freed opcodes (formerly in the SH-4 FPU sub-family) return to the reserved pool (§7, Appendix A). The FR/DR-writeback that a reduction / `VFIPR` / `VFTRV` performs at block exit reuses the FPU's existing FR/DR write ports (including the 4-wide FTRV port) under the SR.FD-at-block-decode ownership rule (§2.3, §2.6) — no separate cross-file move instruction is required. Prior art for writing SIMD/vector results straight into the scalar FP file: SH-4 FTRV/FIPR themselves (1998); Intel SSE scalar-in-low-lane results (1999).
+The four freed opcodes (formerly in the SH-4 FPU sub-family) return to the reserved pool (§7, Appendix A). The FR/DR-writeback that a reduction / `VFIPR` / `VFTRV` performs at block exit reuses the FPU's existing FR/DR write ports (including the 4-wide FTRV port) under the SR.FD-at-prefix-decode ownership rule (§2.4.1 rule **S-R1**; §2.3, §2.6) — no separate cross-file move instruction is required. Prior art for writing SIMD/vector results straight into the scalar FP file: SH-4 FTRV/FIPR themselves (1998); Intel SSE scalar-in-low-lane results (1999).
 
 ---
 
@@ -935,7 +1135,13 @@ The SR pushed on slot-illegal entry has `SIMD_VAL = 0` and `V_LANE_VALID = 0` (b
 - **Default mode (VCSR.IEE = 0):** denormals flushed to ±0, FPSCR.FLAG not updated, FPSCR.EN ignored, FPSCR.CAUSE not set. Cheapest to implement and matches the expectations of autovectorised code, DSP libraries, ML inference, graphics, audio.
 - **IEEE-strict mode (VCSR.IEE = 1):** IEEE 754 gradual underflow; FPSCR.FLAG OR-accumulated across lanes (sticky until cleared via `LDS Rn, FPSCR`); FPSCR.EN still ignored.
 
+Both bullets describe reads and writes of `FPSCR`, which is FPU state and not SIMD state. §2.4.1
+rule **S-R1** requires the block to own the FPU (`SR.FD = 0`) before either can happen, and rule
+**S-R2** makes that requirement independent of `VCSR.IEE` — the `FPSCR.RM` read is in *both* bullets
+even though the `FPSCR.FLAG` write is in only one.
+
 Minimal implementations may support only IEE = 0 (writes to IEE silently ignored, reads return 0).
+This does not relax S-R1: such an implementation still reads `FPSCR.RM`.
 
 Prior art: PowerPC AltiVec "Java mode" (1996), Intel SSE MXCSR-controlled trap-disabled default (1999), Cray-1 sticky-flag-only (1976), GCC/LLVM `-fno-trapping-math` default for vector code.
 
