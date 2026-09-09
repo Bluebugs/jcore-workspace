@@ -254,8 +254,11 @@ that does not.
 *First, the split, which is the design's spine.* **Commit-time predictor updates**,
 a **tenant-tagged BTB** and **degenerate-STT taint** are three of the four named mechanisms, and
 all three describe structures `jcore-cpu@origin/master` does not contain: a case-insensitive search
-for `branch_pred`, `btb`, `bimodal`, `gshare`, `ras` or `predictor` returns six hits, none of them
-a predictor and none of them RTL logic — the closest thing in the core is the decoder's
+for `branch_pred`, `btb`, `bimodal`, `gshare`, `ras` or `predictor` returns a handful of hits and
+**not one of them is a predictor or any RTL logic**: two comments calling the I→D shadow fill "a
+strong predictor of an imminent D-side access", one forward-looking sentence in
+`docs/pmu/perf-counters.md` about a front end that has not arrived, a `return_addr` field in two
+tests' control blocks, and `RAS & CAS & WE` in `testrom/main.c` — the closest thing in the core is the decoder's
 one-cycle ROM read-ahead, checked and squashed in the same cycle. All three are also **already
 specified**, for the design points [decisions/0009](decisions/0009-in-order-fgmt-is-the-default-path.md)
 paused: [ooo/j32ooo-spec.md §3.2](ooo/j32ooo-spec.md) already trains every predictor structure at

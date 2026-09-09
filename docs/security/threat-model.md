@@ -1013,8 +1013,9 @@ residual list does not discharge this item's last clause.
 one workstream. **Commit-time predictor updates, a tenant-tagged BTB and
 degenerate-STT taint** describe structures that exist in no repository — a
 case-insensitive search of `jcore-cpu@origin/master` for `branch_pred`, `btb`,
-`bimodal`, `gshare`, `ras` or `predictor` returns no predictor, no RTL logic and
-six false positives — and all three are **already specified**, for the design
+`bimodal`, `gshare`, `ras` or `predictor` returns **no predictor and no RTL
+logic** — only comments, a forward-looking PMU sentence, a test's `return_addr`
+field and DRAM strobe names — and all three are **already specified**, for the design
 points [decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md)
 paused: [ooo/j32ooo-spec.md §3.2](../ooo/j32ooo-spec.md) trains every predictor
 structure at commit only from a `DOM` captured at rename, tags the BTB with the
