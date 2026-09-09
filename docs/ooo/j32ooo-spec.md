@@ -6,6 +6,26 @@
 
 **J32OOO** is a 2-wide fetch, 2-wide commit OOO core with 2-way FGMT, 32-bit datapath.
 
+> **This design point is not being built. Decision
+> [0009](../decisions/0009-in-order-fgmt-is-the-default-path.md), 2026-09-08.**
+> The default microarchitecture path is dual-issue **in-order** with 2-thread
+> switch-on-miss FGMT, and new RTL effort against this document is paused. The
+> reason is [j4-remediation-plan.md §E.1](../j4-remediation-plan.md): a window
+> this size cannot hide the 30–50-cycle SDRAM latency that is this core's stated
+> purpose, the out-of-order machinery is the largest thing on an ECP5-85F, and
+> its `[ASIC]` energy concentrates in the issue-queue CAM and rename logic §5
+> and §6.2 add.
+>
+> **This document is neither superseded nor wrong**, which is why it carries no
+> [0002](../decisions/0002-supersede-convention.md) marker: there is no marker
+> for "correct, and not currently being implemented". Everything here stays live
+> as specification — the security model of §20 in particular, which the default
+> path will need in substance. What resumes it is stated as a trigger, not left
+> to judgement: 0009 §What would reopen this requires a trace-driven model over
+> **memory-bound** workloads showing this design ahead of dual-issue in-order +
+> FGMT at **equal measured area**. §15.1's synthesis action item is the other
+> half of that, and it is now the highest-value work this document has.
+
 > **Sibling design point.** [J32-LT](j32lt-spec.md) covers the same ISA and MMU with in-order issue, no register renaming, no issue queue, and 4-way barrel FGMT. It targets throughput per joule where this document targets single-thread latency, at comparable area (~220k vs ~222k gates). Neither supersedes the other. Several mechanisms deferred here (§18) are specified there. Targets the "J32-FM" roadmap slot (~250k ASIC gates including caches and PMU). See [glossary §3–§4](../glossary.md) for product-point and threading naming.
 
 ## Changelog
@@ -58,7 +78,7 @@ Every microarchitectural technique used in this specification has prior art publ
 | Macro-op fusion (atomic-group)                   | AMD K7 1999                                           |
 | Rename-checkpoint fast misprediction recovery    | Hwu & Patt 1987; MIPS R10000                          |
 | Fine-grained multi-threading (FGMT, barrel)      | CDC 6600 PPU (Thornton 1964); Denelcor HEP (Smith 1978); Tera MTA (Smith 1990) |
-| FGMT on a single-issue in-order RISC pipeline    | MIPS MT ASE / 34K (Kissell, MIPS Tech 2005); Sun UltraSPARC T1 "Niagara" (Kongetira et al., IEEE Micro 2005) |
+| FGMT on a single-issue in-order RISC pipeline    | MIPS MT ASE (MIPS Technologies, MD00378 rev 1.00, 28 Sept 2005 — **not** "Kissell 2005", which is the 2008 HiPEAC paper; see [decisions/0009 §Citations that did not survive checking](../decisions/0009-in-order-fgmt-is-the-default-path.md)); Sun UltraSPARC T1 "Niagara" (Kongetira, Aingaran & Olukotun, IEEE Micro 25(2), March–April 2005, pp. 21–29) |
 | Switch-on-stall / ready-thread arbitration       | MIT Alewife Sparcle (Agarwal et al. 1993); UltraSPARC T1 thread scheduler 2005 |
 | Auto-priority on idle/spin states                | MIT Alewife block-multithreaded scheduling 1993; HEP spin-wait coalescing 1978 |
 | On-die L2 cache                                  | Alpha 21164 1995 (96 KB); AMD Thunderbird 2000 (256 KB) |
@@ -877,7 +897,7 @@ Plus the PMU's per-thread shadowing (already counted in §12.4). Net saving vs v
 | Cycle-by-cycle context switch on RISC    | Denelcor HEP (Smith 1978–1985)                                              |
 | Massive thread interleaving              | Tera MTA (Smith 1990, ISCA papers 1994–1998)                                |
 | Switch-on-event / ready-thread variant   | MIT Alewife Sparcle (Agarwal, Kubiatowicz et al. 1993)                      |
-| FGMT on commercial in-order RISC         | MIPS MT ASE / 34K (Kissell, MIPS Tech 2005)                                 |
+| FGMT on commercial in-order RISC         | MIPS MT ASE (MIPS Technologies, MD00378 rev 1.00, 28 Sept 2005 — **not** "Kissell 2005", which is the 2008 HiPEAC paper; see [decisions/0009 §Citations that did not survive checking](../decisions/0009-in-order-fgmt-is-the-default-path.md)) |
 | FGMT on multi-core commercial CPU        | Sun UltraSPARC T1 "Niagara" (Kongetira, Aingaran, Olukotun, IEEE Micro 2005) |
 | Per-thread CP0/privileged state model    | MIPS MT VPE concept (2005)                                                  |
 | Auto-priority on synchronization stalls  | Alewife block-multithreaded scheduling (1993); HEP spin-wait coalescing (1978) |
