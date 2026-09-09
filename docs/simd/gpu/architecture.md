@@ -18,8 +18,8 @@ model, and the execution model on top of what the rest of the plan actually says
   `VFSRRA/VFSCA/VFSQRT` (§10), blend/raster-op `VBLEND/VROP` (§11), and the raster
   back-end `VZTEST/VEDGE/VINTERP` (§12) — all pre-2006-anchored.
 - [simd-gpu-spec.md §16](simd-gpu-spec.md) — **memory protection and tenant
-  isolation**: the per-context relocate-and-bound window, the **6** address
-  producers it covers ([simd-gpu-spec.md §16.2](simd-gpu-spec.md)), and why the
+  isolation**: the per-context relocate-and-bound window, the
+  **6** address producers it covers ([simd-gpu-spec.md §16.2](simd-gpu-spec.md)), and why the
   IOMMU is the outer boundary and not the inner one. That section owns the rules;
   §5.4 below states only what they mean for this document's machine.
 - `../../no-gpu-decision.md` — Option B: SIMT = FGMT+SIMD+
@@ -299,7 +299,7 @@ land in the *same* DDR bank as the J4 CPU's, through the same multiport arbiter
 
 The rules are owned by [simd-gpu-spec.md §16](simd-gpu-spec.md) and are not
 restated here. What matters for *this* document is which of its blocks are
-address producers, because §16's G-R1 requires every one of them to carry the
+address producers, because [§16](simd-gpu-spec.md) **G-R1** requires each to carry the
 owning context's `GCID` and pass the window check:
 
 | This document's block | Producer in [simd-gpu-spec.md §16.2](simd-gpu-spec.md) |
@@ -318,7 +318,7 @@ Two consequences land on this document's design rather than on the ISA:
   pipe when the texel address is generated, so the identity has to travel with
   the request rather than be read from the scheduler.
 - **The tile buffer, the texture cache and the per-warp register files are
-  ownership-change sites.** §16's G-R8 requires them scrubbed when their owner
+  ownership-change sites.** [§16](simd-gpu-spec.md) **G-R8** requires them scrubbed when their owner
   changes, not merely saved and restored — a fresh context has no image to
   restore, so a restore-based scheme leaves the predecessor's data in place.
 
@@ -367,7 +367,7 @@ Matches the no-gpu-decision ladder, re-anchored to the A200T:
    OpenCL kernel, which is the exact trigger
    [../../j4-remediation-plan.md §C2](../../j4-remediation-plan.md) names. Two
    states are supported and they differ in what has to exist first:
-   **single-tenant** — one tenant owns the whole GPU at a time, with §16's G-R8
+   **single-tenant** — one tenant owns the whole GPU at a time, with [§16](simd-gpu-spec.md) **G-R8**
    scrub on handover — needs only the window checkers; **multi-tenant** needs
    those *and* task C2d, because the IOMMU is the outer boundary and today it
    resets to all-bypass ([simd-gpu-spec.md §16.3](simd-gpu-spec.md) G-R10).
