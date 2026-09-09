@@ -142,7 +142,11 @@ without the scrub.
 The `linux` half fails differently and more quietly: **the kernel's FPU support is compiled out on
 this target.** `linux@origin/jcore`'s `arch/sh/Kconfig` gives `CPU_SUBTYPE_JCORE` no
 `select CPU_HAS_FPU`, so `CONFIG_SH_FPU` cannot be set and `arch/sh/include/asm/fpu.h` reduces
-`save_fpu`, `restore_fpu` and `unlazy_fpu` to `do { } while (0)`. There is also no hypervisor code
+`save_fpu`, `restore_fpu`, `release_fpu`, `grab_fpu` and `fpu_state_restore` to `do { } while (0)`.
+*(C1c correction, 2026-09-09: this sentence named `unlazy_fpu` as one of the three. It is not —
+`unlazy_fpu` and `clear_fpu` are `static inline`s defined **outside** the `#ifdef CONFIG_SH_FPU`
+block, so they are still compiled, still call `preempt_disable()` and still clear `TS_USEDFPU`;
+what they call is what vanishes. The conclusion is unchanged and the mechanism is not.)* There is also no hypervisor code
 in that tree at all — nothing under `arch/sh` matches `SR_HPRIV`, `VBR_HYP`, `HEDR` or `HSQCR` —
 and C1b's design is entirely hypervisor-side and guest-invisible by construction, so even a kernel
 with `CONFIG_SH_FPU` on would have nothing to change. `docs → jcore-cpu + linux` is therefore wrong
