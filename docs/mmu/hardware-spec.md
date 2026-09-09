@@ -1061,7 +1061,7 @@ empirically by the Phase-1 feasibility spike, `jcore-cpu` commit `90e6cbc`.)
 | `TSBSLOT` / `TSBVSEED` / `TSBVICT` (§2.12, §2.13) | Phase 2, IMPLEMENTED and decoded in `core/datapath.vhm` |
 | Instruction retirement (§3.1) | **RESOLVED 2026-08-25 — jcore-cpu@master: artifact `decode/gen-go/spec/sh4/mmu.toml` containing `All seven were retired`.** *(This row previously read "Phase 3, not yet started. All seven instructions still exist and still work." They do not: the whole `0000 nnnn xxxx 1011` read family is retired and the encoding space is back in the free pool. The write side — `LDC Rm,{PTEH,PTEL,ASIDR}` — is deliberately kept.)* |
 
-### 5.0a The I-side arm is speculative — the four transmitters of a squashed fetch, and the rules that bound them
+### 5.0a The I-side arm is speculative — the transmitters of a squashed fetch, and the rules that bound them
 
 **Why this subsection is here.** [security/threat-model.md §7.2](../security/threat-model.md)
 retires the "the core is non-speculative" premise by showing that the I-side arm
@@ -1101,12 +1101,11 @@ the pipeline. The matching property is stated on the fault side in
 `core/components_pkg.vhd`: *"A fetch that is squashed before dispatch therefore
 never raises anything."* The fault is squashed. The walk is not.
 
-#### The four transmitters
+#### The transmitters
 
-A fetch that is squashed before dispatch can, on `origin/master` today, have
-already left state in four places. They are listed in the order a single
-squashed fetch reaches them, because each later one is conditional on the one
-before:
+A fetch that is squashed before dispatch reaches **4** transmitters on
+`origin/master` today. They are listed in the order a single squashed fetch
+reaches them, because each later one is conditional on the one before:
 
 | # | Transmitter | Left behind by a squashed fetch because |
 |---|---|---|
@@ -1135,8 +1134,8 @@ answered.
   This is [j4-remediation-plan.md §E.10](../j4-remediation-plan.md)'s *delayed
   speculative TLB/PTW fill*, applied to the only walker this project has, and it
   is the same shape as delay-on-miss: a condition on an existing arm, not a new
-  structure. **It closes transmitters 2, 3 and 4 in one term**, because 3
-  requires 2 and 4 requires 3.
+  structure. **It closes transmitters 2, 3 and 4 of the 4 in one term**, because
+  3 requires 2 and 4 requires 3.
 
 - **W-R2 — an abort path is not a substitute for W-R1.** Adding an abort input
   to `core/tlb_walk.vhd` closes transmitters 3 and 4 and **does not close
