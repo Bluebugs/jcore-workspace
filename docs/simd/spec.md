@@ -590,7 +590,8 @@ is `unknown at this stage — needs measurement`, and the experiment and its kil
 
 **Wave-3 task C1c**, second half, SIMD side. [../fpu/spec.md §6.3.1](../fpu/spec.md) states the
 `kernel_fpu` discipline for the FP file and the facts about `linux@origin/jcore` that all of it
-rests on; its rules **K-R1** through **K-R5** apply here with `V0..V15`, `P0` and `VCSR`
+rests on; its rules **K-R1** through **K-R5** ([../fpu/spec.md §6.3.1](../fpu/spec.md)) apply here
+with `V0..V15`, `P0` and `VCSR`
 substituted for the FP registers, and with `SR.VD` and `EXC_SIMD_DISABLED` substituted for `SR.FD`
 and `EXC_FPU_DISABLED`. This section states only what is different, and both differences make the
 SIMD side worse.
@@ -602,8 +603,8 @@ kernel implementation, and §2.5 makes that file **512 bytes on J32 and 1024 on 
 single block of architectural state in the design. Nothing else a kernel critical section touches
 has that combination of size and sensitivity.
 
-**2. §2.6's handler has *two* branches that write nothing, where the FP handler has one.** K-R3's
-argument is that the lazy model provides no unconditional reload to overwrite the kernel's data
+**2. §2.6's handler has *two* branches that write nothing, where the FP handler has one.**
+**K-R3**'s ([../fpu/spec.md §6.3.1](../fpu/spec.md)) argument is that the lazy model provides no unconditional reload to overwrite the kernel's data
 with. Here it is worse than at the FP file, and the extra branch is the one that will be missed:
 
 - **The spurious branch.** §2.6's pseudocode opens with
