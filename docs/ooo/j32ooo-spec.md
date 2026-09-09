@@ -141,7 +141,7 @@ McFarling tournament predictor with **domain-tagged** history. The tag is not th
 DOM = { PDID[5:0], SR.HPRIV, SR.MD, thread_id }      -- 9 bits
 ```
 
-`PDID` is the **predictor domain ID** (§20.10), a hyperprivileged control register written by the hypervisor at world switch and by the kernel at `switch_mm`. `SR.HPRIV` is a separate *hardware* term and is deliberately not folded into `PDID`: a hypervisor that fails to update `PDID` must still be unable to share a predictor domain with the guest it just trapped from. See §20.2 for the attack this closes and §20.10 for why the earlier `ASID_TAG[7:0]` formulation was wrong.
+`PDID` is the **predictor domain ID** (§20.10), a hyperprivileged control register written by the hypervisor at world switch. *(This sentence previously added "and by the kernel at `switch_mm`", which a hyperprivileged register cannot accept from a kernel running at `SR.HPRIV = 0`; corrected 2026-09-09, Wave-3 C2c, with the argument in [hypervisor/hardware-spec.md §2.8](../hypervisor/hardware-spec.md).)* `SR.HPRIV` is a separate *hardware* term and is deliberately not folded into `PDID`: a hypervisor that fails to update `PDID` must still be unable to share a predictor domain with the guest it just trapped from. See §20.2 for the attack this closes and §20.10 for why the earlier `ASID_TAG[7:0]` formulation was wrong.
 
 - 1024-entry **bimodal table** (2-bit saturating counters), indexed by `PC[10:1] XOR DOM`.
 - 1024-entry **gshare table**, indexed by `PC[10:1] XOR GHR[9:0] XOR DOM`. GHR is per-thread (2 × 10 bits).
@@ -1314,7 +1314,7 @@ The domain identifier `DOM` of §3.2 needs a source. It cannot be `ASID_TAG` alo
 |---|---|
 | Width | 6 bits (64 predictor domains) |
 | Access | Hyperprivileged. Joins the [hypervisor/hardware-spec.md §2.2](../hypervisor/hardware-spec.md) LDC/STC family in slot 10; guest access raises `EXPEVT = 0x1F0` like every other register in that family |
-| Written by | The hypervisor at world switch; the kernel at `switch_mm` on an unvirtualized system |
+| Written by | The hypervisor at world switch. An unvirtualized kernel runs at `SR.HPRIV = 0` and cannot write it — it leaves `PDID` at 0 and relies on §20.4's invalidate control ([hypervisor/hardware-spec.md §2.8](../hypervisor/hardware-spec.md)). *(This cell previously said the kernel writes it at `switch_mm`, which contradicts the Access row directly above it; corrected 2026-09-09, Wave-3 C2c.)* |
 | Per | Thread context (§20.12) |
 | Reset | 0 |
 
@@ -1400,7 +1400,7 @@ This is the same correction [j32lt-spec §11](j32lt-spec.md) already made for `P
 - **ARF** — Architectural Register File. Committed state. Per-thread under FGMT.
 - **BTB** — Branch Target Buffer.
 - **`DOM`** — security-domain identifier `{PDID[5:0], SR.HPRIV, SR.MD, thread_id}`, used to tag and index every predictor structure (§3.2) and carried per instruction in the ROB. Not the thread ID alone.
-- **`PDID`** — Predictor Domain ID (§20.10). Hyperprivileged 6-bit register naming the current security domain; written by the hypervisor at world switch and the kernel at `switch_mm`.
+- **`PDID`** — Predictor Domain ID (§20.10). Hyperprivileged 6-bit register naming the current security domain; written by the hypervisor at world switch. An unvirtualized kernel cannot write it and relies on §20.4's invalidate control ([hypervisor/hardware-spec.md §2.8](../hypervisor/hardware-spec.md)).
 - **Delay-on-miss** — a load that misses L1 while still speculative does not issue to L2 until it is non-speculative (§8.2a). A condition on MSHR allocation, not a structure.
 - **Poison** — the value a faulting or permission-unresolved load forwards in place of data; propagates to dependents, may not form an address or branch condition, raises at commit (§9.4).
 - **`SPB`** — speculation barrier (§4.6): nothing younger than it executes until it retires.
