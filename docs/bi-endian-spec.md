@@ -121,14 +121,37 @@ The last two are the ones that would otherwise land as unbudgeted work in
 [cache/l2-spec.md](cache/l2-spec.md), [bus/fabric-spec.md](bus/fabric-spec.md)
 and [iommu/hardware-spec.md](iommu/hardware-spec.md) rather than here.
 
+**Attribution, because it would be easy to read this list as ARM's and it is
+not.** ARM's own stated reason for introducing byte invariance is narrower and
+is quoted in §11: fine-grain mixed-endian **shared data structures**, and
+conformance to IEEE Std 1596.5-1993. The nearest ARM comes to the argument above
+is a statement that the difference between the schemes "is only visible when
+communicating between big endian and little endian agents using memory", where
+the agents are "different processors or programs running with different
+endianness settings on the same processor". **The DMA and cache-line bullets are
+this project's extension of that**, applied to a system where the other agents
+are not processors at all. They are sound and they are ours; ARM is cited for
+the taxonomy and the transition, not for these four bullets.
+
 ### 2.3 The empirical argument
 
-ARM shipped word invariance (BE-32) in its early architecture versions,
-introduced byte invariance (BE-8) at ARMv6, and deprecated the older scheme.
-That is a vendor with a large installed base choosing to carry two schemes
-through a transition rather than keep the one it had — which is the strongest
-available evidence about which of the two is workable at scale. §11 records the
-citation.
+ARM shipped word invariance (BE-32) through ARMv4 and ARMv5, introduced byte
+invariance (BE-8) at ARMv6, and retired the older scheme in two steps: at ARMv6
+`BE-8` became **mandatory** and `BE-32` support became IMPLEMENTATION DEFINED,
+and at ARMv7 `BE-32` was removed outright. That is a vendor with a large
+installed base choosing to carry two schemes through a transition rather than
+keep the one it had — which is the strongest available evidence about which of
+the two is workable at scale.
+
+*Two accuracy notes, because this argument is only worth as much as its dates.*
+ARMv6's technical details were announced in **October 2001**, the first
+implementation shipped in 2002, and the ARM ARM carried the architecture from
+Issue F (July 2004); the edition quoted in §11 is **Issue I, July 2005**. And
+the ARMv7 removal is **post-2006**, so it is evidence for *this* argument but is
+**not** cited as prior art anywhere in §11 — the pre-2006 half of the story
+(BE-8 defined, mandatory, and BE-32 demoted to optional) is by itself sufficient
+for the policy, and mixing the two would put a post-cutoff document in a
+prior-art table.
 
 **Consequence, stated as a rule so it survives a later "optimisation":**
 
@@ -145,15 +168,44 @@ citation.
 
 ### 3.1 SH-4's data format is byte-invariant, and J-Core inherits that
 
-The SH-4 Software Manual's *Data Formats in Memory* section specifies both byte
-orders for the data format, and its figure places byte 0 at bits 31:24 under
-big-endian and at bits 7:0 under little-endian. **The address does not move;
-the significance does.** That is byte invariance, and it is what a stock SH-4
-binary's memory image depends on.
+The SH-4 Software Manual §2.5 *Data Formats in Memory* specifies both byte
+orders for the data format, and its figure 2.5 places byte 0 at bits 31:24 under
+big-endian and at bits 7:0 under little-endian, with the row's address label
+unchanged. **The address does not move; the significance does.** That is what a
+stock SH-4 binary's memory image depends on, and it is the half of SH-4 that
+J-Core inherits: it fixes what a guest's data structures look like in memory.
 
-This is the half of SH-4 that J-Core inherits, and it is the half that matters
-for guest compatibility: it fixes what a guest's data structures look like in
-memory.
+**"Byte-invariant" is this project's classification, not Renesas's word.** The
+term appears nowhere in the SH-4 software manual, the SH7750 hardware manual or
+the SH-4A software manual; Renesas never places SH-4 in the byte-invariant /
+word-invariant taxonomy at all, because that taxonomy is ARM's (§2.1) and
+postdates the parts. The classification is an inference from figure 2.5 and from
+the hardware manual's 8-bit-device transfer tables, in which a longword access
+issues four sequential byte transfers whose first carries register bits 31:24 in
+big-endian and bits 7:0 in little-endian, with no address transformation
+documented anywhere. It is a sound inference and it is ours; §11 cites the
+figure, not a Renesas verdict.
+
+**And SH-4's byte invariance has a documented exception at 64 bits, which
+J-Core must not inherit by accident.** The note under figure 2.5 states that
+SH-4 does not support endian conversion for the 64-bit data format, so a
+double-precision floating-point access in little-endian mode has its upper and
+lower 32 bits reversed. That is a real hole in a clean byte-invariance claim and
+it is called out rather than glossed:
+
+- **It is outside this document's change set.** J-Core's data path has no 64-bit
+  access — `to_data_o`'s `mem.size` is `BYTE`, `WORD` or `LONG` and nothing
+  else — so there is no 64-bit case for §4.2 to specify, and Decision BE-1 is
+  unaffected.
+- **It is where [fpu/spec.md §6.2.1](fpu/spec.md)'s half-pair rule comes from.**
+  That section already requires a Tier-1 FPU to swap a double-`FMOV`'s half-pair
+  order under the little-endian mode. Until now that requirement was derived
+  from reasoning about what a guest expects; it is in fact **what the SH-4
+  manual documents its own hardware doing**, which is a considerably stronger
+  footing. An implementer building a Tier-1 FPU should read the rule as
+  compatibility with a documented SH-4 behaviour, not as a J-Core invention.
+- **It does not weaken §2.2.** The cache argument is about accesses that reach
+  the cache arrays, all of which are 32 bits or narrower on this machine.
 
 ### 3.2 SH-4's *control* is a reset strap, and J-Core does not inherit it
 
@@ -166,10 +218,25 @@ Two consequences follow, and the second is the one that matters here:
 1. **SH-4's manuals say nothing about endianness in connection with instruction
    fetch.** There was nothing to say: a strap sampled before the first fetch
    makes the fetch path's byte order a property of the board, not of the
-   architecture. A search of the SH-4 software manual and the SH7750 hardware
-   manual for endianness in connection with instruction fetch returns nothing.
-   **So SH-4 offers no guidance on mixed-endian fetch, and none should be
-   inferred from its silence.**
+   architecture. Four manuals were searched in full — the SH-4 software manual,
+   two revisions of the SH7750 hardware manual, and the SH-4A software manual —
+   and every occurrence of "endian" across them is a data-format, mode-pin,
+   `BCR1.ENDIAN`, bus-alignment, `FMOV`/`FPSCR.SZ`, PCMCIA or SDRAM byte-lane
+   reference. Not one is tied to instruction fetch, the instruction cache or
+   opcode byte order. Checking the other direction, the software manual's
+   occurrences of "instruction fetch" are all about alignment, exceptions and
+   pipeline stages. **So SH-4 offers no guidance on mixed-endian fetch, and none
+   should be inferred from its silence.**
+
+   *This is a negative result and is reported as one.* It rests on full-text
+   search of those four documents, not on the absence of web results; it does
+   not cover figures that extract poorly to text, and it does not cover ST's
+   separate SH-4 core architecture manual, which could not be retrieved. What
+   makes the silence *conspicuous* rather than merely unremarkable is that the
+   comparable architecture is not silent: ARM states explicitly that in its
+   mixed-endian configurations "instruction fetches always assume a little
+   endian byte order model" (§11). A manual that had considered the question
+   would have answered it.
 2. **J-Core's per-context byte-order bit is therefore a deliberate divergence
    from SH-4, not inherited compatibility.** SH-4 has a strap; J-Core has a
    mode. Nothing in the SH-4 architecture licenses changing byte order at
@@ -379,14 +446,24 @@ handler's byte order changes in the same indivisible step as the privilege
 level, and there is no ordering to specify between them. Symmetrically, `HRTE`
 clears `SR.HPRIV` and the byte order reverts to `LE` in that same step.
 
-This is [PowerPC `MSR[ILE]`](#11-prior-art-pre-2006)'s pattern, adopted
-deliberately: a second privileged bit that fixes the byte order the handler
-runs in, independently of the interrupted context, applied by hardware at the
-transition. PowerPC realises it by copying `ILE` into `LE` on interrupt; J-Core
-realises it by selecting on `SR.HPRIV`, which needs no copy and no restore
-because `SR.HPRIV` is already restored by `HRTE`. The mechanism — *the handler's
-byte order is a separate architectural bit, applied by hardware at the privilege
-transition* — is the same one.
+**This two-bit pattern is adopted from prior art, not invented here**, and §11
+gives two independent pre-2006 instances of it. PA-RISC pairs `PSW[E]` with a
+software-writable *default endian bit* that "controls whether the PSW E-bit is
+set to 0 or 1 on interruptions"; PowerPC pairs `MSR[LE]` with `MSR[ILE]`, which
+"is copied into `MSR[LE]` to select the Endian mode for the context established
+by the interrupt". Both realise it by **copying** the second bit into the first
+at the transition. J-Core realises it by **selecting** on `SR.HPRIV`, which
+needs no copy and no restore because `SR.HPRIV` is already set by trap entry and
+restored by `HRTE`. The mechanism — *the handler's byte order is a separate
+architectural bit, applied by hardware at the privilege transition* — is the
+same one; only the implementation of "applied" differs, and
+[glossary §2.1](glossary.md)'s first rule is explicit that a match is at the
+level of mechanism.
+
+Of the two, **PA-RISC is the closer match and is the one to read first**: its
+`E` bit is byte-invariant and covers instruction fetch, which is exactly this
+document's combination, whereas PowerPC's `LE` is an address-munging scheme
+(§11).
 
 **The third trap destination needs no rule, and checking that is what makes the
 scheme complete.** [hypervisor/hardware-spec.md §4.1](hypervisor/hardware-spec.md)'s
@@ -544,7 +621,10 @@ owns.
   a professional search before RTL commits, on the combination and not on the
   structures. **Owner: project owner**, jointly with whoever commissions the
   screen already owed on [ooo/j32ooo-spec.md §20.7](ooo/j32ooo-spec.md)'s two
-  load-bearing findings; the same engagement should cover both.
+  load-bearing findings; the same engagement should cover both. **Point it at
+  §11.3 first:** the fetch clause rests on a single pre-2006 source, and a
+  single-source clause inside a purpose-specific combination is where the two
+  §2.1 rules compound rather than cancel.
 - **Allocate `LE` and `HLE`.** Which hyperprivileged control register, which
   bit positions, whether either gains a P4 MMIO alias, and the `LDC`/`STC`
   encodings if a new register is needed. §6.1 deliberately assigns none of
@@ -585,6 +665,98 @@ matched below to a pre-2006 source, and §2.1's two matching rules are applied
 rather than merely cited: the match is on **mechanism, not motivation**, and
 §10's first open item records where a pre-2006 structure is **not sufficient**.
 
+**Every citation below was read at the source before being written down.** That
+is stated because the first draft of this section was assembled from a list of
+expected citations, and checking them changed three of the four load-bearing
+ones — see §11.4, which records what did not survive. A citation nobody opened
+is a guess with a document number attached.
+
+### 11.1 The mechanisms, and what each is matched to
+
+| Mechanism | Prior art |
+|---|---|
+| **Byte-invariant** bi-endian data format — the same byte address in both modes, only the assembly into register values changing | **PA-RISC 1.1**, `PSW[E]`, Third Edition, February 1994 (HP 09740-90039), §2 *Byte Ordering*: byte loads and stores are **unaffected** by `E`, while halfword and word operands reverse within their own addresses. **SH-4** software manual §2.5 / figure 2.5 (Rev. 5.0, 04/2001, ADE-602-156D) — the classification is ours, see §3.1. **ARM BE-8**, ARM ARM DDI 0100I, July 2005, §A2.7.2 |
+| The taxonomy itself, and the demonstration that the alternative was abandoned | **ARM DDI 0100I §A2.7.2** names `BE-8`, `BE-32` and `LE`, defines byte invariance as "the address of a byte in memory is the same irrespective of whether that byte is being accessed in a big endian or little endian manner", and §A2.7.3 makes `BE-8` mandatory at ARMv6 with `BE-32` IMPLEMENTATION DEFINED |
+| **Per-context, privileged** byte-order control | **PA-RISC** `PSW[E]` (1994) — in the PSW, saved to `IPSW` on interruption, restorable only by privileged `RFI`. **PowerPC** `MSR[LE]` (*PowerPC Architecture*, First Edition, May 1993, IBM SR28-5124-00, §10.2.3), privileged via `mtmsr`. **MIPS** `Status[RE]` bit 25 (R4000 User's Manual, 1992/1994), which reverses **user** mode's endianness relative to the kernel's |
+| Byte order applying to **instruction fetch** as well as data, under that same per-context bit | **PA-RISC 1.1** (1994), §2 *Byte Ordering*: "**The E-bit also affects instruction fetch.**" This is the only pre-2006 source found that does so — see §11.3 |
+| A **second** privileged bit fixing the byte order the trap handler runs in, applied by hardware at the transition | **PA-RISC 1.1** (1994) *default endian bit*: "controls whether the PSW E-bit is set to 0 or 1 on interruptions". **PowerPC** `MSR[ILE]` (1993, §10.2.3): "When an interrupt is taken, this bit is copied into MSR_LE to select the Endian mode for the context established by the interrupt", tabulated for every interrupt type in Figure 68 |
+| The hypervisor owning a guest-visible mode the guest cannot write | IBM VM/370 (1972); Popek & Goldberg, CACM 17(7), 1974 — already cited by [sh4-guest-model.md §9](sh4-guest-model.md) |
+
+### 11.2 Applying §2.1's first rule — mechanism, not motivation
+
+PA-RISC's `E` bit and its default endian bit exist to let one HP-UX system run
+big-endian and little-endian binaries side by side. PowerPC's `MSR[LE]`/`ILE`
+pair exists to ease porting little-endian operating systems. Neither was built
+for virtualization, and neither had a hypervisor in mind. Under
+[glossary §2.1](glossary.md)'s first rule that is irrelevant: what is claimed is
+structure and steps, and the structure here — *a privileged per-context bit
+selecting byte order for fetch and data, plus a second privileged bit that fixes
+the byte order of the trap handler, applied by hardware at the transition* — is
+what those documents teach. §10's first open item is where the *motivation*
+becomes relevant again, and it is recorded as unresolved rather than argued
+away.
+
+### 11.3 What checking changed, and the one gap it exposed
+
+Three of the expected citations did not survive contact with the sources, and
+the corrections matter to which reference supports which clause:
+
+1. **PowerPC `MSR[LE]` is address munging, not byte invariance**, so it must
+   **not** be cited for the byte-invariance clause. *PowerPC Architecture*
+   (1993) Appendix D.3.2 is explicit: "PowerPC systems do not do such swapping,
+   but instead achieve the effect of Little-Endian byte ordering by modifying
+   the low-order three bits of the effective address… Individual scalars
+   actually appear in storage in Big-Endian byte order." Because it XORs the low
+   **three** bits, it is *doubleword*-invariant rather than word-invariant — a
+   third point on the axis of §2.1, not one of the two. It is a correct citation
+   for **per-context privileged control** and for **`ILE`**, and it is cited for
+   exactly those and nothing else. (Byte-invariant PowerPC exists — the MPC8xx
+   "true little-endian" mode, 1998, and Book E's per-page `E` attribute, 2002 —
+   but neither is `MSR[LE]`, and the architecture mainline did not adopt byte
+   invariance until Power ISA 2.03 in September 2006, which is **past the
+   cutoff** and is therefore not cited.)
+2. **MIPS `Status[RE]` is address munging too** — the R4000 pseudocode XORs the
+   physical address, so with `RE = 1` a byte load from address 0 returns the
+   byte at physical address 7. Same correction, same consequence: cited for
+   per-context privileged control only.
+3. **PA-RISC's `PSW[E]` is February 1994, not "early 1990s".** It was introduced
+   in the **Third Edition** of the PA-RISC 1.1 manual and is absent from the
+   First (November 1990) and Second (September 1992) editions, whose own preface
+   says so. Still comfortably pre-2006, but a citation to a 1990 edition would
+   have pointed at a document that does not contain the feature.
+
+**The gap those corrections expose, stated plainly because it is this
+document's weakest citation.** The fetch half of Decision BE-1 rests on **one**
+pre-2006 source. SH-4 is silent (§3.2). ARM is worse than silent — DDI 0100I
+§A2.7.2 says that in mixed-endian configurations "instruction fetches always
+assume a little endian byte order model", so ARM's BE-8 is **positive evidence
+against** treating bi-endian fetch as ordinary. PowerPC's `MSR[LE]` does reach
+instruction fetch, but by address munging, which is a different mechanism. That
+leaves PA-RISC 1.1 (1994) carrying the fetch clause alone. It carries it well —
+byte-invariant, per-context, privileged, and explicit that `E` affects
+instruction fetch, which is precisely this document's combination in one
+sentence — but a single-source clause should be known to be one, and §10's
+screen should be told to look hardest here.
+
+### 11.4 Considered and not cited
+
+- **US 2005/0251650 A1, "Dynamic endian switching"** (Microsoft; filed
+  **29 April 2004**, published 10 November 2005, granted as US 7,139,905 B2 on
+  21 November 2006). Its priority date is **2004**, not 2005 — the 2005 is the
+  publication year — so it clears the cutoff by more than the publication number
+  suggests, and the 2004 filing puts its expiry in 2024. It is **not cited as
+  prior art for this design**, because it does not teach it: what it discloses
+  is an external endian-select circuit plus an instruction sequence that decodes
+  meaningfully in both byte orders, used to change endianness **across a
+  processor reset** — "When the processor comes out of reset, the processor
+  re-samples its Endian Select input to determine the current endian mode."
+  That is closer to SH-4's strap than to a per-context mode. It is listed here
+  so that a later reader who finds it does not assume it was missed.
+- **Power ISA 2.03** (September 2006) and **ARMv7's removal of BE-32** (2007
+  onward) are both **post-cutoff** and are cited nowhere in §11.1. They appear
+  in §2.3 as evidence for an engineering argument, which is a different use and
+  is labelled as such.
+
 ---
 
 ## 12. What would reopen this
@@ -598,6 +770,12 @@ rather than merely cited: the match is on **mechanism, not motivation**, and
 - **The prior-art screen of §10 returns a live claim on the combination.** That
   is the one finding that changes the design rather than the schedule, and
   [glossary §2](glossary.md) rule (b) — drop the mechanism — applies.
+- **PA-RISC 1.1 turns out not to say what §11.3 reports.** The fetch clause of
+  Decision BE-1 rests on that one document. If a professional screen finds the
+  1994 Third Edition's `E`-bit text does not reach instruction fetch, or that
+  the edition history is other than reported, the fetch half loses its only
+  pre-2006 support and [glossary §2](glossary.md)'s rule (a) — find a pre-2006
+  equivalent — has to be satisfied before RTL commits.
 - **A second bus master gains a byte-order mode of its own.** §2.2's "one image
   of memory" argument assumes the CPU is the only thing with a mode. A
   byte-swapping DMA descriptor field, say, would make that assumption false and
