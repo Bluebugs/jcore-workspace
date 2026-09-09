@@ -1183,9 +1183,13 @@ close one is scope expansion, not compliance.
    a software slow path.
 7. **[accepted, by omission — the uncomfortable one]** **The AnC primitive of §7.1, intra-guest.** No bar item covers it, so launch would ship it open. That is a decision this document is making by not making it, and §11 gives it an owner.
 8. **[gated — L1]** **Gang-switch residue in any structure the §4.7.1 list omits.** The list is
-   the control; anything absent from it is a channel. The store-queue buffers left the omitted set
-   on 2026-09-09 ([hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md) item 7);
-   the FP/SIMD register files have not, so this item stays gated.
+   the control; anything absent from it is a channel. Both structures this document named left the
+   omitted set on 2026-09-09 — the store-queue buffers as
+   [hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md) item 7 and the FP/SIMD
+   register files as item 8. The item stays gated all the same, and the reason has changed:
+   **the list is a control only where its items have been demonstrated**, and none of the nine has
+   hardware to demonstrate on. It is also still open in the direction it was written for — a
+   structure nobody has thought of is absent from the list and from this sentence alike.
 9. **[accepted]** **Fault and exception oracles** — `EXPEVT`/`TEA`/`MMUFSR` are high-fidelity by
    design and fine within a tenant.
 10. **[accepted]** **Rowhammer**, and everything physical.
