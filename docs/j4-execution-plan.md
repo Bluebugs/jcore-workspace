@@ -108,7 +108,7 @@ minimize-loss step is settled.
 | # | Task | Repo(s) | Design | Implement |
 |---|---|---|---|---|
 | C1a | SQ buffer residue scrub + defined-safe guest reads. **Design DONE 2026-09-09** — [sq/spec.md §6.5](sq/spec.md), [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md) item 7. **The implementation half is not dispatchable and this row's `docs → jcore-cpu` is wrong as written** — see below. | docs → jcore-cpu | Opus | *blocked on the queues existing* |
-| C1b | Eager (across-tenant) FP/SIMD switch + register scrub; 2-bit dirty tracking; movmu-style bulk save. | docs → jcore-cpu + linux | Opus | Opus |
+| C1b | Eager (across-tenant) FP/SIMD switch + register scrub; 2-bit dirty tracking; movmu-style bulk save. **Design DONE 2026-09-09** — [fpu/spec.md §7.7](fpu/spec.md), [simd/spec.md §2.6.1](simd/spec.md), [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md) item 8. **The implementation half is not dispatchable in either repo** — see below. | docs → jcore-cpu + linux | Opus | *blocked on an FPU existing* |
 | C1c | Vertical-FP-SIMD FPSCR ownership fix + kernel-fpu discipline. | docs → linux | Opus | Sonnet |
 | C2a | GPU memory protection (base+bounds or IOMMU/BMID) — launch blocker before user shaders. | docs → jcore-cpu | Opus | Opus |
 | C2b | Speculation: delay-on-miss + frontend coverage (commit-time predictor updates, tenant-tagged BTB, degenerate-STT taint, delayed spec TLB/PTW). | docs → jcore-cpu | Opus | Opus |
@@ -128,6 +128,36 @@ queues, and after that there is no point at which a guest would notice a missing
 Wave-3 implementer for C1a is not "an implementer for C1a" — it is the store-queue task, and it
 does not exist in this plan. Until it does, **L6**'s store-queue site is specified and unbuilt, and
 no residue test can be run red, which is the precondition for running one green.
+
+**C1b reverses the same table in both of its repos, and one of the two is a new
+kind of reversal.** The `jcore-cpu` half fails exactly as C1a's did: there is **no FPU and no SIMD
+unit** in `jcore-cpu@origin/master` — no `entity fpu`, no `FPSCR`, no `VCSR`, no file whose path
+contains `fpu`, `simd` or `float`, all checked case-insensitively — so there is no artifact for an
+implementer to add a scrub to, and [fpu/spec.md §7.7](fpu/spec.md)'s rules must land inside
+whatever task first builds a Tier-1 FPU. Wave-2 **B2**'s Decision B2-4 already traps and emulates
+guest FP for that reason, and C1b adds a fourth reopening condition to it
+([sh4-guest-model.md §4](sh4-guest-model.md)) so that turning native guest FP on cannot happen
+without the scrub.
+
+The `linux` half fails differently and more quietly: **the kernel's FPU support is compiled out on
+this target.** `linux@origin/jcore`'s `arch/sh/Kconfig` gives `CPU_SUBTYPE_JCORE` no
+`select CPU_HAS_FPU`, so `CONFIG_SH_FPU` cannot be set and `arch/sh/include/asm/fpu.h` reduces
+`save_fpu`, `restore_fpu` and `unlazy_fpu` to `do { } while (0)`. There is also no hypervisor code
+in that tree at all — nothing under `arch/sh` matches `SR_HPRIV`, `VBR_HYP`, `HEDR` or `HSQCR` —
+and C1b's design is entirely hypervisor-side and guest-invisible by construction, so even a kernel
+with `CONFIG_SH_FPU` on would have nothing to change. `docs → jcore-cpu + linux` is therefore wrong
+in both directions for this row, and the `Implement Opus` cell describes work that cannot be
+started.
+
+One further plan item did not survive checking. §E.10 prices C1's fix as
+"movmu-style bulk save + per-register zero bit + background scrub", which reads as three cost
+levers of a kind. `movmu` is not one of them in the way that implies:
+[isa-density/hardware-impl.md §5.1](isa-density/hardware-impl.md) and the merged
+`decode/decode_core.vhm` both make it a **decode-driven sequencing** construct with no new
+datapath — one 32-bit memory operation per step, the same number of bus cycles as the unrolled
+sequence. It buys instruction fetch and atomicity, not data movement, and data movement is what an
+eager switch costs. The lever that removes the copy is the 2-bit dirty state, and
+[fpu/spec.md §7.7](fpu/spec.md) orders them accordingly and allocates no encoding.
 
 ### Final
 

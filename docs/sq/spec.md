@@ -568,6 +568,12 @@ Three consequences, so that nothing here reads as a closure:
   CI check that no tenant-visible "undefined" is reintroduced; that check does not exist in
   `scripts/check-doc-facts.py` today and is owed by **B0c**, not by this task.
 
+  *Updated 2026-09-09:* C1b took the first of those two —
+  [../fpu/spec.md §7.7](../fpu/spec.md) and [../simd/spec.md §2.6.1](../simd/spec.md).
+  That leaves **1** open `undefined` site — `movca.l`'s — on [../security/threat-model.md §8](../security/threat-model.md)'s count. The B0c check is still
+  absent, and C1b did not write it either, for C1a's reason: a check owned by whoever happened to
+  need it is a check nobody maintains.
+
 **Prior art, pre-2006.** Reading storage whose owner has changed as a defined constant rather than
 as whatever it last held is the object-reuse requirement: TCSEC (DoD 5200.28-STD, 1985) makes it a
 named criterion from class C2 upward, requiring that storage assigned to a subject contain no
