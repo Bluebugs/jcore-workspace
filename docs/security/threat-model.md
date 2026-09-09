@@ -828,15 +828,41 @@ gang-switch sequence must be extended, and L1 is not `MET` until it is** —
 otherwise **L1** and **L6** each assume the other covers this, which is how a gap
 survives two reviews.
 
-**Discharged as a specification, 2026-09-09.** The list now has **9** items ([hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)),
-of which item 7 is the store-queue scrub (Wave-3 **C1a**) and item 8 the FP/SIMD
-register-file scrub (Wave-3 **C1b**). Both structures this clause names are on
+**Discharged as a specification, 2026-09-09.** The list now has **10** items ([hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)),
+of which item 7 is the store-queue scrub (Wave-3 **C1a**), item 8 the FP/SIMD
+register-file scrub (Wave-3 **C1b**) and item 9 the microreset (Wave-3 **C2c**).
+Both structures this clause names are on
 the list, so **the clause itself is discharged**. L1 is still `NOT MET`, on the
 two things the clause was never about: the **detector**, which is C2c's, and the
 per-structure residue tests below, none of which can be run because none of the
-nine items has hardware to run them on. Recording the two halves here rather than
+items has hardware to run them on. Recording the two halves here rather than
 in C1a's and C1b's own documents is deliberate — a task that reads only its own
 spec is exactly how the other half gets forgotten.
+
+**A third structure this requirement names was on no list at all, and it is the
+one nobody noticed because the word is ambiguous.** The requirement above says
+the gang switch must flush "MSHRs". Until 2026-09-09 no item on
+[hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)'s list
+reached one, and the reason it went unremarked is that the docs contain two
+different MSHR pools:
+
+- The **L2's**, four of them, shared across banks *and cores*
+  ([cache/l2-spec.md §12.3](../cache/l2-spec.md)) — already an `APPLIES` row in
+  §5. No core-granular gang switch can reach it, so this word never belonged to
+  **L1**; it is **L5**'s, and §10 item 4 and the C2e row below already say so.
+- The **core's own**, which [ooo/j32lt-spec.md §7.4](../ooo/j32lt-spec.md)
+  partitions two demand plus one prefetch per thread. Per-*thread* partitioning
+  says nothing about a realloc of the same thread context to a **new tenant**, so
+  it is squarely L1's — and it has no software-visible clear, because a fill in
+  flight is not a tag and `CCR.ICI`/`CCR.OCI` clear tags.
+
+C2c's item 9 covers the second and explicitly not the first
+([hypervisor/hardware-spec.md §4.7.1a](../hypervisor/hardware-spec.md)), together
+with three further classes that had the same problem: L1/TLB **replacement-policy
+state**, the **FGMT thread-select state**, and any **write buffer** below a
+write-through L1-D. Item 9 exists because *"there is a control for it"* was doing
+the work of *"it is on the list"*, and every structure the list reached had a
+control for a different reason.
 
 **Second clause, weaker but recorded:** the rule has no hardware backstop, and
 [ooo/j32ooo-spec.md §18](../ooo/j32ooo-spec.md) calls it the model's weakest
@@ -844,6 +870,31 @@ link. Launch accepts scheduler enforcement — with the industry precedent as th
 justification, not as an excuse — **provided** there is a test that a violating
 placement is detectable. An unenforceable rule with no detector is not a
 control.
+
+**The detector is specified, 2026-09-09, Wave-3 C2c** —
+[hypervisor/hardware-spec.md §4.7.2](../hypervisor/hardware-spec.md), rules
+**T-R1**–**T-R5**, on a new per-thread-context hyperprivileged register `HTCR`
+(§2.10 there). It turns on a distinction §4.7 did not draw: hardware cannot know
+*which* tenant a context belongs to — §4.7 says so and is right — but it can be
+told that two contexts belong to *different* ones, and disagreement is the whole
+of the property. The check is evaluated at `HRTE`, which is the only transition
+that can falsify the property, and a failing `HRTE` is **refused** rather than
+trapped, because [hypervisor/hardware-spec.md §4.1](../hypervisor/hardware-spec.md)'s
+trap-entry path would overwrite `HSPC`/`HSSR` — the guest resume state the
+refused entry needs to retry.
+
+**This fires §12's second trigger.** *"A hardware backstop for tenancy is
+proposed"* is listed there as a condition that reopens this document, and it has
+now happened. What it changes is narrower than the trigger's wording suggests and
+the narrowing is the point: L1's *placement* half becomes a control, so §10 item 8
+and the C2e row's reliance on "the scheduler is right" are backed by hardware for
+the virtualized case. L1's *flush* half does not change — §4.7.2 **T-R3** clears
+nothing, deliberately, and the reason is
+[ooo/j32ooo-spec.md §20.7](../ooo/j32ooo-spec.md) rejection 2. And three cases
+stay pure policy: an unvirtualized multi-tenant system has no `HRTE` to check, a
+hypervisor may still hand two tenants the same number, and the GPU's SM is not
+reached at all (below). **Nothing here moves L1 to `MET`:** the detector is
+*specified and unbuilt*, like every other clause on this item.
 
 **Evidence required for MET.** A test that a *violating placement is detected* — not
 merely that a conforming one works. Concretely: a two-tenant placement on one
@@ -854,8 +905,22 @@ from tenant A, gang-switch, and prove tenant B cannot recover it. A list with no
 per-structure test is a list, not a control — which is this item's own argument
 turned on itself.
 
-**A scoping question this item does not answer, raised by C2a on 2026-09-09 and
-recorded rather than decided here.** The requirement says "one core" and "Cross-
+**Those tests now exist as specifications and none of them can be run**
+([hypervisor/hardware-spec.md §4.7.1b](../hypervisor/hardware-spec.md)): **T-E1**
+is the violating-placement refusal, **T-E2** the microreset's cost and duration,
+**T-E3** the per-structure residue test. C2c verified at
+`jcore-cpu@origin/master` that there is neither FGMT RTL (`fgmt`, `thread_id`,
+`multithread` return nothing over `*.vhd`/`*.vhm`; `barrel` returns only the
+barrel *shifter*, `core/shifter.vhd` and `core/shifter_seq.vhd`) nor hypervisor
+RTL (`hpriv`, `hcall`, `hrte`, `vbr_hyp`, `pdid`, `hedr` return nothing), so
+there is no second thread context to place a second tenant on and no `HRTE` to
+refuse. T-E1 carries the instruction that matters most for this item's history:
+on a single-context model it passes **vacuously**, and it must report *not
+runnable* instead — a detector that reports success against a machine which
+cannot express the violation is worse than no detector.
+
+**The scoping question C2a raised on 2026-09-09 is decided here, 2026-09-09, by
+C2c, which owns this item.** The requirement says "one core" and "Cross-
 tenant fine-grained MT is out of bounds for launch". The GPU's SM is described by
 its own architecture as a **barrel-threaded jcore core** running the existing
 SIMD datapath as its lane ISA, holding **4–8 warps resident** so the scheduler
@@ -872,15 +937,53 @@ is fine-grained MT by this document's own definition. So:
 - **If it is not**, the GPU needs an L1-equivalent that nobody has written, and
   its absence is invisible because L1 looks satisfied.
 
-L1's ratification reaches only CPU-side text
-([hypervisor/hardware-spec.md §4.7](../hypervisor/hardware-spec.md),
-[glossary.md §4](../glossary.md)), so the text does not decide it either way. It
-belongs to **C2c**, which owns this item, or to a revision of this document — not
-to C2a, which would be marking its own homework by choosing the reading that lets
-its mechanism do the job it was scoped to do.
+**Decision: an SM is "a core" for L1.** The first reading is correct, and what
+settles it is that "core" is not L1's operative term. [glossary.md §4](../glossary.md)
+defines the security-domain status of co-resident contexts by a *property* —
+"the contexts of one core **share** the L1 caches, the L2, the TLB, the TSB and
+the branch-predictor arrays, and are therefore **one security domain** unless a
+product point explicitly says otherwise" — and states the allocation rule as a
+consequence of it. An SM has that property by its own architecture: 4–8 warps
+resident, selected per cycle, over a shared tile buffer, texture cache and
+per-warp register files that
+**G-R8** ([simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md)) makes
+ownership-change sites precisely because they are shared. Reading
+"core" as a word about CPU pipelines would make the rule depend on which
+document names a block, and the glossary's "unless a product point explicitly
+says otherwise" is the only exemption clause on offer — the GPU specs claim no
+such exemption.
 
-**Gated Wave-3 items:** C2c (microreset), C2b (predictor invalidate), C1a/C1b
-(the added clause), C2a (the scoping question above).
+**What the decision costs, and it is not nothing.** Two consequences follow, and
+the second is why this could not be decided by asserting the reading alone.
+
+1. **At launch, warps of two tenants must not be concurrently resident on one
+   SM**, independently of C2a. C2a's windows are therefore intra-tenant
+   separation plus defence in depth, and the only launch-legal GPU is the
+   single-tenant one —
+   G-R10.3 of [simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md) — which is what
+   C2a's row in the reverse index anticipated.
+2. **The detector does not transfer, and this is Wave-3 C1c's lesson applied to
+   L1's own rule.** [hypervisor/hardware-spec.md §4.7.2](../hypervisor/hardware-spec.md)
+   is evaluated at `HRTE`, because on a CPU that is the only transition that
+   makes a context start running a tenant. Warp residency on an SM is decided by
+   the SM's own hardware warp scheduler from a work queue; no `HRTE` is executed
+   and the hypervisor is not in the loop per warp. So the rule now reaches the
+   SM and the enforcing logic cannot see the property — which is exactly the
+   shape C1c named as unimplementable, arrived at by extending a rule rather
+   than by writing one.
+
+**Therefore: an L1-equivalent detector for the SM is an entry condition on
+un-parking the GPU program, not a launch blocker.** C2a established that no GPU
+exists in either repository and that the program is parked; a rule that bars a
+machine nobody is building blocks no scheduled launch. What it does do is make
+the obligation visible at the moment the program restarts, which is the failure
+mode the two-way scoping note above was written to prevent: the second reading's
+danger was that L1 *looks* satisfied while the GPU has no equivalent, and naming
+the entry condition is what stops that.
+
+**Gated Wave-3 items:** C2c (the microreset **and** the detector, both landed as
+specifications 2026-09-09), C2b (predictor invalidate), C1a/C1b
+(the added clause). C2a's scoping question was gated here and is answered above.
 
 ### L2 — IOMMU default-deny
 
@@ -1178,9 +1281,9 @@ which bar they must clear.
 | **C1a** SQ residue *(design landed 2026-09-09; no RTL possible — see §7.8)* | **L6**, and **L1**'s added clause | The gang-switch list of [hypervisor §4.7.1](../hypervisor/hardware-spec.md) did not mention the store queue; adding the scrub without adding it to *that list* would have left L1 unmet. It is item 7 there now. The clause most likely to be missed **next** is that neither bar item moved to `MET`: there is no store-queue RTL to test |
 | **C1b** eager FP/SIMD switch *(design landed 2026-09-09; no RTL possible — see §7.8)* | **L3**, **L6**, **L1**'s added clause | L3's *no-saved-image* branch — an eager save/restore between two established owners passes without touching it (§7.8). The clause most likely to be missed **next** is that the branch is not the only one: `HEDR[3]`/`HEDR[24]` delegation hands the first-use trap to the guest, so a scrub written into that handler is switched off by configuration |
 | **C1c** FPSCR ownership *(design landed 2026-09-09; **the fix is above this bar, not on it** — see §8 L3)* | **L3**, and it turns out **none of L3** | That the defect is **not** cross-tenant. C1b's FP-R3 already scrubs `FPSCR`, so the exposure is between two tasks inside one guest: wrong rounding mode from the parked FPU owner's `FPSCR.RM`, sticky flags accumulated into it. The clause most likely to be missed **next** is [simd/spec.md §2.4.1](../simd/spec.md) **S-R2** — the natural optimisation is to require ownership only when `VCSR.IEE = 1`, since that is when `FPSCR` is *written*, and it leaves the `FPSCR.RM` read open in the **default** mode. The second is **S-R3**: §3.2's prefix encodes `H`/`ww`/`rrr`/`N` and nothing that says FP, so "checked at prefix decode" is unimplementable without scanning the block's governed opcodes |
-| **C2a** GPU protection *(design landed 2026-09-09; no RTL possible — no GPU exists in either repo)* | **L2**, **L6**, and a scoping question against **L1** | L2 is `N/A` only while no tenant-influenced DMA master exists. The GPU *is* one, so C2a flips L2 to blocking — and C2a does **not** move L2, because L2 is about the IOMMU and the GPU's windows are inside the GPU. The clause most likely to be missed **next** is that the row's single bar item was wrong in two directions. **L6:** [simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md) **G-R8** makes the tile buffer, texture cache and per-warp register files ownership-change sites, so L6 gains three *specified, unbuilt* structures; G-R7 adds no `undefined` site because it defines the blocked-access result. **L1:** see §8 L1's scoping note — L1's own text may already bar the multi-tenant GPU that C2a is written to enable, which is not C2a's to decide |
+| **C2a** GPU protection *(design landed 2026-09-09; no RTL possible — no GPU exists in either repo)* | **L2**, **L6**, and a scoping question against **L1** | L2 is `N/A` only while no tenant-influenced DMA master exists. The GPU *is* one, so C2a flips L2 to blocking — and C2a does **not** move L2, because L2 is about the IOMMU and the GPU's windows are inside the GPU. The clause most likely to be missed **next** is that the row's single bar item was wrong in two directions. **L6:** [simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md) **G-R8** makes the tile buffer, texture cache and per-warp register files ownership-change sites, so L6 gains three *specified, unbuilt* structures; G-R7 adds no `undefined` site because it defines the blocked-access result. **L1:** **decided against C2a's mechanism on 2026-09-09 by C2c**, which owns L1 — an SM *is* a core for L1, so a two-tenant SM is out of bounds at launch independently of the windows, and C2a's windows are intra-tenant separation plus defence in depth. See §8 L1 |
 | **C2b** speculation coverage *(design landed 2026-09-09; **the implementation half is dispatchable in part, which no earlier Wave-3 item was** — see §8 L4)* | **L4**, **L7** part 4 | The **TSB walk** is a frontend transmitter (§7.2), and the I-side arm is on the *in-order* core too. Also: §12's code-level trigger — making the walk uncacheable flips §7.1. The clause most likely to be missed **next** is that three of this row's four named mechanisms target structures no repository contains *and are already specified* for the paused design points, so an implementer who works the list in order builds nothing that runs; the fourth, delayed speculative TLB/PTW fill, is the whole of the live work. The second is that an abort path in `core/tlb_walk.vhd` looks like the same mitigation and is not — [mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) **W-R2**: it closes the two installs and leaves the cacheable TSB reads, which are §7.1's observable. On **L7 part 4**, the clause named one counter address and there are two: `TLBINST` at `0xFF000058` counts the speculative DTLB installs this task is about, and it is the register a reader arriving from C2b will meet first |
-| **C2c** FGMT microreset | **L1** | The detector. "An unenforceable rule with no detector is not a control" |
+| **C2c** FGMT single-tenant core + microreset *(design landed 2026-09-09; no RTL possible — there is no FGMT and no hypervisor in `jcore-cpu@origin/master`)* | **L1**, both halves | The detector — "an unenforceable rule with no detector is not a control" — and it is now [hypervisor/hardware-spec.md §4.7.2](../hypervisor/hardware-spec.md) **T-R1**–**T-R5**. The clause most likely to be missed **next** is that the item's flush half named a structure — "MSHRs" — that means two different pools, one of which (**the L2's**, shared across cores) no gang switch can ever reach and which belongs to **L5**; see §8 L1. The second is that this row's mechanism is **not** the one the plan named: `fence.t` is 2020s work with no pre-2006 prior art of its own, and what survives the [glossary.md §2](../glossary.md) test is the pre-2006 *object-reuse* shape, not the instruction. The third is that C2c's own detector is a **refusal**, not a trap, for a reason §4.1 makes concrete — a trap would clobber the `HSPC`/`HSSR` the refused entry needs |
 | **C2d** IOMMU | **L2** | Two of the five clauses are inherited without C0 backing and owe a derivation (§7.7) |
 | **C2e** cache isolation | **L5**, **L6** | Five mechanisms, five tests. The MSHR one must target the **L2** pool, not the core-side pool that already has evidence |
 | Hypervisor (Phase 3) | **L7**, and it carries **L1**'s enforcement | L7's four parts are a single bounds-check handler's correctness; §7.5 explains why it fails silently in two directions at once |
@@ -1189,7 +1292,7 @@ which bar they must clear.
 
 | Item | Status | Blocking |
 |---|---|---|
-| L1 | **NOT MET** — rule specified; gang-switch list complete as a specification (item 7 C1a, item 8 C1b); no detector, and no item on the list demonstrated | C2c |
+| L1 | **NOT MET** — rule specified; gang-switch list complete as a specification (item 7 C1a, item 8 C1b, item 9 C2c's microreset); the **detector is now specified too** ([hypervisor/hardware-spec.md §4.7.2](../hypervisor/hardware-spec.md) T-R1–T-R5) and is *specified, unbuilt* — no FGMT and no hypervisor RTL exists at `jcore-cpu@origin/master`, so T-E1 has no second thread context to place a second tenant on. **No item on the list is demonstrated.** The SM scoping question is decided (an SM *is* a core for L1) and adds an entry condition on un-parking the GPU, not a launch blocker | C2c's design is done; the RTL that builds FGMT and the hypervisor |
 | L2 | **NOT MET** — reset is all-bypass, and that reset is a *specification* value: no IOMMU RTL exists in `jcore-cpu` or `jcore-soc` at `origin/master` (case-insensitive `iommu`, `bmid`: zero files). C2a's design landed and does **not** move this item — its windows sit inside the GPU, one master port down from where L2 acts | C2d |
 | L3 | **NOT MET** — eager-across-tenants specified by C1b; *specified, unbuilt* — no FPU and no SIMD unit exists to run the five residue tests on. C1c's design landed and does **not** bear on this item: its defect is intra-tenant (§8 L3) | the RTL that builds an FPU |
 | L4 | **NOT MET** — the I-side walk arm is now *specified* ([mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) W-R1–W-R5, C2b) and unimplemented; the frontend rules of the paused specs are tightened but remain specified for cores that do not exist. **Not the same category as L2/L3/L6:** the transmitters are on `origin/master` today, so what is missing is RTL against shipping hardware, not hardware to test | C2b |
@@ -1252,7 +1355,7 @@ because on this page that is exactly what it means.
 | In-order speculation shadow | "~2–6 cycles" | **CONTRADICTED IN-TREE.** Both speculative specs state a **7-cycle raw** misprediction penalty ([ooo/j32ooo-spec.md §3.2](../ooo/j32ooo-spec.md), [ooo/j32lt-spec.md §3.5](../ooo/j32lt-spec.md)); J32-OOO reaches 4 only with checkpoint recovery. The 2–6 figure has no in-tree owner | Pick one definition of "shadow" — fetch-to-resolve or resolve-to-redirect — and cite the spec that owns it |
 | Eager FP/SIMD switch of the V-file | "~150–350 cycles" for the [520-byte J32 SIMD context image](../simd/spec.md) | **ESTIMATE, unsourced.** Derived from an assumed bulk-move rate with a dirty-skip; no `movmu`/`movml` throughput measurement exists in-tree | Microbenchmark on the FPGA once `movmu` exists; until then quote a range and say it is arithmetic |
 | Tenant-switch scrub, write-through L1 | "~21k → ~10² cycles" | **MIXES TWO QUANTITIES, and the smaller one invites a wrong reading.** ~10² cycles is plausibly the *microreset*; but [hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md) budgets **~15k cycles per gang switch**, dominated by the incoming tenant's **cold cache**, not by the flush. Both can be true; quoting only the ~10² understates the switch by two orders of magnitude | State scrub cost and switch cost separately, always |
-| A single-cycle flush pulse leaks | — | **ADOPT AS A REQUIREMENT REGARDLESS.** Sourced to the fence.t work in the plan; the design consequence (multi-cycle assert; also reset the replacement LFSR, arbiters and miss handler) is cheap and the failure mode is silent | Nothing — implement it; the cost of being wrong is asymmetric |
+| A single-cycle flush pulse leaks | — | **ADOPTED AS A REQUIREMENT, 2026-09-09.** [hypervisor/hardware-spec.md §4.7.1a](../hypervisor/hardware-spec.md) constraint 4 (multi-cycle assert with observable completion) and scope classes 1–3 (miss handler, replacement state, arbiter). The claim was sourced to the post-2006 work named in the plan; what was adopted is the *design consequence*, which is cheap and whose failure mode is silent, and not the paper's numbers — see the row below | Done as a specification. T-E2 (§4.7.1b) is the measurement, and a busy count of **zero cycles** fails it rather than passing it |
 | DAWG-semantics ways | "≤2%" | **LITERATURE (MICRO 2018), not verified by C0** | — |
 | Per-thread MSHR reservation | "≈0" | **PARTIALLY APPLICABLE.** Established for core-side MSHRs on an in-order core; **says nothing about the 4-entry shared L2 pool**, which is the cross-tenant one (§7.6) | Model the L2 pool under a 2-tenant miss-heavy mix — D1's L2 gate |
 | Tenant-tagged BTB beats full flush | "26–37%" | **LITERATURE (ARM CSV2), not verified by C0** | — |
@@ -1261,7 +1364,7 @@ because on this page that is exactly what it means.
 | Security-mechanism area, J32-OOO / J32-LT | ~8,400 gates (3.7%) / ~15,200 (6.5%) | **IN-TREE ESTIMATES** ([ooo/j32ooo-spec.md §20.5](../ooo/j32ooo-spec.md), [ooo/j32lt-spec.md §16.5](../ooo/j32lt-spec.md)) for cores that do not exist | Synthesis, after B3 |
 | Full-L2 flush / per-way flush | ~655 µs / ~82 µs | **DERIVED IN-TREE** from an assumed ~200 MB/s. Correct arithmetic on an unmeasured bandwidth | Measure SDRAM bandwidth on the ULX3S — D0a |
 | Gang switch | "~15k cycles (~0.5 ms at 30 MHz)", ≤5% at a ~10 ms quantum | **IN-TREE ESTIMATE, and the tagging complaint has been withdrawn** — this cell read "platform-tagged inconsistently — 30 MHz here against the plan's ~40 MHz `[FPGA]` target". [decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md) retired that ~40 MHz: it is J2's measured row, and J2 has no MMU. Against [platform-baseline.md §3](../platform-baseline.md) the 30 used here is J4's CI floor, i.e. the *closer* of the two to the machine this row is about. The estimate is still an estimate | Measure under D0a; no re-tag needed |
-| fence.t full on-core scrub | "<1% perf / 0.13% area" | **LITERATURE, not verified by C0.** The area figure is the one that matters for the ECP5 fit and it is quoted at two significant figures from a paper about a different core | ECP5 synthesis of the microreset, under C2c |
+| Full on-core scrub | "<1% perf / 0.13% area" | **LITERATURE, not verified by C0**, and **not carried into any spec**. The area figure is the one that matters for the ECP5 fit and it is quoted at two significant figures from a paper about a different core. C2c removed both figures from [j4-remediation-plan.md §E.10](../j4-remediation-plan.md) rather than annotating them ([decisions/0005](../decisions/0005-unmeasured-figures-are-removed.md)) and reproduced neither in [hypervisor/hardware-spec.md §4.7.1a](../hypervisor/hardware-spec.md) | ECP5 synthesis of the microreset — **not C2c**, which found no FGMT and no hypervisor RTL to synthesize. It is T-E2 (§4.7.1b), and it is blocked on the RTL that builds them |
 | Dirty/init tracking makes an untouched save free | "~0" | **STRUCTURAL, and true by construction** — a 2-bit clean/dirty state skips a save that has nothing to save. The *residual* is what fraction of switches actually find the unit clean, which is a workload property and is unmeasured | Instrument FP/SIMD touch rate under D0a |
 | Privileged `ocbi`/`ocbp` | "at ~0 perf" | **UNSOURCED, and the weakest "~0" on this list.** These are the SH-4 cache-maintenance ops the TLB-shootdown path uses ([cache/l2-spec.md §17.5](../cache/l2-spec.md)); privileging them turns each into a trap on whatever path uses them, which is not obviously free. It is free only if user-space genuinely never issues them | Count user-mode `ocbi`/`ocbp`/`pref` in a real workload before assuming zero |
 | MemGuard-style bandwidth throttling | ">50% interference eliminated" | **LITERATURE, not verified by C0.** Note it is a *reduction* figure, not a bound — it does not close the channel | — |
@@ -1313,9 +1416,18 @@ close one is scope expansion, not compliance.
    omitted set on 2026-09-09 — the store-queue buffers as
    [hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md) item 7 and the FP/SIMD
    register files as item 8. The item stays gated all the same, and the reason has changed:
-   **the list is a control only where its items have been demonstrated**, and none of the nine has
+   **the list is a control only where its items have been demonstrated**, and none of them has
    hardware to demonstrate on. It is also still open in the direction it was written for — a
-   structure nobody has thought of is absent from the list and from this sentence alike.
+   structure nobody has thought of is absent from the list and from this sentence alike, and
+   Wave-3 **C2c** found four more of them on 2026-09-09 by asking a different question: not
+   *which structures leak*, which is how the list was built, but *which structures had no
+   software-visible control to be reached through*, since every item on the list reached its
+   structure through a control that existed for some other reason. That found core-side MSHRs,
+   L1/TLB replacement-policy state, the FGMT thread-select state and the write buffer below a
+   write-through L1-D, now item 9
+   ([hypervisor/hardware-spec.md §4.7.1a](../hypervisor/hardware-spec.md)). The question is worth
+   re-asking of any structure added later; it is not worth believing it has been asked for the
+   last time.
 9. **[accepted]** **Fault and exception oracles** — `EXPEVT`/`TEA`/`MMUFSR` are high-fidelity by
    design and fine within a tenant.
 10. **[accepted]** **Rowhammer**, and everything physical.
@@ -1400,6 +1512,16 @@ now the implementation half of C2b.
   failure re-opens all of them at once.
 - **A hardware backstop for tenancy is proposed.** That would convert L1 from a
   policy to a control and change what the residuals in §10 cost.
+  **This trigger fired on 2026-09-09** — Wave-3 **C2c**,
+  [hypervisor/hardware-spec.md §4.7.2](../hypervisor/hardware-spec.md). It converts
+  the **placement** half for the virtualized case only and leaves the **flush** half
+  untouched by design (**T-R3**: the check scrubs nothing). Three cases stay policy:
+  an unvirtualized multi-tenant system, which executes no `HRTE`; a hypervisor that
+  issues two tenants the same `HTCR.TENANT`, which hardware cannot see; and the GPU's
+  SM, which §8 L1 now rules *is* a core for this item and for which no equivalent
+  exists. Re-read as: the trigger's wording asked whether hardware backs the rule, and
+  the answer is now "for one of its two halves, on the deployment that ships". The
+  residual costs in §10 change accordingly and item 8 there says how.
 - **The OoO-vs-FGMT decision (Wave-2 B3) lands on in-order + FGMT.** §4 and §6
   are written against a speculative product; if the product stops speculating,
   the speculative column is re-derived — **not deleted**, because §7.2 shows the

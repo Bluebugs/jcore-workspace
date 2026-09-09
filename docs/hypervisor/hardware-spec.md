@@ -1265,7 +1265,7 @@ Consequences, stated plainly because they are a capacity statement as much as a 
 ### 4.7.1 Gang switching (normative, when the gang-scheduled mode is used)
 
 All contexts of a core switch guests together, at a quantum boundary, never individually. The
-hypervisor **MUST** perform the following **9** numbered items before the first entry to the
+hypervisor **MUST** perform the following **10** numbered items before the first entry to the
 incoming guest. Each item is a channel that would otherwise carry the outgoing guest's state across
 the boundary:
 
@@ -1277,9 +1277,18 @@ the boundary:
 | 4 | Invalidate L1-I and L1-D | SH-4 `CCR.ICI` / `CCR.OCI`. **L1-D is write-through** ([../ooo/j32ooo-spec.md §11.2](../ooo/j32ooo-spec.md)), so there is no dirty data to write back and this is an invalidate, not a flush | one register write each |
 | 5 | Flush the TLB | tens of entries; `ASID_TAG` tagging makes this unnecessary for *correctness*, and it is done for the channel | negligible |
 | 6 | Switch `TSBBR`, `PDID`, `L2WAYMASK` | already per-guest (§2.8, design-spec §3.8, [../cache/l2-spec.md §16.1](../cache/l2-spec.md)) | three register writes |
-| 7 | **Scrub the store-queue buffers, per context** | [../sq/spec.md §6.5](../sq/spec.md) rule **SQ-R3**: the hyperprivileged `HSQCR` write clears the buffer of every queue whose written `VALIDn` is 0, so the `HSQCR` write that ends [../sq/spec.md §7](../sq/spec.md)'s restore **is** the scrub | none — it is item 9's own `HSQCR` write |
+| 7 | **Scrub the store-queue buffers, per context** | [../sq/spec.md §6.5](../sq/spec.md) rule **SQ-R3**: the hyperprivileged `HSQCR` write clears the buffer of every queue whose written `VALIDn` is 0, so the `HSQCR` write that ends [../sq/spec.md §7](../sq/spec.md)'s restore **is** the scrub | none — it is item 10's own `HSQCR` write |
 | 8 | **Scrub the FP and SIMD register files, per context** | [../fpu/spec.md §7.7](../fpu/spec.md) rule **FP-R3** and [../simd/spec.md §2.6.1](../simd/spec.md) rule **V-R3**: the hyperprivileged `FPDS` / `VDS` write that records the change of owner applies each file's defined scrub value to every bit of it, in the same step | the two writes, plus each file's save and only where the dirty state says the outgoing tenant wrote it |
-| 9 | Restore the incoming guest's vCPU contexts, enter | §2.9 | — |
+| 9 | **Microreset the core's untagged transient state** | §4.7.1a: write `HMRC.SCRUB` = 1 (§2.11), then poll `HMRC.SCRUB` to 0 | unknown at this stage — needs measurement |
+| 10 | Restore the incoming guest's vCPU contexts, enter | §2.9 | — |
+
+**Item 9 is new, and it is the item for everything the other nine reach through a control that
+already existed.** Each of items 3–8 clears its structure through a control this project has for
+another reason — SH-4's `CCR.ICI`/`CCR.OCI`, [../ooo/j32ooo-spec.md §20.4](../ooo/j32ooo-spec.md)'s
+predictor invalidate, the TLB flush, `HSQCR`, and `FPDS` ([../fpu/spec.md §7.7](../fpu/spec.md)) /
+`VDS` ([../simd/spec.md §2.6.1](../simd/spec.md)). Structures with no such control were
+therefore invisible to this list, and there are four classes of them. §4.7.1a specifies the scope,
+the four constraints and what is deliberately left out. Wave-3 **C2c**.
 
 **Item 7 is new, and the reason it is a separate row from item 2 is the whole point of it.** Item 2
 already saves the outgoing guest's store-queue buffers, because §2.9 makes them per-context state.
@@ -1288,7 +1297,7 @@ hold, and that restore is conditional — a queue the incoming vCPU never filled
 and a **fresh** vCPU has no image at all. Without item 7 those queues would resume holding the
 outgoing tenant's bytes, which the incoming tenant can publish to an address of its own choosing
 with one store and one `PREF` ([../security/threat-model.md §7.8](../security/threat-model.md)).
-The cost column reads "none" because SQ-R3 is a hardware side effect of a register write item 9
+The cost column reads "none" because SQ-R3 is a hardware side effect of a register write item 10
 already performs; what item 7 adds is not an action but the requirement that the write happen for
 **every** context, including the ones with nothing to restore.
 
@@ -1353,6 +1362,220 @@ The exposure being bounded is pre-2006 documented, not speculative: Percival, *C
 and Profit* (BSDCan 2005), recovered an RSA key across a shared L1 between two hardware contexts of
 one core, and observed that it applies to any system where caches are shared between mutually
 untrusted execution threads.
+
+### 4.7.1a Microreset (normative, Wave-3 C2c)
+
+**What it is for.** Items 3–8 of §4.7.1 each clear a structure through a control that exists
+independently of this list. Any structure without such a control was invisible to the list, and the
+gap is not hypothetical: [../security/threat-model.md §8](../security/threat-model.md) **L1**
+requires the gang switch to flush "MSHRs" and no item on the list before this one reaches an MSHR.
+The microreset is the one action for that residue, triggered by a write of 1 to `HMRC.SCRUB`
+(§2.11).
+
+**Scope (normative).** The microreset clears, across **every thread context of the core**, the
+following **4** structure classes:
+
+| # | Class | Why nothing else on the list reaches it |
+|---|---|---|
+| 1 | **Miss-handling state** — MSHRs, fill buffers, and the miss handler's own sequencing state, including entries allocated by a context that has since been quiesced | There is no software-visible control that clears an MSHR. Item 4's cache invalidate clears tags and valid bits; a fill already in flight is not a tag |
+| 2 | **Replacement-policy state** of the L1-I, the L1-D and the TLB — pLRU trees, LFSR seeds, round-robin pointers | `CCR.ICI`/`CCR.OCI` clear valid bits and do not touch replacement state. That state is a per-set record of which lines the outgoing tenant touched, which is the same information the valid bits carried |
+| 3 | **FGMT thread-select state** — the ready-thread arbiter's priority state, and the switch-on-miss history of [../glossary.md §4](../glossary.md)'s default path | It is introduced by the threading model and appears in no per-structure control. It is also the structure that exists only on the path [../decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md) made the default |
+| 4 | **Any store or write buffer between a write-through L1-D and the L2**, on implementations that have one | The L1-D is write-through ([../decisions/0007](../decisions/0007-l1d-write-policy-under-msi.md)), so there is no dirty write-back for item 4 to flush — but "nothing to write back" is not "nothing held". This class is stated conditionally because whether such a buffer exists is a property of the implementation, not of this specification |
+
+**Out of scope, enumerated so the list is closed rather than open-ended.**
+
+- **Everything items 3–8 already clear.** Two controls for one structure leaves neither of them the
+  authority ([../decisions/0001](../decisions/0001-one-authority-per-fact.md)), and the one that is
+  not used in practice is the one that rots.
+- **The L2 and its MSHR pool.** A single set of L2 arrays and **4** MSHRs serve every core
+  ([../cache/l2-spec.md §2, §12.3](../cache/l2-spec.md), "shared across banks"), so no
+  core-granular action can reach them and a core-granular one that appeared to would be lying.
+  L2 isolation is way-partitioning ([../cache/l2-spec.md §16.1](../cache/l2-spec.md)) and belongs
+  to bar item **L5**, not **L1** — a distinction the single word "MSHRs" in L1's requirement text
+  did not make, and which [../security/threat-model.md §8](../security/threat-model.md) L1 now
+  makes.
+- **Architectural state.** Item 2 saves it and item 10 restores it. A reset that cleared it would
+  destroy the incoming guest's context.
+
+**Four constraints. The first three are [../ooo/j32ooo-spec.md §20.4](../ooo/j32ooo-spec.md)'s,
+carried over deliberately and for §20.7's reason; the fourth is this item's own.**
+
+1. **Software-triggered only.** The hardware does not detect a change of tenant and does not scrub
+   by itself. §4.7.2 detects a violating *placement* and refuses it; it never scrubs. Keeping
+   detection and reset in separate mechanisms is the shape
+   [../ooo/j32ooo-spec.md §20.7](../ooo/j32ooo-spec.md) rejection 2 requires, and the reason it
+   gives is that hardware detection of a domain transition **combined with** a multi-mode,
+   progressively re-enabled reset is separately claimed.
+2. **Unconditional and complete over its scope.** One action, all four classes cleared. No modes,
+   no partial subsets, no progressive re-enabling as the scrub proceeds.
+3. **No save/restore.** The state is discarded, never preserved and reloaded.
+4. **Multi-cycle, with observable completion.** The scrub is **not** required to complete in one
+   cycle and MUST NOT be specified as a one-cycle pulse. `HMRC.SCRUB` reads 1 until every structure
+   in scope is clear, and the hypervisor MUST poll it to 0 before item 10. The failure mode this
+   forbids is silent: a single-cycle assert that does not propagate into a multi-entry array leaves
+   residue while reading as done, and the residue is in exactly the structures nothing else on the
+   list checks. How many cycles it takes is
+   **unknown at this stage — needs measurement** (§4.7.1b, T-E2).
+
+**Why the microreset does not subsume items 3–8, which is the obvious simplification.** Two
+reasons, and the first is dispositive. **Ordering:** items 7 and 8 are not separate actions at all —
+their mechanisms are hardware side effects of the `HSQCR`, `FPDS` ([../fpu/spec.md §7.7](../fpu/spec.md))
+and `VDS` ([../simd/spec.md §2.6.1](../simd/spec.md)) writes that item 10
+performs *as part of the restore*. A single whole-core reset placed before the restore cannot
+perform them, and one placed after would erase the restore it followed. **Authority:** an L1
+invalidate reachable both through `CCR.ICI` and through `HMRC` makes one of the two the
+second-class path, and this project has a record about what happens to second copies.
+
+**What the microreset is not, and what still is not covered.** It is a *flush*, not a *placement*
+control: a gang switch that performs items 1–8 and 10 but skips item 9 leaves residue, and §4.7.2's
+check does not notice — the check is about who is resident, not about what was cleared. The
+per-structure residue tests [../security/threat-model.md §8](../security/threat-model.md) L1
+requires for `MET` are what would notice, and none of them can run yet.
+
+### 4.7.2 The tenancy check (normative, Wave-3 C2c)
+
+§4.7 states the placement rule and says plainly why it is the hypervisor's to enforce: "hardware
+cannot know which vCPU belongs to which guest". That is true and it is not the end of the argument.
+Hardware cannot know *which* tenant a context belongs to, but it can be told that two contexts
+belong to *different* ones, and disagreement is the whole of the property §4.7 requires.
+[../ooo/j32ooo-spec.md §18](../ooo/j32ooo-spec.md) item 7 calls scheduler-only enforcement the
+weakest link in the security model, and
+[../security/threat-model.md §8](../security/threat-model.md) **L1** states the consequence as a
+requirement: *an unenforceable rule with no detector is not a control*. This section is that
+detector.
+
+**Five rules.**
+
+- **T-R1 — the predicate.** On an `HRTE` executed at `SR.HPRIV = 1` whose `HSSR.HPRIV` is 0, let
+  *R* be the executing thread context and *S* be every **other** thread context of the same core
+  that is currently executing with `SR.HPRIV = 0`, halted or not. The **tenancy predicate** holds
+  when `HTCR[R].VALID = 1` and, for every *s* in *S*, `HTCR[s].VALID = 1` and
+  `HTCR[s].TENANT = HTCR[R].TENANT`.
+- **T-R2 — refusal, not a trap.** If the predicate does not hold, the `HRTE` is **refused**: the
+  delay-slot instruction executes as it would have, `SR`, `HSPC` and `HSSR` are left unchanged, and
+  execution continues at the instruction following the delay slot rather than at `HSPC`.
+  `HTCR[R].VIOL` is set to 1. **No exception is raised and no `EXPEVT` is written.**
+- **T-R3 — the check clears nothing.** A refused `HRTE` performs no invalidate, no scrub and no
+  microreset. Reset stays software-triggered (§4.7.1a constraint 1).
+- **T-R4 — what is not checked.** An `HRTE` whose `HSSR.HPRIV` is 1 — the nested-hypervisor case of
+  §3.2 — is not checked, because it starts no tenant. On a single-context implementation *S* is
+  empty and the predicate reduces to `HTCR[R].VALID = 1`. A machine that never executes `HRTE`
+  never evaluates the predicate, which is what keeps §9 verification point 8's Phase-1
+  backward-compatibility guarantee exact.
+- **T-R5 — `VIOL` is sticky.** Hardware sets it and never clears it. It is cleared only by a
+  hyperprivileged write of 1 to `HTCR[R].VIOL`; a write of 0 leaves it set. It is the operator-
+  readable record [../security/threat-model.md §8](../security/threat-model.md) L1 asks for, and it
+  survives the hypervisor deciding to ignore the refusal.
+
+**Why one instruction is enough, rather than a comparison every cycle.** The predicate's inputs are
+each context's `SR.HPRIV` bit and each context's `HTCR`. `SR.HPRIV` goes 0→1 only by trap entry
+(§4.1), which *removes* a context from *S* and cannot falsify the predicate; it goes 1→0 only by
+`HRTE`, which T-R1 checks. `HTCR` is hyperprivileged, so it is written only by a context at
+`SR.HPRIV = 1` — a context that is not in *S* — and a write to `HTCR[R]` is not visible to the
+predicate until *R*'s own next `HRTE`, which is checked. So the predicate cannot become false
+between two evaluations, and evaluating it at `HRTE` is not an approximation of a continuous check;
+it is the same check.
+
+**Why it is a refusal rather than an exception, which is the design's one surprising choice.**
+§4.1's trap-entry logic delivers an exception taken at `SR.HPRIV = 1` by writing `HSPC ← PC` and
+`HSSR ← SR`. A tenancy trap on a failing `HRTE` would therefore **destroy the guest resume state
+the refused `HRTE` was about to use**, leaving the hypervisor with a violation report and no way to
+retry the entry it should have made. Refusal preserves `HSPC`/`HSSR` exactly, so the hypervisor
+fixes the placement — quiesce the offending sibling, or pick a different core — and re-executes the
+same `HRTE`. It also costs no `EXPEVT` code point, no `HEDR` bit and no vector, which matters
+because §2.3.1's mapping is declared stable and every non-delegatable cause it carries had to
+argue for itself.
+
+**Fail-closed, and where the closure comes from.** `VALID = 0` fails the predicate rather than
+matching everything. Three cases collapse into that one rule, and all three are cases a scheduler
+gets wrong rather than an attacker reaches:
+
+1. A **fresh vCPU** whose context image contains no `HTCR` (§2.9) is entered with `VALID = 0` and
+   does not start. This is Wave-3 **C1a**'s no-saved-image case, and here it is the safe outcome
+   rather than the leak.
+2. A context still running **pre-hypervisor code** — every context is at `SR.HPRIV = 0` out of
+   reset (§6) — holds `VALID = 0` and blocks the first `HRTE` on that core until it is quiesced.
+   §4.7.1 item 1 is exactly that quiesce, so a conforming gang switch never sees this.
+3. A hypervisor that **forgets** `HTCR` altogether never enters a guest at all, on any core. A
+   control whose omission stops the machine is a control that gets implemented.
+
+**What this detector does not detect, stated because a detector believed to cover more than it does
+is worse than none.**
+
+- **A hypervisor that gives two different tenants the same `TENANT` number.** Hardware compares
+  numbers; it does not allocate them. This is `PDID`'s recycling obligation (§2.8) in a second
+  register and it stays software's, as ASID allocation already is.
+- **A missing flush.** §4.7.1a's last paragraph says so; the check is about residency, not residue.
+- **An unvirtualized multi-tenant system.** There is no `HRTE`, so there is no evaluation.
+  [../glossary.md §4](../glossary.md) leaves that case to the OS scheduler and this section does
+  not change that. On the product the tenant *is* a guest kernel
+  ([../security/threat-model.md §1](../security/threat-model.md)), so the covered case is the one
+  that ships.
+- **The GPU's SM.** An SM is "a core" for **L1** — that is decided in
+  [../security/threat-model.md §8](../security/threat-model.md) L1, not here — but warp residency
+  on an SM is decided by the SM's own hardware warp scheduler from a work queue, not by an `HRTE`,
+  so this check cannot be the SM's. An SM-side equivalent is an entry condition on un-parking the
+  GPU program.
+
+**Why the check is not built on `PDID`.** Two reasons, either sufficient. `PDID` is **optional** —
+§2.8 requires it only "on any implementation that speculates" and says explicitly it is "not
+required on the in-order J2/J32 cores", with `CPUINFO[17]` reporting its presence — so a check
+built on it would be absent on exactly the microarchitecture
+[../decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md) makes the default path.
+And `PDID`'s privilege was, until this task, stated three different ways in three sections (§2.8),
+one of which licensed a guest to write it. A check is only as trustworthy as the register it reads.
+
+### 4.7.1b What §4.7.1a and §4.7.2 cost, and the experiments that price them
+
+The area, frequency and cycle cost of the microreset and of the tenancy check are
+**unknown at this stage — needs measurement**, and unlike Wave-3 **C2b**'s W-E1 none of these
+experiments is runnable today: there is **no FGMT RTL in `jcore-cpu@origin/master`** — a
+case-insensitive search for `fgmt`, `thread_id` and `multithread` over `*.vhd`/`*.vhm` returns
+nothing, and `barrel` returns only `core/shifter.vhd`, `core/shifter_seq.vhd` and
+`tests/shifter_seq_tap.vhd`, which are the barrel *shifter* — and no hypervisor RTL either:
+`hpriv`, `hcall`, `hrte`, `vbr_hyp`, `pdid` and `hedr` all return nothing over the same files.
+[../j4-remediation-plan.md §E.10](../j4-remediation-plan.md) prices an on-core scrub, and those
+figures are not reproduced here: they are literature about a different core, they are the figures
+[../security/threat-model.md §9](../security/threat-model.md) already audited as `LITERATURE`, and
+a figure for a different machine reproduced in a spec is how it gets lifted as though it were this
+one's.
+
+**T-E1 — is a violating placement refused?** Build the placement the rule forbids: two thread
+contexts of one core, `HTCR[0].TENANT ≠ HTCR[1].TENANT`, both `VALID = 1`, context 0 already at
+`SR.HPRIV = 0`, and execute `HRTE` on context 1. The test asserts that the guest instruction at
+`HSPC` does **not** execute and that `HTCR[1].VIOL` reads 1.
+
+> **Kill criterion, and it is a *not runnable* criterion rather than a *measures zero* one.** This
+> test must **fail** on a core with no tenancy check and pass with one — that is the demonstration
+> [../security/threat-model.md §8](../security/threat-model.md) L1 asks for and the one usually
+> skipped. If the model under test has only one thread context, *S* is empty by T-R4 and the test
+> passes **vacuously**; it must then report **not runnable**, not pass. A harness that cannot build
+> a second context with a different `HTCR` has not tested the check, and Wave-3 C2b's W-E1 records
+> the same trap being walked into from the other direction.
+
+**T-E2 — how long is the scrub, and does it fit?** Synthesize the microreset for the ECP5 and
+record ΔLUT4, ΔFF and ΔFmax against the same build without it, plus the cycle count `HMRC.SCRUB`
+reads 1 for.
+
+> **Kill criterion.** If ΔFmax takes the build below the J4 `Fmax` floor of
+> [../platform-baseline.md §3](../platform-baseline.md), the answer is to sequence the scrub over
+> more cycles on a narrower datapath — constraint 4 already permits any duration — and **not** to
+> drop a structure class from §4.7.1a's scope, which constraint 2 forbids. A measured busy count of
+> **zero cycles** does not pass this experiment: it means the scrub is not reaching a multi-entry
+> array, which is the exact failure constraint 4 exists to prevent.
+
+**T-E3 — the residue test, per structure class.** For each of §4.7.1a's four classes, write a
+recognisable pattern from tenant A, gang-switch per §4.7.1, and show tenant B cannot recover it.
+
+> **Kill criterion.** If a class cannot be given a pattern that survives *without* the microreset,
+> that class is not a channel on this implementation and its row must be removed from §4.7.1a with
+> the reason, rather than left as scope nothing tests. This is the same discipline
+> [../security/threat-model.md §12](../security/threat-model.md) applies to an exposure that fails
+> to reproduce: **re-derive it, do not delete it silently.**
+
+T-E3 is what discharges **L1**'s per-structure evidence requirement for these four classes. It is
+the last of the three and the only one that needs no new hardware beyond what T-E1 and T-E2 need,
+which is all of it.
 
 ## 5. Hyperprivileged-Only Instructions and Operations
 
