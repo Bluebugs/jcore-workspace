@@ -143,12 +143,16 @@ Consequences, stated as rules:
 
 **Rationale:** the alternative — trapping every burst — costs roughly 30 cycles per 32 bytes.
 For the motivating workload (a title streaming vertex data to a tile accelerator, megabytes per
-frame) that would be the single dominant cost in the system. *(The workload was originally written
-as a Dreamcast title running as a guest. Per [../sh4-guest-model.md §3.1](../sh4-guest-model.md) a
-stock Dreamcast image's instruction stream is little-endian and the fetch path stays big-endian, so
-such an image is a software-emulation workload rather than a KVM guest. The shape of the workload —
-bulk streaming to a device from a guest — is what the rationale rests on, and that is unchanged;
-a big-endian-compiled guest driving a tile accelerator is the same access pattern.)* Making the common
+frame) that would be the single dominant cost in the system. *(This workload was originally written as a Dreamcast
+title running as a guest, and that is again what it is. An intervening revision of this note read
+that "a stock Dreamcast image's instruction stream is little-endian and the fetch path stays
+big-endian, so such an image is a software-emulation workload rather than a KVM guest" — true under
+Decision B2-1, and false under Decision BE-1
+([../bi-endian-spec.md §1](../bi-endian-spec.md)), which makes the fetch path bi-endian. The
+rationale never depended on it either way: what it rests on is the **shape** of the workload, bulk
+streaming to a device from a guest, and that was unchanged by the exclusion and is unchanged by its
+removal. Recorded because this is the second time this parenthetical has been rewritten for a reason
+that does not touch its conclusion, which is a sign the conclusion was never resting on it.)* Making the common
 case a plain memory write lets a hypervisor map the guest's submission window to an ordinary
 ring buffer in host memory and drain it asynchronously.
 
