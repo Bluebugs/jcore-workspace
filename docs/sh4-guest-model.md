@@ -580,6 +580,19 @@ for it.
 Either way, none of the four is `FLDS`/`FSTS`/`LDS`/`STS` as SH-4 defines them,
 and none of them traps.
 
+**A re-homing now exists, and it is one move rather than four — B4 encoding
+sweep, 2026-09-08** ([encoding-sweep.md §2](encoding-sweep.md)). The four are
+not four unrelated squats: they are **all four operations of the CPI
+coprocessor bridge**, and all four of its CP0 twin's encodings are clean. CP0
+puts its whole bridge in the `0100` family with bits 5:4 unused, which makes
+those two bits a coprocessor index; giving CPI index `01` lands all four in
+virgin slots and leaves two indices spare. `freespace` confirms each, and the
+patched spec regenerates with no `collides` annotation on any of them. It also
+moves the two `1111`-plane forms out of the plane §2 traps. The encodings and
+the commands are in that section; the ownership below is unchanged, because
+regenerating from the patched `spec/system.toml` changes four generated files
+and that is an RTL change.
+
 **These four are the only findings in this task that are defects in hardware
 that exists**, rather than requirements on hardware that does not. Everything
 else here is a rule for future work.
