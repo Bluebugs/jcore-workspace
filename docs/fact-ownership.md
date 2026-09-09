@@ -276,10 +276,19 @@ inferred from silence:
   `datapath.vhm` `case` has four arms with four different `we` masks, so a byte
   map that was remapped rather than deleted still matches and still disagrees;
   that is exactly the mutation Decision B2-1 specified, and it is the reason
-  this row exists. `owner-has-fact` double-fires on `biendian.ifetch.select`
-  because its registry `Pattern` spells the literal `instr_o.a(1)` rather than a
-  class, so changing the bit trips the registry check and the binding
-  independently.
+  this row exists. `owner-has-fact` additionally fires on
+  `biendian.ifetch.select`'s **value** perturbation, because its registry
+  `Pattern` spells the literal `instr_o.a(1)` rather than a class, so changing
+  the bit trips the registry check and the binding independently.
+
+  **That second failure is a property of the perturbation, not of the binding**,
+  and this table claimed otherwise in its phrasing column until the claim was
+  checked: the perturbation run there rewrote the surrounding sentence *and*
+  removed the `instr_o.a(1)` token, so both checks fired and both were recorded.
+  A perturbation that changes only the phrasing around an intact token fires the
+  doc-side pattern non-match alone. Reporting the stronger result for a
+  perturbation that did not isolate it is precisely the over-reading the next
+  paragraph warns about, committed one paragraph above it.
 
   **What this does not prove**, stated in the same spirit as the bullet above:
   the code-side perturbations move the *pattern*, not the submodule, because the
