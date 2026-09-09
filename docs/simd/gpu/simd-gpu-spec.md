@@ -973,7 +973,7 @@ inner mechanism and G-R10 keeps the IOMMU as the outer one.
 **Rejected: the IOMMU with per-tenant BMIDs as the tenant-separation mechanism.**
 Three independent reasons, any one sufficient.
 
-1. **The fabric forbids it.** BMID is "an 8-bit identifier held in a register
+1. **The fabric forbids it.** BMID is an identifier "held in a register
    inside the fabric (**not inside the master**)" which the fabric "drives onto
    every transaction the port emits, overwriting any BMID-like field the master
    itself might assert"; a conformant master port "MUST NOT expose its BMID
@@ -1026,10 +1026,12 @@ unmeasured figure is removed rather than annotated, and the honest value for the
 area, frequency and throughput cost of G-R1..G-R8 is
 *unknown at this stage — needs measurement*. [../../j4-remediation-plan.md §E.10](../../j4-remediation-plan.md)
 prices three classes — speculation defences, eager state switch and scrub, cache
-isolation — and **has no line for an address-path check at all**; the nearest
-thing it prices is the *scrub* half ("fence.t full on-core scrub is <1% perf /
-0.13% area"), which speaks to G-R8 by analogy and says nothing about G-R1..G-R7.
-Its sub-1% conclusion must not be borrowed for this item.
+isolation — and **has no line for an address-path check at all**. The nearest
+thing it prices is a CPU-side on-core scrub, which speaks to G-R8 by analogy and
+says nothing about G-R1..G-R7; its figures are not reproduced here, because a
+figure for a different structure on a different core reproduced in a spec is how
+it gets lifted as though it were this one's. Its class conclusion must not be
+borrowed for this item.
 
 Three experiments, each with the result that ends it. A human runs them; none is
 runnable before the first SM RTL exists.
