@@ -63,6 +63,7 @@ identical but which is dated 2006 and so cannot serve as prior art.*
    - 7.4 Save / restore sequence (136-byte FPU image)
    - 7.5 Trap-handler register-window convention (HSPC / HSSR)
    - 7.6 Migration and live-migration corner cases
+   - 7.7 Cross-tenant FP ownership: eager switch, dirty tracking, scrub
 8. IEEE-754 conformance target (per tier)
 9. Test plan summary
 10. Open questions / TBDs
@@ -1590,10 +1591,16 @@ The invariants:
    - If `fpu_owner == NULL`: the physical FPU is in reset state; no
      save needed.
    - Restore V's FPU state. If `V->fpu_image_valid`: load from
-     `V->fpu_image[]` (§7.4). Else: reset the physical FPU to
-     post-reset defaults (FPSCR = 0x00040001, FR/XF/FPUL =
-     undefined per SH-4, but the hypervisor must write at least
-     FPSCR to its default to ensure determinism).
+     `V->fpu_image[]` (§7.4). Else: apply the [§7.7](#77-cross-tenant-fp-ownership-eager-switch-dirty-tracking-scrub-normative-t2)
+     scrub — every architectural bit of the file takes rule FP-R1's
+     defined value, not merely `FPSCR`.
+     *(This branch read "FR/XF/FPUL = undefined per SH-4, but the
+     hypervisor must write at least FPSCR to its default to ensure
+     determinism" until 2026-09-09. That was
+     [../security/threat-model.md §7.8](../security/threat-model.md)'s
+     finding and **L6**'s second site: on a fresh vCPU the branch left
+     the previous tenant's values in place. FP-R1 withdraws the word
+     "undefined"; §7.7 is where the replacement and its argument are.)*
    - Mark `pcpu->fpu_owner = V`, `V->fpu_owned = true`.
    - Clear SR.FD in V's SR shadow (so the re-executed instruction
      does not re-trap).
@@ -1602,7 +1609,10 @@ The invariants:
 **On vCPU pre-emption / migration to another pCPU:**
 
 7. Hypervisor does **not** eagerly save the FPU state of the
-   pre-empted vCPU. The save is deferred until step 6 triggers it,
+   pre-empted vCPU. **This holds for a within-tenant pre-emption only,
+   and is overridden at a cross-tenant gang switch by
+   [§7.7](#77-cross-tenant-fp-ownership-eager-switch-dirty-tracking-scrub-normative-t2)
+   rule FP-R5.** The save is deferred until step 6 triggers it,
    on the next pCPU that the FPU is contended on. If V never resumes
    (it exits), the FPU image is simply discarded.
 
@@ -1735,6 +1745,399 @@ this is achievable.
   identically to a guest. **Recommendation:** ban hypervisor FPU
   use entirely; route any in-hypervisor FP work to soft-float
   routines.
+
+### 7.7 Cross-tenant FP ownership: eager switch, dirty tracking, scrub (normative). [T2]
+
+**Wave-3 task C1b**, from [../j4-remediation-plan.md §C1](../j4-remediation-plan.md), argued
+against [../security/threat-model.md §8](../security/threat-model.md)'s bar items **L3**, **L6**,
+and **L1**'s added clause.
+
+*It is here and not in `../decisions/` deliberately*, on
+[../decisions/README.md](../decisions/README.md)'s rule that a decision goes inline when a spec
+owns the thing decided. This document owns `FR`, `XF`, `FPUL` and `FPSCR`, and what is decided
+here is what those registers contain at a change of owner. The two parts that are **not** this
+document's are not here: the SIMD file is [../simd/spec.md §2.6.1](../simd/spec.md), which owns
+`V0..V15`, `P0` and `VCSR`, and the requirement that a gang switch perform this at all is an item
+in [../hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md), the spec that owns
+gang switching. Wave-3 **C1a** split [../sq/spec.md §6.5](../sq/spec.md) the same way and for the
+same reason.
+
+#### The exposure
+
+[../security/threat-model.md §1](../security/threat-model.md)'s adversary is a guest kernel handed
+a core another tenant used. §7.3's restore branch hands it the previous tenant's registers:
+
+> Else: reset the physical FPU to post-reset defaults (FPSCR = …, FR/XF/FPUL = undefined per
+> SH-4, but the hypervisor must write at least FPSCR to its default to ensure determinism).
+
+No speculation is involved and no timing is measured. The incoming tenant reads `FR0..FR15`,
+`XF0..XF15` and `FPUL` with committed `fmov.s` / `flds` instructions and gets whatever the
+outgoing tenant computed. §6.3's no-escape rule — every FP instruction traps under `SR.FD`, with
+no control-only escape — is what makes this *only* reachable through the ownership handler, and
+therefore what makes it look closed when it is not.
+
+**Two branches reach it, and only one of them is the one §7.3 describes.**
+
+1. **The no-image branch, in the hypervisor's own handler.** §7.3 step 6's `else` arm. A vCPU on
+   its first dispatch ever has `fpu_image_valid == false`, so nothing is written over the file
+   except `FPSCR`. This is [../security/threat-model.md §7.8](../security/threat-model.md)'s
+   finding and **L3**'s named clause.
+2. **The delegated branch, where the handler is not ours.** §7.1 offers `HEDR[3] = 1` as a
+   per-vCPU configuration for "a vCPU running a *FPU-aware* guest OS that wants to manage SR.FD
+   itself". With that bit set the `EXC_FPU_DISABLED` trap is delivered to the **guest's**
+   supervisor handler, which clears `SR.FD` and proceeds. The hypervisor's §7.3 ownership
+   transition never runs, so the file is not merely unrestored — it is untouched, for a tenant
+   that asked to be given it. This branch is not in §7.8's list; it was found while writing this
+   section, and it is the reason the fix below is anchored at the switch and not in a trap
+   handler.
+
+Both branches run in the *corruption* direction as well as the disclosure one: an FP value the
+incoming tenant did not write is a wrong answer, not only a leak.
+
+**What the file is not.** Unlike [../sq/spec.md §6.5](../sq/spec.md)'s queue buffers there is no
+"undefined read" to close here, because there is no undefined *operation*: reading `FR7` is an
+ordinary architectural read at every privilege level. The hole is entirely in what the register
+*contains*, which is why the whole of this section is about the transition and none of it is about
+the access.
+
+#### The invariant
+
+> **FP-INV.** At every instant, every bit of the physical FP register file — `FR0..FR15`,
+> `XF0..XF15`, `FPUL`, `FPSCR` — is either a bit the file's current owner wrote since the file's
+> last scrub, or the corresponding **scrub value** of FP-R1.
+
+Stated as an invariant rather than as a sequence, for L6's reason: the failure mode of this class
+of fix is a step that silently does not run, and a step is not checkable while a state is.
+
+#### Where eager stops, and what makes the boundary safe
+
+**Across tenants, eager. Within a tenant, lazy. The boundary is the change of the core's tenant,
+and nothing else.**
+
+- **Within a tenant** — a guest OS switching its own tasks, and a hypervisor switching between
+  vCPUs *of the same guest* on one pCPU — §7.3's lazy ABI is unchanged, `SR.FD` still traps on
+  first use, and `HEDR[3] = 1` remains a legitimate per-vCPU choice. Nothing in this section makes
+  a within-tenant switch more expensive, because within a tenant there is no ownership change in
+  the sense FP-INV means: the *tenant* still owns every bit in the file, and a tenant reading its
+  own stale FP register is a bug in that tenant and not a boundary violation.
+- **Across tenants** — the gang switch of
+  [../hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md) — the outgoing tenant's
+  state is saved if FP-R4 says it is dirty, and the file is then **scrubbed unconditionally**
+  before the incoming tenant's first instruction. The incoming tenant's image, if it has one, is
+  restored over the scrub.
+
+**What makes the boundary safe is that it is the only boundary there is.**
+[../hypervisor/hardware-spec.md §4.7](../hypervisor/hardware-spec.md) makes a physical core the
+unit of guest allocation at any instant, so the physical FP file can pass from one tenant to
+another *only* at a gang switch. That is a load-bearing dependency and not a convenience: if
+cross-tenant fine-grained MT were ever allowed, the file would change tenant between two
+instructions of the barrel and this section would be unimplementable at any cost. **L1 is
+therefore a precondition of L3 here, not a parallel requirement.**
+
+**What observes it** is three things, in descending order of how much they can be forgotten:
+
+1. FP-R3 makes the scrub a *hardware effect of a state write the switch already performs*, so it
+   cannot be omitted independently of omitting the ownership change itself.
+2. [../hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md) carries it as a
+   numbered item, so a reader of the gang-switch list sees it.
+3. The residue tests below, which are what **L3** and **L6** actually accept as evidence.
+
+**The file is per thread context.** On an FGMT implementation every thread context has its own
+`FR`/`XF`/`FPUL`/`FPSCR`, for the same reason it has its own ARF: two vCPUs of one guest running
+concurrently would otherwise silently overwrite each other's FP state, which is a correctness
+failure before it is a security one. This is stated here because
+[../ooo/j32lt-spec.md §9.1](../ooo/j32lt-spec.md)'s per-thread-context table has no row for an FP
+file — correctly, since no FPU exists — and a later reader must not read that absence as a
+decision that the file is shared.
+
+#### The rules (normative)
+
+**FP-R1 — The scrub value is defined, and "undefined" is withdrawn.** The scrub value is **zero**
+for `FR0..FR15`, `XF0..XF15` and `FPUL`, and the §6.4 reset value for `FPSCR`. §7.3's
+"FR/XF/FPUL = undefined per SH-4" is **withdrawn**: those registers are zero at every point FP-INV
+calls scrubbed, and a guest that reads one without writing it reads a positive zero.
+
+Three reasons for zero rather than for a recognisable pattern or for leaving it to the
+implementer:
+
+- Zero is a valid single- and double-precision `+0.0`, so a scrubbed register cannot raise an
+  invalid-operation or denormal `Cause` bit on first use and cannot make FP-R1 observable as a
+  trap the guest would not otherwise take.
+- Zero is what the guest kernel already writes for a task that has never used the FPU:
+  `linux@origin/jcore` `arch/sh/kernel/cpu/fpu.c` `init_fpu()` does `memset(fp, 0, xstate_size)`
+  over `struct sh_fpu_hard_struct` and then sets `fpscr`. A hardware scrub to zero is
+  indistinguishable from the state the OS would have installed itself, so it can regress no
+  conforming software.
+- SH-4 calls these registers undefined at reset, which is exactly the licence
+  [../security/threat-model.md §8](../security/threat-model.md)'s **L6** bans an implementer from
+  taking. "Post-reset defaults" is therefore *not* an adequate answer on its own; the reset
+  default has to be given a value first, and FP-R2 gives it one.
+
+**FP-R2 — Reset.** Out of reset the file holds the FP-R1 values and `FPDS` is `00`. This is a new
+requirement: §6.4 gives `FPSCR` a reset value and nothing gave the register file one.
+
+**FP-R3 — Scrub on ownership installation.** A hyperprivileged write of `FPDS` = `00` applies
+FP-R1 to the whole file — both banks, `FPUL` and `FPSCR` — in the same step as the write.
+Unconditional, idempotent, no transition detection, no new instruction, no new trap.
+
+Three consequences, and the third is the one this task exists for.
+
+1. The gang switch writes `FPDS` = `00` for every context because that write *is* how it records
+   that the physical file no longer belongs to the outgoing vCPU — the hardware form of §7.2's
+   `pcpu->fpu_owner = NULL`. The bookkeeping and the scrub are one write, which is the difference
+   between a control and a line on a checklist.
+2. A restore, if there is one, follows and overwrites the whole file, ending with `FPDS` = `01`.
+   A queue-shaped partial restore is impossible here because the image of §7.4 covers every
+   architectural bit.
+3. **A fresh vCPU with no saved image is covered by construction.** Its restore is the scrub and
+   nothing else. The no-image branch is not a second code path that could be forgotten; it is the
+   same write with no restore after it. This is the branch
+   [../security/threat-model.md §7.8](../security/threat-model.md) identifies and that **L3**
+   requires as its own test case, and it is why FP-R3 is not conditioned on there being an image.
+
+**FP-R4 — `FPDS`, the two dirty bits.** `FPDS[1:0]` is a per-thread-context field, readable and
+writable only at `SR.HPRIV = 1`, with no guest-visible encoding at all:
+
+| `FPDS` | Name | Meaning | What a switch away may skip |
+|---|---|---|---|
+| `00` | **RESET** | the file holds the FP-R1 values | the save *and* the scrub |
+| `01` | **CLEAN** | the file holds exactly the current owner's saved image | the save |
+| `10` | **DIRTY** | the current owner has written the file since it became `00` or `01` | nothing |
+| `11` | reserved | treated as `10` | nothing |
+
+- **Hardware sets `FPDS` = `10` on any architectural write to any of `FR`, `XF`, `FPUL`, `FPSCR`,
+  from any mode**, including a write by hyperprivileged software. Mode-independence is deliberate:
+  a rule of the form "except when the hypervisor is restoring" is transition detection wearing a
+  different hat, and the restore ends with an explicit `FPDS` write anyway.
+- **Only a hyperprivileged write clears it.** No guest instruction reads or writes `FPDS`, so it
+  adds nothing to any guest-visible ABI and nothing to the SH-4 surface a guest can probe.
+- **`11` is read as `10`, and the direction is the point.** An unknown or corrupted state must
+  mean *the file may hold something*, never *the file is clean*: the fail-safe reading forces a
+  save and a scrub. A design in which the fail-safe direction is "clean" is one bit-flip from
+  FP-INV.
+
+**`FPDS` is not per-vCPU state and must not join
+[../hypervisor/hardware-spec.md §2.9](../hypervisor/hardware-spec.md)'s save/restore list.** The
+test that section already applies to `HLE` applies here and gives the same answer: ask whether a
+vCPU resumed on a different pCPU would be *wrong* if the bit were lost. It would not, because the
+incoming context's `FPDS` is **written** by the installation that resumes it — `00` for a scrub,
+`01` after a restore — and never read from the outgoing vCPU. `FPDS` describes the **physical
+file**, of which there is one per thread context, in exactly the way §7.2's per-pCPU `fpu_owner`
+describes the physical FPU and the per-vCPU `fpu_owned` does not.
+
+**This is where C1a's rejected mask and these two bits part company, and the difference is worth
+stating because the surface reasoning is identical.** [../sq/spec.md §6.5](../sq/spec.md) rejected
+a per-word valid mask *as the specified mechanism* because the mask recorded **which words the
+owner had written** — information about the owner, which must survive the owner's absence, and
+which therefore had to join the context image and reopen a register layout. `FPDS` records
+**whether the file currently differs from the image** — information about the file, which is
+meaningless the moment the file is handed to someone else, and which the next owner's
+installation overwrites. So the two bits cost **no bytes in the §7.4 image**, no change to §7.4's
+field table, and no row in
+[../hypervisor/hardware-spec.md §2.9](../hypervisor/hardware-spec.md). What they do cost is two
+flip-flops per thread context, and that is stated in the cost list below rather than netted out.
+
+**FP-R5 — Eager across tenants, lazy within, and the trap is not the mechanism.** A cross-tenant
+transfer of the file **MUST NOT** depend on the incoming tenant executing an FP instruction. §7.3
+step 7's "the hypervisor does **not** eagerly save the FPU state of the pre-empted vCPU" stands
+for a within-tenant pre-emption and is **overridden at a gang switch**, where the save (if
+`FPDS` = `10`) and the scrub both happen before the incoming guest's first instruction. Two
+independent reasons, either sufficient:
+
+- The first-use trap may be **delivered to the guest**, not to the hypervisor, whenever
+  `HEDR[3] = 1` (§7.1). A safety property that a per-vCPU configuration bit can switch off is not
+  a safety property. With FP-R3 in place, `HEDR[3] = 1` becomes safe again, because the file the
+  guest's own handler finds has already been scrubbed.
+- [../security/threat-model.md §7.2](../security/threat-model.md) is explicit that this core is
+  not non-speculative even in the in-order class. A mitigation that runs *at* the first FP
+  instruction is racing whatever the machine did before it retired.
+
+**FP-R6 — Guest reads of a scrubbed, unwritten register are defined.** They return the FP-R1
+value. This is a consequence of FP-INV rather than an extra rule, and it is written down because
+**L6**'s evidence bar is phrased as a read: a tenant must be able to read every architectural FP
+register and find a defined value.
+
+**FP-R7 — The hypervisor does not use the FPU.** §7.6 already recommends banning hypervisor FP
+use; FP-INV makes it normative, for
+[../sq/spec.md §6.5](../sq/spec.md) rule SQ-R6's reason in this subsystem. `FPDS` cannot
+distinguish host bytes from a restored image, so a file the hypervisor filled for its own purposes
+and left marked `01` would be handed to a guest as that guest's own context, and the bytes
+disclosed would be the TCB's ([../security/threat-model.md §2](../security/threat-model.md)).
+This is a discipline on the TCB rather than a hardware guarantee, and it is written down because
+it is otherwise invisible.
+
+**FP-R1, FP-R2 and FP-R6 are not conditional on the hypervisor extension.** Tier 1 has an FPU and
+no hyperprivileged mode; there the only ownership change is reset, R2 covers it, and R1 gives the
+register file the defined reset contents SH-4 never gave it. FP-R3, FP-R4, FP-R5 and FP-R7 have no
+meaning without Tier 2 and are not required of a Tier 1 part.
+
+#### What discharges the bar, and what does not
+
+**L6** and **L3** both demand a residue test written as *tenant A stores a recognisable pattern;
+tenant B reads and must not see it*, each demonstrated **red before the fix**. For this site that
+is four tests, and the last three are the ones that get skipped.
+
+| # | Test | What it recovers if the rule is absent |
+|---|---|---|
+| 1 | Tenant A writes a distinct pattern to `FR0..FR15`, `XF0..XF15` and `FPUL` and is gang-switched out. Tenant B reads all thirty-three. | A's values — FP-R3 absent altogether |
+| 2 | **Tenant B is a fresh vCPU with no saved image**, then runs test 1's reads. | A's values, *with test 1 green*, on any implementation whose scrub is conditioned on there being an image to restore |
+| 3 | **The bank that is not in front.** A writes only `XF0..XF15` (via `FRCHG`) and leaves `FPSCR.FR` as it found it; B reads `XF` via `FRCHG`. | A's back bank, *with tests 1 and 2 green*, on any implementation that scrubs "the sixteen visible registers" |
+| 4 | **The tenant that never touches FP.** A uses the FPU heavily; B executes no FP instruction until after a second gang switch to tenant C, which reads the file. | A's values, on any implementation that scrubs in the first-use trap handler or under `HEDR[3] = 1` delegates that handler to the guest |
+
+Tests 3 and 4 exist because FP-R3's trigger was chosen so that all four exercise **one** hardware
+behaviour rather than four paths of which one is tested. Test 4 is the cross-tenant analogue of
+**L3**'s "eager or scrubbed" and is the test that fails a design built out of §7.3's trap.
+
+**L1's added clause is discharged in another document, deliberately.**
+[../hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)'s gang-switch list now
+carries the FP/SIMD scrub as a numbered item alongside C1a's store-queue one. A scrub specified
+here and absent from *that list* would leave L1 unmet while looking finished — the failure
+[../security/threat-model.md §8](../security/threat-model.md) predicts for this pair of tasks by
+name, and the one C1a had to avoid first.
+
+#### Minimizing the loss ([../j4-remediation-plan.md §E.10](../j4-remediation-plan.md), gated by §D3)
+
+The guarantee to be bought is FP-INV, and this is the one Wave-3 mechanism with an obvious price:
+it moves work from *when needed* to *every cross-tenant switch*. Five options were priced.
+
+**Chosen: dirty-gated eager save, unconditional hardware scrub.** The scrub is a broadside write
+of a constant into storage that must exist anyway; the *save* — the expensive half, since it is a
+copy to memory — is skipped entirely when `FPDS` is `00` or `01`. Structurally the scrub covers
+`(16 + 16 + 1 + 1) × 32 = 1,088` bits per thread context, a structural count and not a
+measurement, and the lever is the one §E.10 names, "per-register zero bit = 1-cycle zeroing".
+
+**Rejected: unconditional eager save and restore at every gang switch**, which is what "eager"
+means read literally. It copies the §7.4 image and
+[../simd/spec.md §2.5](../simd/spec.md)'s SIMD image for every context of the core on every
+switch, including for a tenant that never executed an FP or SIMD instruction — and on a
+four-context J32-LT that is four of each. It buys nothing FP-R3 does not: the scrub is what makes
+the file safe, and the save only preserves work the outgoing tenant may want back. `FPDS` exists
+to separate those two, and this option is the measurement baseline against which the two bits have
+to justify themselves — see the experiment's second kill criterion.
+
+**Rejected as the specified mechanism, and permitted as an implementation: a per-register valid
+bit** — thirty-four bits per thread context for the FP file — with a read of an invalid register
+returning the FP-R1 value and the scrub clearing the bits rather than the storage. It buys FP-INV
+for a clear of thirty-four flip-flops instead of a clear enable across 1,088, and it is the better
+answer if the file is block RAM, where a broadside clear is unavailable. It is rejected as the
+*specified* mechanism because FP-INV should not name a storage technology, not because it is
+unsafe.
+
+**And here it does not carry C1a's condition, which is worth saying because the reasoning looks
+identical and is not.** [../sq/spec.md §6.5](../sq/spec.md) permitted its rejected mask only on
+condition that an implementation choosing it saved the mask as context, because the store queue's
+`PREF` burst publishes bytes the owner never wrote — so *which* words were written was
+guest-observable and had to survive the switch. Nothing in the FP file is guest-observable at word
+granularity: a register the owner never wrote reads as the FP-R1 value under either mechanism, and
+§7.4's save reads all thirty-four registers unconditionally, so an image taken with valid bits
+clear is a correct image of zeros. **A per-register valid bit therefore needs no saving and adds
+no context state.** The difference is the publish primitive, not the register count.
+
+**Rejected: scrub in hypervisor software** — thirty-four stores per context in the switch path, no
+RTL change. Rejected on L6's own argument, that a scrub which silently does not happen produces no
+fault, and on a second ground: FP-R1, FP-R2 and FP-R6 bind a **Tier 1** part that has an FPU and
+no hyperprivileged mode at all, where there is no hypervisor to run the loop.
+
+**Rejected: scrub inside the `EXC_FPU_DISABLED` handler**, which is where §7.3 already does its
+ownership work and so looks free. This is FP-R5's case: the handler is delivered to the *guest*
+under `HEDR[3] = 1`, and it runs only if the incoming tenant executes an FP instruction, which
+test 4 above is built to catch. It is the LazyFP shape, and
+[../security/threat-model.md §7.8](../security/threat-model.md) already records that this design
+is worse than LazyFP because it needs no transient window.
+
+**The movmu-style bulk save is a code-density mechanism, not a throughput one, and §E.10 bundles
+it as though it were both.** `movmu.l` is live on J2A and SH-2A — `jcore-cpu@origin/master`
+decodes `0100mmmm11110000` and `0100nnnn11110100` in `decode/decode_core.vhm` — and
+[../isa-density/hardware-impl.md §5.1](../isa-density/hardware-impl.md) is explicit that it adds
+**no datapath**, only sequencing: one 32-bit memory operation per step, exactly as many bus cycles
+as the unrolled equivalent. An FP analogue would therefore save instruction fetch and I-cache
+footprint, and could be made non-interruptible so the sequence cannot be split — both real — but
+it would **not** reduce the data movement, which is what an eager switch actually costs. The
+ordering of levers here is `FPDS` first (it removes the copy), the broadside scrub second (it
+removes the scrub's cycles), and bulk-move encoding third. **No encoding is allocated by this
+section.** `jcore-cpu/docs/insns.json` is the single writer under
+[../decisions/0003](../decisions/0003-canonical-encoding-database.md) and an FP bulk-move
+instruction is an encoding change owned by that database and by Wave-2 **B4** — which additionally
+left `movmu`'s `m = 15` anchor unconfirmed against SH-2A for want of a manual
+([../encoding-sweep.md §4](../encoding-sweep.md)), so no anchor semantics are relied on here.
+
+**What this costs, and what is not known.**
+
+- **Per within-tenant switch: nothing.** No rule in this section fires.
+- **Per cross-tenant switch, per thread context:** one `FPDS` write, whose scrub side effect is
+  FP-R3; plus §7.4's save **only** when `FPDS` = `10`. How often a tenant leaves the file dirty at
+  a quantum boundary is `unknown at this stage — needs measurement`.
+- **Per FP instruction:** the `FPDS` = `10` set on any write to the file. Whether it lands on the
+  critical path is `unknown at this stage — needs measurement`.
+- **Area:** two flip-flops per thread context, plus a clear enable on a register file that does
+  not exist yet. The gate cost is `unknown at this stage — needs measurement`.
+- **§E.10's conclusion is about a class and is not a number for this mechanism.** It prices "eager
+  state switch + scrub" as sub-1% on this core, which is why this design has the *shape* it has —
+  cross-tenant only, dirty-gated copying, a data-path clear rather than a software loop. It is
+  `LITERATURE` on [../security/threat-model.md §9](../security/threat-model.md)'s provenance
+  scale, it is not evidence about the FP file, and no percentage is stated here for one.
+
+**The experiment that would settle it.** Human-gated: this design prepares it and a person runs
+the board ([../j4-execution-plan.md §5](../j4-execution-plan.md)). **None of the three can be run
+today** — there is no FPU to build with or without the mechanism — so each is stated as a gate on
+the task that first builds a Tier 1 FPU, in the same position C1a left the store queue.
+
+1. **Synthesis A/B.** Build the FP register file with and without FP-R3's clear enable and FP-R4's
+   two flip-flops; `yosys` + `nextpnr-ecp5` targeting the ULX3S 85F. Report ΔLUT4, ΔFF, ΔEBR and
+   `Fmax` against the CI floor of [../platform-baseline.md §3](../platform-baseline.md).
+   *Kill criterion:* if the broadside clear puts the build under the floor, take the per-register
+   valid-bit variant, which is permitted above and costs no context state.
+2. **Is `FPDS` worth its own existence.** Gang-switch cost under a two-guest schedule from the PMU
+   cycle counter, with the guests chosen so one never touches FP: dirty-gated save versus the
+   rejected unconditional eager save. *Kill criterion:* if the gated save is not measurably cheaper
+   on the FP-free guest, **delete `FPDS`** and specify the unconditional save. The two bits exist
+   only to buy that difference, and complexity that buys nothing measurable is a defect and not a
+   safety margin.
+3. **Per-instruction cost of the dirty set.** `Fmax` and IPC on an FP-dense loop with and without
+   the FP-R4 write-enable. Expected to be unmeasurable — it is a fan-out to one flip-flop — and run
+   to confirm that rather than to assume it.
+
+#### Implementation status: specified, not built
+
+**There is no FPU and no SIMD unit in `jcore-cpu`, so nothing in this section is met because it
+has been written.** Re-checked 2026-09-09 against `jcore-cpu@origin/master` (`e8a5a4e1`),
+case-insensitively throughout, because VHDL is case-insensitive and `git grep` is not:
+
+- No `*.vhd`/`*.vhm` file matches `entity fpu`, `component fpu`, `entity simd` or
+  `component simd`; none matches `fpscr`, `fpul` or `vcsr`; no path under the tree contains `fpu`,
+  `simd` or `float`. The three `float` hits in `core/cpu.vhd` are comments about an *undriven*
+  signal and are not floating point.
+- `linux@origin/jcore` (`128e8958`) does not build the kernel's FPU support on this target at all:
+  `arch/sh/Kconfig`'s `CPU_SUBTYPE_JCORE` does not `select CPU_HAS_FPU`, `CONFIG_SH_FPU` therefore
+  cannot be set, and `arch/sh/include/asm/fpu.h` compiles `save_fpu`, `restore_fpu` and
+  `unlazy_fpu` to `do { } while (0)`.
+
+Three consequences, so that nothing here reads as a closure:
+
+- **L6's FP/SIMD site moves from a specified "undefined" to a specified scrub, and no further.**
+  Its evidence bar is the four residue tests above, each demonstrated red before the fix, and
+  there is no hardware to run them red on.
+- **FP-R1..FP-R7 must land with the Tier 1/Tier 2 FPU, not after it.** What unblocks the
+  implementation half of C1b is the FPU itself. The reason is C1a's reason in another subsystem:
+  [../sh4-guest-model.md §4](../sh4-guest-model.md)'s Decision B2-4 traps guest FP precisely
+  because no FPU exists, and the moment an FPU is enabled on a hypervisor-bearing variant the
+  exposure above becomes live — there is no intermediate state in which a guest would notice the
+  scrub was missing.
+- **Guest FP is trapped and emulated today**
+  ([../sh4-guest-model.md §4](../sh4-guest-model.md), Decision B2-4), so the file the guest sees is
+  the VMM's software state and not this one. That is why the exposure is latent rather than
+  shipping, and it is not a mitigation: it is the absence of the hardware the mitigation is for.
+
+**Prior art, pre-2006.** Two bits recording *has been referenced* and *has been changed*, read by
+supervisor software to decide whether a block must be written back before it is reassigned, are
+IBM System/370 (1970) storage keys — the same mechanism [../sq/spec.md §6.2](../sq/spec.md) and §7
+already cite for the other half of this design, applied to a register file rather than to a page
+frame. Eager state exchange at a protection-domain boundary with lazy switching inside the domain
+is the Multics (1965) ring-crossing discipline. The object-reuse requirement that storage assigned
+to a subject contain no information produced by a prior subject is TCSEC (DoD 5200.28-STD, 1985)
+from class C2 upward. The trap-on-first-use idiom being *retained* inside the tenant is the
+VAX (1977) FPACC trap and 4.4BSD (McKusick et al. 1996), which §7.3 already cites. Nothing here is
+new except which structure the rules are applied to.
 
 ---
 
