@@ -101,7 +101,7 @@ are the substitute for a check that cannot be written cleanly — see
 | `biendian.dside.bytelane` | Byte store to `…00` drives `we = "1000"`; the byte-order mode does not change it | [bi-endian-spec.md §4.1](bi-endian-spec.md) | `we = "1000"` |
 | `biendian.ifetch.select` | Fetch halfword selection is driven by `instr_o.a(1)`, an address bit | [bi-endian-spec.md §5.1](bi-endian-spec.md) | `instr_o\.a\(1\)` |
 | `sq.context.bytes` | Store-queue per-context image: **72 bytes** (2 × 32 B buffers + `QACR0`/`QACR1`, not `HSQCR`) | [sq/spec.md §7.2](sq/spec.md) | `\b72[- ](?:bytes?\b\|B\b)` |
-| `hyp.gangswitch.items` | Gang-switch flush sequence: **9** numbered items; 7 scrubs the store queue, 8 the FP/SIMD files | [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md) | `\*\*9\*\* (?:numbered )?items` |
+| `hyp.gangswitch.items` | Gang-switch flush sequence: **10** numbered items; 7 SQ, 8 FP/SIMD, 9 microreset | [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md) | `\*\*10\*\* (?:numbered )?items` |
 | `fpu.fpds` | `FPDS`: 2-bit FP dirty state, per thread context, hyperprivileged-only, **not** in the FPU image | [fpu/spec.md §7.7](fpu/spec.md) | `\bFPDS\b` |
 | `simd.vds` | `VDS`: 2-bit SIMD dirty state, per thread context, hyperprivileged-only, **not** `SR.VD` | [simd/spec.md §2.6.1](simd/spec.md) | `\bVDS\b` |
 | `security.l6.undefined` | **1** open `undefined` site under bar item L6: `movca.l`'s L2 line (C2e) | [security/threat-model.md §8](security/threat-model.md) | `\*\*1\*\* open .undefined. site` |
