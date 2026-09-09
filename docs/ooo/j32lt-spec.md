@@ -619,7 +619,7 @@ The floor is what stops this from degenerating: without it, four threads collaps
 | Auto-priority state (`last_cas_pc`, `cas_fail_count`, `prio_dropped`, `parked`) | 5 B |
 | MMU fault state (§11: `PTEH`, `TSBPTR`, `TEA`, `MMUFSR`, `PTEL`, `EXPEVT`, `SPC`, `SSR`) | 32 B |
 | Hypervisor context (§16.12: `SR.HPRIV`, `HSPC`, `HSSR`, `VBR_HYP`, `HEDR`, `HEMUB`, `HEMUM`, `HPAR`, `HMDR`, `HMCR`, `HSQCR`) | 42 B |
-| **Store queue (§16.12: two 32 B buffers + `QACR0`/`QACR1`)** | **72 B** |
+| **Store queue — the 72-byte store-queue image of [../sq/spec.md §7.2](../sq/spec.md); §16.12: two 32 B buffers + `QACR0`/`QACR1`** | **72 B** |
 | **Per thread** | **~318 B** |
 | **Four threads** | **~1,272 B** |
 

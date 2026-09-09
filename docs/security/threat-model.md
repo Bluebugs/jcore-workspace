@@ -626,10 +626,20 @@ instructions. The `SR.VD`/SIMD analogue is the same shape over a much larger
 file.
 
 The store queue has the identical defect in write form: `PREF` bursts all 32
-bytes, and [sq/spec.md §4](../sq/spec.md) says "Bytes within the queue that were
+bytes, and [sq/spec.md §4](../sq/spec.md) said "Bytes within the queue that were
 never written since the queue's last burst have **undefined** content". A tenant
 that writes one word and bursts publishes the previous owner's bytes to an
 address of its own choosing.
+
+> **Specified 2026-09-09 by Wave-3 C1a, and not thereby met.**
+> [sq/spec.md §6.5](../sq/spec.md) replaces that "undefined" with a defined zero,
+> adds the scrub, and defines the guest read; [hypervisor/hardware-spec.md
+> §4.7.1](../hypervisor/hardware-spec.md) item 7 puts the scrub on the
+> gang-switch list. **There is no store-queue RTL** — `jcore-cpu@origin/master`
+> has no store queue, no SQ region decode and no SH-4 `PREF` — so the site moves
+> from *a specified "undefined"* to *a specified scrub*, and L6's evidence bar,
+> which is a residue test demonstrated red before the fix, has nothing to run on.
+> The other two instances in this paragraph's list are untouched.
 
 And a third instance nobody had listed: `movca.l R0,@Rn` allocates an L2 line
 "with only the written word defined and the remainder **undefined** until
@@ -756,11 +766,18 @@ strongest argument on this page should not be the least-audited one.
 
 **One clause added, and it is the one that will actually be got wrong.**
 [hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)'s gang-switch
-list has seven items and **does not include the store-queue buffers or the
-FP/SIMD register files**. §7.8 shows both carry the previous owner's data by
-specification. **The gang-switch sequence must be extended, and L1 is not `MET`
-until it is** — otherwise **L1** and **L6** each assume the other covers this,
-which is how a gap survives two reviews.
+list did not include the store-queue buffers or the FP/SIMD register files, and
+§7.8 shows both carry the previous owner's data by specification. **The
+gang-switch sequence must be extended, and L1 is not `MET` until it is** —
+otherwise **L1** and **L6** each assume the other covers this, which is how a gap
+survives two reviews.
+
+**Half done, 2026-09-09.** The list now has **8** items ([hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)),
+of which item 7 is the store-queue scrub, added by Wave-3 **C1a**. **The FP/SIMD register files are
+still absent from it** and are owed by **C1b**, so this clause is not discharged
+and L1 remains `NOT MET` on it — as well as on the detector, which is C2c's. The
+half that is done is recorded here rather than in C1a's own document, because a
+task that reads only its own spec is exactly how the other half gets forgotten.
 
 **Second clause, weaker but recorded:** the rule has no hardware backstop, and
 [ooo/j32ooo-spec.md §18](../ooo/j32ooo-spec.md) calls it the model's weakest
@@ -924,6 +941,16 @@ anywhere may resolve "undefined" to residual state from a previous owner.**
 `movca.l`'s partially-defined L2 line, and the no-saved-image branch of the
 lazy-FPU restore (§7.8). Both are user-mode-reachable.
 
+**One of the three is now specified away, 2026-09-09.** The store-queue instance
+is C1a's, and [sq/spec.md §6.5](../sq/spec.md) replaces it: the buffer is zeroed
+at reset, on burst completion and on the hyperprivileged `HSQCR` write that ends
+a restore, and a guest load of the region returns zero rather than "undefined".
+The two that remain are [fpu/spec.md §7.3](../fpu/spec.md)'s no-saved-image
+branch (**C1b**) and [cache/l2-spec.md §17.5](../cache/l2-spec.md)'s `movca.l`
+line (**C2e**). **Specified is not met**: there is no store-queue RTL at all in
+`jcore-cpu@origin/master`, so the residue tests below cannot be run red, let
+alone green.
+
 The ban is a *specification* rule, not only an implementation one: a spec that
 says "undefined" where the hardware will supply the previous owner's bytes has
 already lost, because the implementer is entitled to do the cheap thing.
@@ -941,7 +968,11 @@ see it*, and each demonstrated **red before the fix**. Guidance to reviewers —
 
 Additionally, a grep-level check that no tenant-visible "undefined" is
 reintroduced belongs in B0c's CI, because the ban is a specification rule and
-specifications are where it will come back.
+specifications are where it will come back. **It is still not there**: as of
+2026-09-09 `scripts/check-doc-facts.py --list-checks` names no such check, and
+C1a — which had the strongest motive to write one — deliberately did not, because
+the check is B0c's and a check owned by whoever happened to need it is a check
+nobody maintains.
 
 **Gated Wave-3 items:** C1a, C1b, C2e.
 
@@ -981,7 +1012,7 @@ which bar they must clear.
 
 | Wave-3 task | Bar items it must satisfy | The clause most likely to be missed |
 |---|---|---|
-| **C1a** SQ residue | **L6**, and **L1**'s added clause | The gang-switch list of [hypervisor §4.7.1](../hypervisor/hardware-spec.md) does not mention the store queue; adding the scrub without adding it to *that list* leaves L1 unmet |
+| **C1a** SQ residue *(design landed 2026-09-09; no RTL possible — see §7.8)* | **L6**, and **L1**'s added clause | The gang-switch list of [hypervisor §4.7.1](../hypervisor/hardware-spec.md) did not mention the store queue; adding the scrub without adding it to *that list* would have left L1 unmet. It is item 7 there now. The clause most likely to be missed **next** is that neither bar item moved to `MET`: there is no store-queue RTL to test |
 | **C1b** eager FP/SIMD switch | **L3**, **L6**, **L1**'s added clause | L3's *no-saved-image* branch — an eager save/restore between two established owners passes without touching it (§7.8) |
 | **C1c** FPSCR ownership | **L3** | — |
 | **C2a** GPU protection | **L2** | L2 is `N/A` only while no tenant-influenced DMA master exists. The GPU *is* one, so C2a flips L2 to blocking |
@@ -995,12 +1026,12 @@ which bar they must clear.
 
 | Item | Status | Blocking |
 |---|---|---|
-| L1 | **NOT MET** — rule specified; gang-switch list incomplete; no detector | C2c, C1a/C1b |
+| L1 | **NOT MET** — rule specified; gang-switch list **still** incomplete (store-queue scrub added by C1a, FP/SIMD files still absent); no detector | C2c, C1b |
 | L2 | **NOT MET** — reset is all-bypass | C2d |
 | L3 | **NOT MET** — lazy model is the specified one | C1b, C1c |
 | L4 | **NOT MET** — specified for cores that do not exist; I-side walk arm uncovered on the core that does | C2b |
 | L5 | **NOT MET** — way-partitioning specified; metadata, L2 MSHRs, bandwidth, KSM, flush-op gating all open | C2e |
-| L6 | **NOT MET** — three specified "undefined"s | C1a, C1b, C2e |
+| L6 | **NOT MET** — **two** specified "undefined"s, was three; the store-queue site is *specified, unbuilt* — [sq/spec.md §6.5](../sq/spec.md) states the scrub and `jcore-cpu` has no store queue to run the residue tests on | C1b, C2e, and the RTL that builds the queues |
 | L7 | **NOT MET** — both preconditions absent; walker already merged | hypervisor Phase 3 |
 
 Seven of seven. That is the correct reading of the current state and it is not a
@@ -1115,7 +1146,9 @@ close one is scope expansion, not compliance.
    a software slow path.
 7. **[accepted, by omission — the uncomfortable one]** **The AnC primitive of §7.1, intra-guest.** No bar item covers it, so launch would ship it open. That is a decision this document is making by not making it, and §11 gives it an owner.
 8. **[gated — L1]** **Gang-switch residue in any structure the §4.7.1 list omits.** The list is
-   the control; anything absent from it is a channel.
+   the control; anything absent from it is a channel. The store-queue buffers left the omitted set
+   on 2026-09-09 ([hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md) item 7);
+   the FP/SIMD register files have not, so this item stays gated.
 9. **[accepted]** **Fault and exception oracles** — `EXPEVT`/`TEA`/`MMUFSR` are high-fidelity by
    design and fine within a tenant.
 10. **[accepted]** **Rowhammer**, and everything physical.
