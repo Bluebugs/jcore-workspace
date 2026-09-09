@@ -1,7 +1,8 @@
-# 0006 — Big-endian instruction fetch; the data path gains a per-guest little-endian mode
+# 0006 — J-Core ships big-endian; byte order is a per-context mode, not a product-point property
 
-**Status:** Accepted 2026-09-07 (Wave-2 **B1**); **re-scoped 2026-09-08 by
-Wave-2 B2 on project direction** — see *Re-scope* below. Closes the
+**Status:** Accepted 2026-09-07 (Wave-2 **B1**); **re-scoped twice on
+2026-09-08**, first by Wave-2 B2 and then by `wave2/bi-endian`, both on project
+direction — see *Re-scope* and *Second re-scope* below. Closes the
 `Endianness of the J-Core product line` row that
 [fact-ownership.md](../fact-ownership.md) §Unresolved opened as the first
 deliberate hole in that registry.
@@ -9,7 +10,12 @@ deliberate hole in that registry.
 *The filename still reads `…-is-big-endian`. It is kept: seven documents link
 it, sixteen times over, and [0002](0002-supersede-convention.md) cites records by
 subject rather than by identifier — so renaming the file would break links to buy
-nothing. The title above is the current one.*
+nothing. The title above is the current one, and it is the second title this
+record has had: the previous one, "Big-endian instruction fetch; the data path
+gains a per-guest little-endian mode", was made wrong by the second re-scope
+below. A filename that had been allowed to track the title would have needed
+renaming twice in two days, which is the argument for the convention rather
+than against it.*
 
 ---
 
@@ -39,6 +45,63 @@ instruction fetch staying big-endian. Its cost is
 **unknown at this stage — needs measurement**.
 
 ---
+
+## Second re-scope, 2026-09-08 — the fetch half is superseded
+
+> **SUPERSEDED BY [bi-endian-spec.md §1](../bi-endian-spec.md) — 2026-09-08.**
+> The *instruction-fetch* half of this record — "instruction fetch is
+> big-endian", and the *Re-scope* section's statement that the data path is
+> where the mode lands — is replaced by Decision BE-1: byte-invariant bi-endian
+> on **both** the data path and the fetch path, as a per-context mode. The
+> product-point statement in *Decision* below is **not** superseded and is
+> restated in §What survives, unchanged.
+
+*No `RESOLVED` or `PENDING-MERGE` marker accompanies this, deliberately. Those
+markers assert that a **change landed in code**; this supersede is
+document-to-document within this repository, no submodule is touched, and
+[0002](0002-supersede-convention.md) §2 gives them no other meaning. A
+`PENDING-MERGE` here would be claiming something about a branch that this
+record does not depend on.*
+
+**What survives, unchanged.** Everything the first re-scope listed as surviving,
+plus the thing that matters most: **every J-Core product point still ships
+big-endian.** The kernel is configured big-endian, the toolchain targets
+`sh2eb-linux-muslfdpic`, the density extension targets SH-2A encodings that have
+no little-endian form, and both bits of the new mode reset to big-endian. The
+`platform.endianness` row, its code binding to `jcore_defconfig`, the whole
+*Enforcement* section, and rejected-alternative objections **2** and **4** are
+untouched.
+
+**What does not survive.** Two things, and they are narrower than they look:
+
+1. **"Instruction fetch is big-endian"** as an architectural statement. It
+   remains true of the *reset state* and of every artifact this project builds;
+   it is no longer true of the machine. The first sentence of *Decision* is
+   amended in place below.
+2. **The premise that the fetch path has no mode bit.** §2's reading of
+   `splice_instr_data_bus` is still a correct description of
+   `jcore-soc@origin/master` and is kept as such. What changes is the inference
+   drawn from it. And the inference was wrong in a way worth recording: this
+   record and Decision B2-1 both treated "the fetch path selects its halfword
+   big-endian" as meaning the fetch path is *committed* to big-endian. It is
+   not. That selection is driven by `instr_o.a(1)` — an **address** bit — and
+   under byte invariance an address-derived selection is exactly the part that
+   does not change. The big-endianness lives in the byte order of the 16 bits it
+   returns, not in the choice of which 16 bits. See
+   [bi-endian-spec.md §5.1](../bi-endian-spec.md), which enumerates every
+   selection on that path and what drives each.
+
+**Why this reopened at all.** *What would reopen this* below names, as its
+second trigger, "the little-endian *data* mode's scope grows to the fetch path".
+**That trigger has now fired**, on direction, one day after it was written. The
+list was right about the event and wrong about the cause: it expected the growth
+to come from an implementer judging the symmetric design better engineering, and
+it came from the observation that the data-only configuration buys
+little-endian data for big-endian-compiled software — which is a workload nobody
+has. That is the third time this axis has moved, and
+[bi-endian-spec.md §0](../bi-endian-spec.md) records why the previous rounds
+kept moving: they recorded verdicts and never wrote down the mechanism.
+
 
 ## Context
 
@@ -110,17 +173,25 @@ path, neither is a toolchain artifact, and changing them retargets nothing.
 
 ## Decision
 
-**Instruction fetch is big-endian, and every J-Core product point ships
-big-endian: J2, J2-MT2x2, J3, J32, J32-OOO, J32-LT, J32-FM and J64.** There is
-no per-product-point byte order — the byte order is not a property that
-distinguishes one product point from another.
+**Every J-Core product point ships big-endian: J2, J2-MT2x2, J3, J32, J32-OOO,
+J32-LT, J32-FM and J64.** There is no per-product-point byte order — the byte
+order is not a property that distinguishes one product point from another. This
+is the clause that has survived both re-scopes and it is the one this record
+exists for.
 
-**The data path is a different question and is answered elsewhere.** Per the
-re-scope above it gains a little-endian mode, selected per guest by the
-hypervisor and not writable by the guest, owned by
-[sh4-guest-model.md §3.1](../sh4-guest-model.md). That is a *software
-configuration*, which is why it does not reopen the product-point statement
-above: J32 and J64 still ship big-endian.
+*This sentence previously opened "Instruction fetch is big-endian, and every
+J-Core product point ships big-endian". The first clause is superseded by
+[bi-endian-spec.md §1](../bi-endian-spec.md); the second is not, and stands
+above on its own.*
+
+**The byte order of a running context is a different question and is answered
+elsewhere.** Per the second re-scope it is a per-context mode covering the data
+path **and** instruction fetch, selected by the hypervisor and not writable —
+or readable — by a guest, owned by
+[bi-endian-spec.md](../bi-endian-spec.md). That is a *software configuration*
+whose reset state is big-endian, which is why it does not reopen the
+product-point statement above: J32 and J64 still ship big-endian, and every
+artifact this project builds is still built that way.
 
 1. The `Endianness` column is **removed** from
    [glossary.md §3](../glossary.md)'s product table. Per
@@ -217,8 +288,20 @@ no little-endian encoding form, and a wholesale switch is a flag day across four
 repositories with no measurement saying what it buys. Both are *cost*, not
 exclusion, and reopening this alternative means answering them — a little-endian
 form for the density extension's target encodings, and a measurement. The
-per-guest data mode of Decision B2-1 deliberately avoids both by not being a
-wholesale switch: it changes no encoding and retargets nothing.
+per-context mode of [bi-endian-spec.md](../bi-endian-spec.md) deliberately
+avoids both by not being a wholesale switch: it changes no encoding and
+retargets nothing.
+
+**Both objections survived the fetch path being added, and it is worth saying
+why, because the obvious reading is that objection 2 should have died.** SH-2A
+having no little-endian encoding form is an objection to *building J-Core's own
+software little-endian* — the density extension's instructions are emitted by
+this project's compilers into this project's binaries, and those stay
+big-endian. It is not an objection to a *guest* running little-endian code,
+because a guest never executes a J-Core density instruction: that is
+[sh4-guest-model.md §3.5](../sh4-guest-model.md)'s standing rule, and it holds
+whatever byte order the guest runs in. Objection 4 is untouched for the plainer
+reason that a mode with a big-endian reset state is not a flag day.
 
 The old triggers are gone rather than pending. This record previously said the
 alternative would reopen if B2 decided guest SH-4 FP runs natively *and* a
@@ -263,14 +346,18 @@ would have to change first in any real migration.
   user is a relation; three would be a pattern, and the pattern to look at then
   is whether the binding table wants a general "these two strings must agree"
   rule rather than a per-fact relation name.
-- **The little-endian *data* mode's scope grows to the fetch path.** Decision
-  B2-1 deliberately stops at the data path, which is what keeps this record's
-  product-point statement true. Extending it to instruction fetch would make a
-  guest's *code* byte order configurable, and at that point "J-Core ships
-  big-endian" is a default rather than a fact about the machine. That is the
-  event that reopens this record, and the last time this question moved it moved
-  by direction rather than by any trigger written here — so read this list as
-  the events worth watching, not as the only ones that can occur.
+- ~~**The little-endian *data* mode's scope grows to the fetch path.**~~
+  **This trigger fired on 2026-09-08**, the day after it was written; see
+  *Second re-scope* above. It said that extending the mode to instruction fetch
+  would make a guest's *code* byte order configurable, and that at that point
+  "J-Core ships big-endian" becomes a default rather than a fact about the
+  machine. **That is exactly what happened, and the consequence it predicted is
+  accepted rather than avoided**: the product-point statement is now a statement
+  about the reset state and about every artifact this project builds, and
+  [platform-baseline.md §2](../platform-baseline.md) says so in those terms
+  rather than in terms of the RTL having no other arm. A trigger that fires and
+  is then honoured is the mechanism working; it is kept struck-through rather
+  than deleted so the record shows it did its job.
 - **Objection 2 or 4 of the rejected alternative is answered** (above): a
   little-endian encoding form for the SH-2A-targeted density instructions, or a
   measurement of what a wholesale switch buys.
