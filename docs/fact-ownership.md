@@ -124,7 +124,13 @@ hypervisor spec. `security.l6.undefined` is a **count that three documents
 quote**: it is the number of tenant-visible "undefined"s bar item **L6** still
 has open, it went from three to two to one over two Wave-3 tasks, and each of
 those transitions had to be written into `security/threat-model.md`,
-`sq/spec.md` and now `fpu/spec.md` at once. There is **no** FP or SIMD image row
+`sq/spec.md` and now `fpu/spec.md` at once. **It has the weakness every value
+guard has and it is worth naming once here rather than per row:** the canonical
+side licenses a *set*, because a fact may legitimately have a J32 and a J64 form,
+so the owner stating two different values for one fact licenses both and passes.
+C1b perturbed exactly that — the two statements of this count inside
+`security/threat-model.md` set to disagree — and it exits 0. A wrong count in
+another document is caught; a document disagreeing with itself is not. There is **no** FP or SIMD image row
 in `## Image layouts` from C1b, deliberately: the design adds no bytes to either
 image, and saying so is the check —
 [fpu/spec.md §7.7](fpu/spec.md) argues why its two dirty bits are not context
@@ -384,13 +390,19 @@ inferred from silence:
   prose in **both** documents fails until it is updated.
 
   **What it still does not catch**, stated because a green run should not be read
-  as more than it is: a row inserted *without* renumbering, which leaves the last
-  row's number unchanged and produces a duplicate or skipped index that no check
-  sees. Catching that needs a contiguity check over the table's index column,
-  which is the shape `p4-offsets-match-rtl` already has and is **B0c**'s to
-  write, not a row's to imply. The failure it now catches is the one that
-  actually happened twice in two waves; the one it does not catch has not
-  happened yet.
+  as more than it is. C1b ran five perturbations of this row and three failed:
+  renumbering the anchor row while leaving the prose behind fails in all three
+  documents that state the count, and each prose site failing on its own fails
+  too. **Two passed with exit 0.** Inserting a row *before* the anchor without
+  renumbering leaves the anchor's number unchanged, and appending a row *after*
+  the anchor leaves it unchanged as well — in both cases the licensed value is
+  still the old one and nothing notices that the table grew. The anchor is
+  load-bearing only while it is genuinely the last row and the author renumbers
+  it. Catching the rest needs a row count and a contiguity check over the table's
+  index column, which is the shape `p4-offsets-match-rtl` already has and is
+  **B0c**'s to write, not a row's to imply. What is now caught is the failure
+  that actually occurred — a document quoting a count the list has outgrown, in
+  two consecutive waves — and what is not caught has not occurred.
 
 - **`sq.context.bytes` is doc-internal arithmetic, like the two image facts above
   it.** There is no store queue in `jcore-cpu` at all — no SQ region decode, no
