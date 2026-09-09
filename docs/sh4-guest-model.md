@@ -402,6 +402,15 @@ revisit — with a measurement, not an argument.
 2. That FPU implements a trappable FP-disable control, so the hypervisor can
    still take ownership per [fpu/spec.md §7](fpu/spec.md)'s lazy model — native
    FP without a disable control is native FP the hypervisor cannot virtualize.
+   **The control must cover SIMD FP blocks, not only scalar FP instructions**
+   ([simd/spec.md §2.4.1](simd/spec.md) rule S-R1, added 2026-09-09 by Wave-3
+   C1c). A control with a hole in it is condition 2 unmet, not condition 2 met
+   with a caveat: every governed SIMD FP operation reads `FPSCR.RM` and may
+   write `FPSCR.FLAG`, so a guest whose SIMD FP is outside `SR.FD` reaches a
+   register the hypervisor believes it has parked. That direction is
+   intra-tenant — the gang-switch scrub of condition 3 covers the cross-tenant
+   one — which is precisely why it belongs here, attached to the ownership
+   control, rather than as a fifth condition of its own.
 3. **That FPU implements the cross-tenant scrub of
    [fpu/spec.md §7.7](fpu/spec.md), and the SIMD file implements
    [simd/spec.md §2.6.1](simd/spec.md)'s.** *(Added 2026-09-09 by Wave-3 C1b.)*
