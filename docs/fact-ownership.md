@@ -167,6 +167,53 @@ C1b's reason: no FPU or SIMD unit exists in `jcore-cpu@origin/master`, no
 `kernel_fpu` API exists in `linux@origin/jcore`, and neither rule set changes a
 context image.
 
+Wave-3 **C2a** added `gpu.protect.producers` and `gpu.protect.rules` — **one of
+each kind**, deliberately, because the pair is the clearest side-by-side this
+table has of what a value fact buys over a name fact. Ten perturbations were run,
+of which four pass:
+
+| Perturbation | Result |
+|---|---|
+| the owner's count changed from six to five | **caught twice**, on both mechanisms at once: `owner-has-fact` on a **pattern non-match** (the registry pattern pins the literal count), and `no-stale-value` on a **value disagreement** in `security/threat-model.md` and `simd/gpu/architecture.md` |
+| the count changed to five in `security/threat-model.md` only, owner still six, link intact | **caught**, `no-stale-value`, on a **value disagreement** — the link does not license the number, which is the whole point of the guard |
+| `gpu.protect.producers`'s `Constant` cell set to **5**, contradicting its own owner | **passes** — the cell is prose no check reads, exactly as C1c found for `simd.fp.ownership` |
+| every `G-R`*n* token removed from the owner | **caught**, `owner-has-fact`, on a **pattern non-match** |
+| `G-R8` restated in `j4-execution-plan.md` with no link to the owner | **caught**, `restatement-is-linked` |
+| ownership of `gpu.protect.rules` moved to `simd/gpu/architecture.md`, which also mentions the tokens | **caught by the cascade, not by the check that should catch it** — `owner-has-fact` passes; `restatement-is-linked` fails over the 28 lines of `simd-gpu-spec.md` that have just become restatements. Same shape as C1c's last row |
+| `G-R3` rewritten to *"bounding is optional and relocation is not required"*, token kept | **passes** — a name fact guards that a rule is **stated**, never what it says |
+| `G-R8`'s *"is scrubbed"* rewritten to *"need not be scrubbed"*, token kept | **passes**, same reason |
+| `G-R1` narrowed to *"only the texture path is checked"*, token **and** the count of six both kept | **passes**, and this is the one that matters: it is precisely the regression [simd/gpu/simd-gpu-spec.md §16.2](simd/gpu/simd-gpu-spec.md) exists to prevent, and neither fact sees it. The count guards the *number* stated in prose; nothing ties that number to what the rule ranges over |
+| the `P5` row deleted from the producer table, the count left at **6** | **passes.** The value guard compares numbers between documents; it does not count rows. `context-image-sums` is the only row-counting check in this file and it applies to `Offset \| Bytes \| Content` layouts, which this is not |
+
+One further datum, obtained by accident and worth more than a deliberate test:
+the first draft of the two rows above *described* the perturbation using the
+guarded wording, and `no-stale-value` failed the commit on this file. The guard
+fires on the real tree, against prose written by someone who knew it was there.
+
+An **eleventh attempt does not appear above and is recorded because it was wrong,
+not because it was informative**: the first run of the "remove the tokens"
+perturbation rewrote only the bolded `**G-R`*n* occurrences and the `G-R1..G-R9`
+ranges, leaving roughly two dozen inline ones, and reported `OK`. That `OK` was
+the perturbation failing to perturb, not the check failing to fire — the kind of
+green a guard produces when its scenario was never exercised. It is listed here
+because the same mistake made silently would have been reported as a checker gap.
+
+The last two rows are what C2a's facts do **not** buy, and no checker change was
+attempted for them: closing either needs a new check in
+`scripts/check-doc-facts.py`, and the mutation sweep that gates that file is a
+larger piece of work than this task's scope. The honest summary is that the
+registry can tell you the number changed and cannot tell you the number stopped
+matching the thing it counts.
+
+C2a added no `## Code bindings` row: no GPU RTL exists in
+`jcore-cpu@origin/master` or `jcore-soc@origin/master` — a case-insensitive
+search for `gpu|shader|opencl|simt|warp|texel|rasteriz` returns two matches, both
+false positives (`vpiSimTime` in `sim/sim/vpibridge.c`, the label `_movwarpr` in
+`testrom/tests/testmov.s`). It added no `## Image layouts` row either: `G-R9`
+classifies GPU context state into saved and not-saved but specifies no byte
+layout, and the V/P0/`VCSR` bytes it does move are `simd.context.j32`'s, already
+owned.
+
 B1 added `ooo.uops.rte`, `platform.endianness`, `platform.fmax.floor`,
 `platform.fmax.j4.floor`, `platform.j4`, `mmu.l1.pipt`, `cache.l1d.write`,
 `cache.l1.index`, `cache.l2.ebr`, `ooo.gates.core`, `mmu.p4.segment`,
