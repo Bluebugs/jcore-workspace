@@ -315,10 +315,15 @@ A worklist, each item = pick the true value, fix every other doc, add a CI check
 - ~~**Endianness**~~ — **CLOSED: big-endian at every product point**
   ([platform-baseline.md §2](platform-baseline.md),
   [decisions/0006](decisions/0006-endianness-is-big-endian.md)). Decided against
-  the kernel defconfig, the toolchain target and the RTL's instruction-halfword
-  selection, all three of which are big-endian and none of which has a
-  little-endian arm. Bound to `linux@jcore`'s `jcore_defconfig`. The glossary's
+  the kernel defconfig and the toolchain target, both of which are big-endian.
+  Bound to `linux@jcore`'s `jcore_defconfig`. The glossary's
   `Endianness` column is deleted rather than corrected.
+  *This bullet also cited "the RTL's instruction-halfword selection … none of
+  which has a little-endian arm" as a third leg. That leg is withdrawn: the
+  selection is address-derived and was never the thing that fixed the byte
+  order, and the machine now gains a mode
+  ([bi-endian-spec.md §5.1](bi-endian-spec.md)). The closure stands on the two
+  remaining legs, which are the two that were ever about the product.*
 - ~~**Baseline Fmax**~~ — **CLOSED, and it is not one number**
   ([platform-baseline.md §3](platform-baseline.md)). 42 is measured and gated in
   `jcore-cpu` CI; 80 was never measured and is removed with everything derived
@@ -392,18 +397,30 @@ A worklist, each item = pick the true value, fix every other doc, add a CI check
 > What changed relative to the framing below, since a plan item reversing under
 > evidence is a legitimate outcome:
 >
-> - **Little-endian data becomes a per-guest mode; the fetch path does not**
->   (Decision B2-1, revised 2026-09-08 on project direction). Two functions in
->   `core/datapath.vhm` — the store lane/byte-enable map and the load lane mux —
->   become mode-dependent under a hypervisor-owned, per-guest, non-guest-writable
->   control. Nothing of this exists today. **A stock little-endian SH-4 binary,
->   Dreamcast images included, still needs software emulation**, because its
->   instruction layout is little-endian and the fetch path stays big-endian —
->   the same conclusion this task first reached, but from the fetch path rather
->   than from a blanket exclusion of little-endian, which was wrong. This
->   re-scopes [decisions/0006](decisions/0006-endianness-is-big-endian.md) and
->   re-arms `fpu/spec.md` §6.2's double-`FMOV` half-pair analysis as a live
+> - **Byte order becomes a per-context mode on both paths** — Decision **BE-1**,
+>   [bi-endian-spec.md](bi-endian-spec.md), 2026-09-08 on project direction,
+>   **superseding Decision B2-1**. The scheme is **byte invariance** (ARM's
+>   BE-8): byte accesses are unchanged, 16- and 32-bit values are byte-permuted
+>   at the register boundary, and one 16-bit swap is added on the fetched
+>   instruction word. The icache, dcache, line-fill packing and bus glue are
+>   untouched, because every halfword selection on those paths is
+>   address-derived. Nothing of this exists today. **A stock little-endian SH-4
+>   binary — Dreamcast images included — becomes executable on the KVM path**,
+>   so Dreamcast is gated on the missing FPU and the absent device model rather
+>   than on byte order. This re-scopes
+>   [decisions/0006](decisions/0006-endianness-is-big-endian.md) a second time
+>   and re-arms `fpu/spec.md` §6.2's double-`FMOV` half-pair analysis as a live
 >   requirement on any Tier-1 FPU.
+>
+>   *B2-1, recorded here on 2026-09-08 as "little-endian data becomes a
+>   per-guest mode; the fetch path does not", was wrong twice over: it specified
+>   a word-invariant change set (an address adjustment, which byte invariance
+>   forbids), and it excluded the fetch path on the strength of a halfword
+>   selection that is address-derived and therefore mode-independent. Both are
+>   corrected in [bi-endian-spec.md §4.4 and §5.1](bi-endian-spec.md). A plan
+>   item reversing twice under evidence is still a legitimate outcome, but twice
+>   is the point at which the mechanism gets written down rather than the
+>   verdict.*
 > - **Guest FP is trapped, not native** (Decision B2-4). There is no FPU in
 >   `jcore-cpu` at all, and J4 already traps the whole `1111` plane as illegal.
 >   This closes one of the two conditions
@@ -446,7 +463,14 @@ compatibility policy has to say:
   - The items that still bite *natively* are where guest instructions execute on
     the hardware without a trap: e.g. if the guest uses the SH-4 FPU and the SIMD
     extension reuses FMOV.S/FSCA encodings, the hardware must decode those as the
-    guest expects (or the VMM must trap them). The **little-endian paired-FMOV**
+    guest expects (or the VMM must trap them). **This is now a live path, not a
+    hypothetical one:** under Decision BE-1 stock little-endian SH-4 code
+    executes natively, so the four shipping-RTL collisions of
+    [sh4-guest-model.md §5.1](sh4-guest-model.md) — in particular
+    `LDS`/`STS` against SH-4's `FPUL` bridge, which sits outside the `1111`
+    plane with no illegal-instruction backstop — are reachable by ordinary guest
+    code rather than waiting for a guest that could run.
+    The **little-endian paired-FMOV**
     divergence and the **SIMD-vs-scalar encoding collisions** are therefore
     emulation/decode-fidelity questions to pin down, not bare-metal breaks.
     Decide explicitly whether guest SH-4 FP runs natively on J4's FPU or is

@@ -774,14 +774,21 @@ half of a superseded section still binds them.
 
 #### 6.2.1 Half-pair order and endian-neutrality (normative). [T1]
 
-J-Core is to gain a **per-guest little-endian data mode**, with instruction
-fetch staying big-endian ([../sh4-guest-model.md §3.1](../sh4-guest-model.md),
-Decision B2-1; [../decisions/0006](../decisions/0006-endianness-is-big-endian.md)
-§Re-scope). A double-`FMOV`'s half-pair order is a **data**-path property, so it
-follows that mode.
+J-Core is to gain a **byte-invariant per-context byte-order mode**, covering the
+data path **and** instruction fetch
+([../bi-endian-spec.md §1](../bi-endian-spec.md), Decision BE-1;
+[../decisions/0006](../decisions/0006-endianness-is-big-endian.md) §Second
+re-scope). A double-`FMOV`'s half-pair order is a **data**-path property, so it
+follows that mode's `LE` bit.
 
-**Requirement.** A Tier-1 FPU on an implementation that has the little-endian
-data mode **must** implement the half-pair order described in points 1 and 2
+*This paragraph previously described the mode as little-endian **data** only,
+with instruction fetch staying big-endian, citing Decision B2-1. B2-1 is
+superseded. The requirement below is unaffected by the change — a paired `FMOV`
+is a data access under either scoping — and it is the premise, not the rule,
+that was restated.*
+
+**Requirement.** A Tier-1 FPU on an implementation that has the byte-order mode
+**must** implement the half-pair order described in points 1 and 2
 below, selected by that same mode. Neither the mode nor a Tier-1 FPU exists
 today, and whichever lands second inherits this requirement. Nothing observes it
 in the meantime, because guest FP is trapped and emulated
@@ -833,9 +840,10 @@ orders by parameterising only the `FMOV`-double half-pair ordering. All
 arithmetic blocks and the FIPR / FTRV / FSCA / FSRRA datapaths are
 endian-neutral, per points 3–5. *(This note previously described the parameter
 as selecting between a Tier-0 big-endian and a Tier-1 little-endian **build**.
-That framing went with the withdrawn migration: the selector is the per-guest
-data mode of Decision B2-1, not the tier, and it must therefore be switchable at
-run time rather than fixed at elaboration.)*
+That framing went with the withdrawn migration: the selector is the per-context
+byte-order mode's `LE` bit ([../bi-endian-spec.md §6](../bi-endian-spec.md)), not
+the tier, and it must therefore be switchable at run time rather than fixed at
+elaboration.)*
 
 #### 6.2.2 The withdrawn migration statement. [T0 → T1]
 

@@ -18,6 +18,15 @@ about the documentation system itself, about cross-cutting process, or about
 which document owns what. Putting those inline would require choosing a host
 spec arbitrarily, and an arbitrarily-hosted rule is a rule nobody knows to read.
 
+**A worked application of that rule, 2026-09-08.** The bi-endian decisions BE-1
+to BE-3 are **not** in this directory, and deliberately so: they are decisions
+about the machine, and
+[bi-endian-spec.md](../bi-endian-spec.md) is the spec that owns the mechanism,
+so they go inline there. [0006](0006-endianness-is-big-endian.md) stays here
+because what *it* decides is a product-line property with no owning subsystem —
+which is why it needed a new owning document ([platform-baseline.md](../platform-baseline.md))
+to be created for the value in the first place.
+
 ## Format
 
 One file per decision, `NNNN-kebab-case-title.md`, numbered in landing order.
@@ -44,5 +53,5 @@ Each record carries, in this order:
 | [0003](0003-canonical-encoding-database.md) | One encoding database: `jcore-cpu/docs/insns.json` | Accepted 2026-08-25 |
 | [0004](0004-platform-tag-convention.md) | Platform tags: `[FPGA]` / `[ASIC]`, and which numbers need one | Accepted 2026-09-07; rules 3–4 and §Marking convention superseded by [0005](0005-unmeasured-figures-are-removed.md) |
 | [0005](0005-unmeasured-figures-are-removed.md) | An unmeasured figure is removed, not annotated | Accepted 2026-09-07 |
-| [0006](0006-endianness-is-big-endian.md) | Big-endian instruction fetch; the data path gains a per-guest little-endian mode | Accepted 2026-09-07, re-scoped 2026-09-08 |
+| [0006](0006-endianness-is-big-endian.md) | J-Core ships big-endian; byte order is a per-context mode, not a product-point property | Accepted 2026-09-07, re-scoped twice 2026-09-08; fetch half superseded by [bi-endian-spec.md](../bi-endian-spec.md) |
 | [0007](0007-l1d-write-policy-under-msi.md) | The L1-D is write-through at T0 and write-back under MSI at T1/T2 | Accepted 2026-09-07 |
