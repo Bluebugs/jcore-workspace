@@ -69,3 +69,4 @@ Each record carries, in this order:
 | [0007](0007-l1d-write-policy-under-msi.md) | The L1-D is write-through at T0 and write-back under MSI at T1/T2 | Accepted 2026-09-07 |
 | [0008](0008-documented-but-unimplemented-encodings.md) | A documented-but-unimplemented instruction is a reservation row, not a decoder entry | Accepted 2026-09-08 |
 | [0009](0009-in-order-fgmt-is-the-default-path.md) | Dual-issue in-order + 2-thread FGMT is the default path; OoO RTL pauses | Accepted 2026-09-08 |
+| [0010](0010-dma-coherence-is-software-maintained.md) | DMA coherence is software-maintained, and the IOMMU does not own it | Accepted 2026-09-09 |
