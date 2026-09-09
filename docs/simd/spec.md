@@ -202,9 +202,10 @@ which this document owns. The `FPSCR` fields themselves are
 §2.4 makes **every** governed FP operation a reader of `FPSCR.RM` — in both modes of `VCSR.IEE`,
 explicitly — and, under `VCSR.IEE = 1`, a writer of `FPSCR.FLAG`, OR-accumulated across lanes.
 §2.1, §2.3, §2.6 and §5.8 all attached the FPU-ownership requirement to the **FP-scalar writeback**
-of a horizontal FP reduction / `VFIPR` / `VFTRV`, and to nothing else. A purely **vertical** FP
-block writes no FR/DR, so it satisfied every ownership rule this document had while reading and
-writing `FPSCR` with `SR.FD = 1`.
+of a horizontal FP reduction / `VFIPR` / `VFTRV`, and §5.7 attached a second one to `VEXTF.L` /
+`VINSF.L`. Every one of those requirements is triggered by a write to **FR/DR**. A purely
+**vertical** FP block writes no FR/DR, so it satisfied every ownership rule this document had
+while reading and writing `FPSCR` with `SR.FD = 1`.
 
 **That is an escape from a no-escape rule.** [../fpu/spec.md §6.3](../fpu/spec.md) says `SR.FD`
 disables the FPU end-to-end, listing `LDS` / `STS` involving `FPUL` or `FPSCR` among the
@@ -228,17 +229,15 @@ one: it read and wrote `FPSCR` under `SR.FD = 1`, which `LDS Rm,FPSCR` and `STS 
    `STS FPSCR,Rn` traps under `SR.FD = 1` — and the parked owner read flags it never raised.
    Inside one guest that is a data-dependent channel between two tasks that share nothing else,
    and it is a correctness defect in both directions before it is a channel in one.
-3. **A dirty bit that can lie in the unsafe direction.** [../fpu/spec.md §7.7](../fpu/spec.md) rule
-   **FP-R4** ([../fpu/spec.md §7.7](../fpu/spec.md)) sets `FPDS` = `10` on any architectural write
-   to `FPSCR` from any mode. Consequence 2
-   is such a write. An implementer reading §2.1 as it stood would not have wired the SIMD FP
-   datapath into that logic at all, and `FPDS` ([../fpu/spec.md §7.7](../fpu/spec.md)) would have
-   read CLEAN over a file the SIMD unit had
-   modified. What that loses is the tenant's *own* flags at a gang switch rather than another
-   tenant's secrets — FP-R3's scrub is unconditional and is not an input to
-   `FPDS` ([../fpu/spec.md §7.7](../fpu/spec.md)) — but a `FPDS`
-   that can be wrong in the CLEAN direction is one bit from FP-INV, which is the direction
-   [../fpu/spec.md §7.7](../fpu/spec.md) chose `11` → `10` to avoid.
+3. **A dirty bit that can lie in the unsafe direction.** Rule **FP-R4** of
+   [../fpu/spec.md §7.7](../fpu/spec.md) sets `FPDS` = `10` on any architectural write to `FPSCR`
+   from any mode, and consequence 2 is such a write. An implementer reading §2.1 as it stood would
+   not have wired the SIMD FP datapath into that logic at all, so
+   `FPDS` ([../fpu/spec.md §7.7](../fpu/spec.md)) would have read CLEAN over a file the SIMD unit
+   had modified. What that loses is the tenant's *own* flags at a gang switch, not another
+   tenant's secrets: FP-R3's scrub is unconditional and does not consult the dirty state at all.
+   But a CLEAN that can be wrong is one bit from FP-INV, and it is the direction
+   [../fpu/spec.md §7.7](../fpu/spec.md) chose `11` → `10` to forbid.
 
 #### What this is **not**: a cross-tenant channel
 
@@ -307,7 +306,7 @@ owe a rule for which of the two images wins on restore.
 
 **S-R5 — Integer SIMD is untouched.** S-R1 does not fire on a block whose governed instructions are
 all §5.1, §5.4, §5.5 or §5.6 forms: those read and write no FPU state, and the `SR.VD` / `SR.FD`
-independence §2.6 claims for integer SIMD is exactly as it was. An `FPU`-only task is likewise
+independence §2.6 claims for integer SIMD is exactly as it was. An FPU-only task is likewise
 unaffected. What changes is the set of tasks that must own the FPU, from *those issuing FP
 reductions* to *those issuing any FP SIMD*, which is §2.3's "honest coupling" argument applied to
 the case §2.3 did not cover.
@@ -353,9 +352,9 @@ of them is a cross-tenant residue test, because §2.4.1's exposure is not cross-
 
 | # | Test | What it shows if the rule is absent |
 |---|---|---|
-| 1 | Task A owns the FPU with `FPSCR.RM` = `00` (nearest-even). Task B, not the FPU owner, runs `SIMDV.L` + `FADD` on a lane pair whose exact sum is a tie. B compares its result against the same computation with `RM` = `01`. | B rounded by A's mode. Repeat with A installing `01`: B's answer changes with no change to B. |
-| 2 | A owns the FPU and clears `FPSCR.FLAG`. B, not the owner, runs a vertical FP block under `VCSR.IEE = 1` in which exactly one lane overflows. A executes `STS FPSCR,Rn`. | A reads `FLAG.O` set by B's data. |
-| 3 | **The default mode.** Test 1 repeated with `VCSR.IEE = 0`. | The same wrong rounding, *with test 2 green*, on any implementation whose ownership check was conditioned on `IEE` — the natural optimisation, since `IEE = 0` performs no `FPSCR` write. This is S-R2's test and it has no analogue in test 1 or 2. |
+| 1 | Task A owns the FPU and installs `FPSCR.RM` = `00` (nearest-even). Task B owns SIMD but **not** the FPU, has `VCSR.IEE = 1`, and runs `SIMDV.L` + `FADD` on a lane pair whose exact sum is a tie. The whole test is then re-run with A installing `RM` = `01`. | B's two results differ, with nothing about B changed between the runs. B rounded by A's mode. |
+| 2 | A owns the FPU and clears `FPSCR.FLAG`. B, not the FPU owner, runs a vertical FP block under `VCSR.IEE = 1` in which exactly one lane overflows. A executes `STS FPSCR,Rn`. | A reads `FLAG.O`, set by B's data. |
+| 3 | **The default mode.** Test 1 repeated with B's `VCSR.IEE` = `0`. | The same wrong rounding, *with test 2 green*, on any implementation whose ownership check was conditioned on `IEE` — the natural optimisation, since `IEE = 0` performs no `FPSCR` write at all. This is S-R2's test, and neither test 1 nor test 2 reaches what it reaches. |
 
 #### Bar status
 
