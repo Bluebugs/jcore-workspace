@@ -501,6 +501,51 @@ the decision log records the trigger that would reopen it.
 
 ### B4. Encoding-verification sweep of *every* documented instruction
 
+> **B4 — swept 2026-09-08; four items handed on with owners.** The results are
+> [encoding-sweep.md](encoding-sweep.md) and the method is
+> [decisions/0008](decisions/0008-documented-but-unimplemented-encodings.md).
+> **Four corrections to the text below, recorded rather than silently applied.**
+>
+> **(1) Step 1 names the wrong file.** `docs/insns.json` is *generated* from
+> `decode/gen-go/spec/*.toml`, and that same tree generates the shipping
+> decoder — measured, by diffing the emitted VHDL. So "enter it into the
+> database" is an RTL change, which the whole of SIMD cannot be.
+> [decisions/0008](decisions/0008-documented-but-unimplemented-encodings.md)
+> settles what a documented-but-unimplemented instruction does instead.
+>
+> **(2) Step 2's arbiter cannot arbitrate.** `insns2asm --emit check` is
+> nominated to settle `movi20s`'s sign-extension notation; its oracle
+> reconstructs the bit-pattern *string* and models no immediate semantics at
+> all. Upstream binutils settled it instead
+> ([isa-density/spec.md §3.1](isa-density/spec.md)) — and the two readings the
+> spec called different are the same function on all 2²⁰ immediates.
+>
+> **(3) The cross-spec reserve conflict named below does not exist.** `rts/n`
+> and `rtv/n` are already in the canonical database and live on J2A and SH-2A,
+> so `freespace --avoid` excludes them; the MMU document's own published command
+> reproduces its "8 free, all virgin" exactly. Closed as not-a-defect. **The
+> real conflict is [simd/spec.md](simd/spec.md) against
+> [mmu/hardware-spec.md](mmu/hardware-spec.md)** over the same family — SIMD's
+> `VINS` group already spends five of those eight slots — and both documents now
+> say so.
+>
+> **(4) The named SIMD list is incomplete in the direction that matters.**
+> Beyond `VLD.Q`/`VST.Q`, `VMKCHG`, `VLNS` and the `SUBC` reuse — all confirmed
+> — four of five `VEXT` slots are live SH-2A `mov` encodings **on J2A**, and
+> `VINS.L` is SH-4A `synco`, a Decision B2-5 violation nothing had noticed.
+> `VLNS` cannot be re-homed at all: it spends both nibble fields, so it claims
+> 16 minors of a family with six free, and its 4-bit lane index cannot address
+> 32 byte-lanes anyway. One cause, one fix, and it is the SIMD spec's to take.
+>
+> **What is handed on, with owners**, in
+> [encoding-sweep.md §8](encoding-sweep.md): committing the CPI re-homing
+> (**B4 + RTL/SoC**, as §B2 already required); deciding `VLNS`'s shape and
+> re-homing `VINS.L` (**SIMD spec**); settling the contended reserve (**MMU +
+> SIMD specs**); and, still **B4**'s and still open, teaching the collision
+> sweep about guest-hosting — without it the next `VINS.L` is found by a person
+> reading tables again. **Step 4 (toolchain delta) was not reached and would
+> have been a no-op**: nothing in this sweep changed a live encoding.
+
 Per project direction: now that the encoding tooling exists, **every currently
 documented instruction gets its binary form verified and re-homed through the
 tools** — not just the ones the review caught. The docs were written before

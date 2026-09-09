@@ -55,3 +55,4 @@ Each record carries, in this order:
 | [0005](0005-unmeasured-figures-are-removed.md) | An unmeasured figure is removed, not annotated | Accepted 2026-09-07 |
 | [0006](0006-endianness-is-big-endian.md) | J-Core ships big-endian; byte order is a per-context mode, not a product-point property | Accepted 2026-09-07, re-scoped twice 2026-09-08; fetch half superseded by [bi-endian-spec.md](../bi-endian-spec.md) |
 | [0007](0007-l1d-write-policy-under-msi.md) | The L1-D is write-through at T0 and write-back under MSI at T1/T2 | Accepted 2026-09-07 |
+| [0008](0008-documented-but-unimplemented-encodings.md) | A documented-but-unimplemented instruction is a reservation row, not a decoder entry | Accepted 2026-09-08 |
