@@ -263,7 +263,7 @@ decode-fidelity obligation of §5.
 |---|---|---|
 | The SH-2 base integer ISA | implemented | It *is* the guest's ISA for these encodings. Nothing to do. |
 | SH-4 privileged instructions J4 implements (`LDC`/`STC` forms, `RTE`, banking) | implemented | Guest execution is gated by the privilege architecture; the hyperprivileged trap rules of [hypervisor/hardware-spec.md §3](hypervisor/hardware-spec.md) contain them. |
-| **Store-queue data stores**, `0xE0000000`–`0xE3FFFFFF` | **specified, not implemented** | [sq/spec.md](sq/spec.md) is a paper spec: `jcore-cpu@origin/master` has no store queue, no SQ region decode, and no SH-4 `PREF`. Until it exists, a guest store into the carve-out reaches a range nothing decodes. **The carve-out must not be enabled before the queues are.** |
+| **Store-queue data stores and loads**, `0xE0000000`–`0xE3FFFFFF` | **specified, not implemented** | [sq/spec.md](sq/spec.md) is a paper spec: `jcore-cpu@origin/master` has no store queue, no SQ region decode, and no SH-4 `PREF`. Until it exists, a guest store into the carve-out reaches a range nothing decodes. **The carve-out must not be enabled before the queues are.** A guest *load* from the range is in the carve-out too and is now defined to return zero ([sq/spec.md §6.5](sq/spec.md) rule SQ-R4); it was previously "undefined", which on an untrapped path means the previous tenant's buffer. That rule is as unimplemented as the rest. |
 | **The `1111` opcode plane** | traps as illegal, except two encodings | §5. |
 | SH-4 FP | **trapped** | §4. |
 | Any J-Core extension encoding (SIMD, density, PC-relative) | not the guest's | A guest must never execute one. §5 states the rule that keeps that true. |
@@ -776,7 +776,12 @@ always carries the §5 obligation.
   for the FPU surface; the VMM work for the register surface.
 - **The store-queue carve-out is enabled against hardware that does not exist**
   (§3.3). Owner: RTL / SoC integration, jointly with
-  [sq/spec.md](sq/spec.md).
+  [sq/spec.md](sq/spec.md). **Wave-3 C1a added a second thing that must arrive
+  with the queues rather than after them**: the residue rules of
+  [sq/spec.md §6.5](sq/spec.md), which are what make an untrapped guest load and
+  a partly-filled burst safe on this carve-out. The two are the same
+  dependency — turning the carve-out on without either is the hole; turning it
+  on with the queues and without the scrub is a cross-tenant read primitive.
 - **What an emulated `CCR` *write* must do is undecided.** An earlier revision
   of §3.2 required that writes "must not be silently dropped where the guest can
   tell (cache-invalidate requests in particular)" — a requirement asserted

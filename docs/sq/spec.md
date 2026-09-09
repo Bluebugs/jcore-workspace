@@ -316,6 +316,14 @@ and what §7's save sequence already assumes.
 **Wave-3 task C1a**, from [../j4-remediation-plan.md §C1](../j4-remediation-plan.md), argued against
 [../security/threat-model.md §8](../security/threat-model.md)'s bar items **L6** and **L1**.
 
+*It is here and not in `../decisions/` deliberately.*
+[../decisions/README.md](../decisions/README.md)'s rule turns on whether a spec owns the thing
+decided, and one does: this document owns the store queue, and what is decided here is store-queue
+behaviour. The one part that is **not** store-queue behaviour — that a gang switch must scrub — is
+correspondingly not here either; it is an item in
+[../hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md), the spec that owns gang
+switching.
+
 #### The exposure
 
 The adversary of [../security/threat-model.md §1](../security/threat-model.md) is a *guest kernel*
@@ -364,6 +372,12 @@ is required to inspect (§6.2, §6.3, and
 on the burst reaching the bus and not on `PREF` executing. Getting that condition backwards would
 break complete-on-resume while looking like a stronger scrub.
 
+R2 and R3 compose correctly across that trap, which is worth stating because the composition is
+what a reviewer will check. The hypervisor resolving a trapped burst either decides it was
+consumed, and clears `VALIDn` — at which point R3 zeroes the buffer, correctly, because the data
+is gone — or decides it was not, and leaves `VALIDn` set, at which point R3 does nothing and the
+bytes survive for the guest to burst again.
+
 **SQ-R3 — Scrub on ownership change.** A hyperprivileged write to `HSQCR` clears queue *n*'s 32
 buffer bytes to zero, for every *n* whose **written** `VALIDn` bit is 0. Unconditional, idempotent,
 no transition detection, no new register, no new encoding.
@@ -387,8 +401,10 @@ Three consequences, and the third is the one this task exists for.
 
 **SQ-R4 — Guest reads are defined.** At `SR.MD = 1`, `SR.HPRIV = 0`, a load from
 `0xE0000000`–`0xE3FFFFFF` returns **zero**. It does not trap, does not read the buffer, and has no
-effect on `HSQCR`. At `SR.MD = 0` nothing changes: §5's privilege rule governs loads exactly as it
-governs stores. At `SR.HPRIV = 1`, §6.2's readback applies and returns the buffer word selected by
+effect on `HSQCR`. At `SR.MD = 0` an SQ-region access is a privilege violation and not a zero:
+§5 enumerates queue-data stores and `PREF`-triggered bursts, and **loads are added to that
+enumeration here**, because R4 makes a load a defined operation and a defined operation needs its
+privilege stated. At `SR.HPRIV = 1`, §6.2's readback applies and returns the buffer word selected by
 the same `VA[5]` / `VA[4:2]` decode a queue-data store uses — so §2's aliasing window aliases
 identically for reads and for stores, and §6.2's base addresses are the canonical spelling of that
 decode rather than a second comparator. This closes the last hole in
@@ -501,10 +517,22 @@ board ([../j4-execution-plan.md §5](../j4-execution-plan.md)).
 #### Implementation status: specified, not built
 
 §1 already says the store queue does not exist. **This section is a rule about hardware that does
-not exist either, and nothing in it is met because it has been written.** Checked this session at
-`jcore-cpu@origin/master` `e8a5a4e1`: no file under `*.vhd`/`*.vhm` matches
-`store_queue|storequeue|sq_` case-insensitively — case-insensitively being the only honest way to
-ask, since VHDL is case-insensitive and `git grep` is not.
+not exist either, and nothing in it is met because it has been written.** Re-checked 2026-09-09,
+case-insensitively throughout, because VHDL is case-insensitive and `git grep` is not — a
+case-sensitive search of this tree has produced a confident wrong finding before
+([../security/threat-model.md §11](../security/threat-model.md), `cache_index_bits`):
+
+- `jcore-cpu@origin/master` (`e8a5a4e1`): no `*.vhd`/`*.vhm` file matches
+  `store_queue|storequeue|sq_`. `QACR` appears in `core/datapath.vhd` and `core/datapath.vhm` in
+  a **comment only** — the P4 offsets `0x3C`/`0x40` are noted as the proposed `QACR0`/`QACR1` and
+  are decoded by nothing. `HSQCR` appears nowhere. The only `PREF` in the instruction set is
+  `decode/gen-go/spec/sh2a/misc.toml`'s SH-2A hint form, whose own comment says it is a NOP.
+- `jcore-soc@origin/master` (`7869a729`): no `*.vhd`/`*.vhm` file decodes `0xE0000000`. The two
+  files matching `sq_` are the DDR2 controller's `sq_en`/`sq_vld` sequencer signals, which are
+  not this.
+
+So the queues are absent on both sides of the CPU/SoC boundary, and so is every register this
+section touches.
 
 Three consequences, so that nothing here reads as a closure:
 
