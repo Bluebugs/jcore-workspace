@@ -96,6 +96,7 @@ are the substitute for a check that cannot be written cleanly — see
 | `sh4guest.csts` | SH-4 `fsts` and J-Core `csts` are **one encoding** (canonical DB `collides`) | [sh4-guest-model.md §5.1](sh4-guest-model.md) | `fsts FPUL,FRn` |
 | `sh4guest.ldsfpul` | SH-4 `lds Rm,FPUL` and J-Core `lds Rm,CPI_COM` are **one encoding** | [sh4-guest-model.md §5.1](sh4-guest-model.md) | `lds Rm,FPUL` |
 | `sh4guest.stsfpul` | SH-4 `sts FPUL,Rn` and J-Core `sts CPI_COM,Rn` are **one encoding** | [sh4-guest-model.md §5.1](sh4-guest-model.md) | `sts FPUL,Rn` |
+| `isa.movi20s.sext` | `movi20s`: `imm20 << 8`, then **sign-extend from bit 27** of the shifted value | [isa-density/spec.md §3.1](isa-density/spec.md) | `sign-extend(?:ed)?\s+from\s+bit\s+\*\*27\*\*\s+of\s+the\s+shifted\s+value` |
 | `biendian.dside.bytelane` | Byte store to `…00` drives `we = "1000"`; the byte-order mode does not change it | [bi-endian-spec.md §4.1](bi-endian-spec.md) | `we = "1000"` |
 | `biendian.ifetch.select` | Fetch halfword selection is driven by `instr_o.a(1)`, an address bit | [bi-endian-spec.md §5.1](bi-endian-spec.md) | `instr_o\.a\(1\)` |
 
@@ -415,6 +416,7 @@ Two escapes, and they are different things:
 | `ooo.uops.rte` | `(?i)\brte\b.?\s*[\|→]\s*(?:\*\*)?(\d+)\b` | `(?i)\brte\b.?\s*[\|→]\s*(?:\*\*)?(\d+)\b` |
 | `cache.l2.ebr` | `L2 EBR = (\d+)` | `(?:the )?(?:128 KB )?L2 (?:unified [^\n]{0,20})?at\s*~?(\d+) EBRs` |
 | `ooo.gates.core` | `core \+ caches\*\*\s*[\|]\s*\*\*([\d,]+)\*\*` | `(?:OoO budget\|core \+ caches)[^\n]{0,60}?([\d,]+)k? gates` |
+| `isa.movi20s.sext` | `sign-extend(?:ed)?\s+from\s+bit\s+\*\*(\d+)\*\*\s+of\s+the\s+shifted\s+value` | `sign-extend(?:ed)?\s+from\s+bit\s+\*\*(\d+)\*\*\s+of\s+the\s+shifted\s+value` |
 
 ## Image layouts
 
