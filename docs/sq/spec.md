@@ -399,6 +399,22 @@ Three consequences, and the third is the one this task exists for.
    owners passes without ever reaching it. Here it is not a second code path that could be
    forgotten; it is the same write with a different operand.
 
+**R3 is per thread context, and on an FGMT core that is the whole of its meaning.** `HSQCR` is
+per-context ([../hypervisor/hardware-spec.md §2.9](../hypervisor/hardware-spec.md)) and so are the
+buffers (§7.1), so a write executed *in* context *c* scrubs *c*'s queues and no others.
+[../hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md) item 1 quiesces every
+context of the core with its own trap into HS mode, which is what makes "every context gets the
+write" achievable at all; a scrub that ran once per core would leave three of four queues loaded on
+a J32-LT.
+
+**R1–R2 alone are sufficient on a machine with no hypervisor**, which is worth saying because
+§1–§5 are the non-virtualized baseline and R3's trigger does not exist there. On such a machine
+`SR.MD = 1` is the only privilege that can reach a queue (§5), so the queues have exactly one
+owner for the machine's lifetime and the only ownership change is reset. R1 covers reset, R2 keeps
+the steady state clean, and R4 answers the readback that §2 previously left undefined at every
+privilege level. Nothing in R3 or R6 is required of an implementation without the hypervisor
+extension, and nothing in R1, R2 or R4 is optional for one.
+
 **SQ-R4 — Guest reads are defined.** At `SR.MD = 1`, `SR.HPRIV = 0`, a load from
 `0xE0000000`–`0xE3FFFFFF` returns **zero**. It does not trap, does not read the buffer, and has no
 effect on `HSQCR`. At `SR.MD = 0` an SQ-region access is a privilege violation and not a zero:
@@ -447,7 +463,7 @@ leave L1 unmet while looking finished — which is the failure
 
 #### Minimizing the loss ([../j4-remediation-plan.md §E.10](../j4-remediation-plan.md), gated by §D3)
 
-The guarantee to be bought is SQ-INV. Four ways to buy it were considered.
+The guarantee to be bought is SQ-INV. Four options were priced: two for how the buffer is kept clean, one for how a guest read is answered, and one for where the scrub runs.
 
 **Chosen: clear the storage.** R1–R3 are a broadside zeroing of storage §7.1 already requires to
 exist per thread context. It adds **no architectural state**: §7.2's image stays as it is,
