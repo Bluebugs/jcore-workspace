@@ -313,6 +313,63 @@ classifies GPU context state into saved and not-saved but specifies no byte
 layout, and the V/P0/`VCSR` bytes it does move are `simd.context.j32`'s, already
 owned.
 
+Wave-3 **C2d** added `iommu.deny.rules`, `iommu.bypass.paths` and
+`cache.dma.cacheops` — the C2a pair *plus* a code binding, which makes it the second
+Wave-3 task after C2b to have one and the first whose binding points at the **kernel**
+rather than at RTL. That difference is the point of the row: C2c's honest summary was
+that a name fact guarding a rule about hardware that does not exist can be contradicted
+by nothing at all. C2d's subject has the same problem — there is no IOMMU, no IOTLB and
+no BMID in `jcore-cpu@origin/master` or `jcore-soc@origin/master`, and no bus field to
+carry a BMID in — so `iommu.deny.rules` sits in exactly C2c's position. But **one C2d
+finding is about code that exists and runs**: the J4 Linux build compiles no
+cache-operations file, so [decisions/0010](decisions/0010-dma-coherence-is-software-maintained.md)
+gets a binding, and the binding is *designed to go red* when the fix it asks for lands.
+**Fourteen** perturbations were run, of which **four** pass:
+
+| Perturbation | Result |
+|---|---|
+| the owner's bypass-path count changed from seven to six | **caught twice**: `owner-has-fact` on a **pattern non-match** (the registry pattern pins the literal count), and `no-stale-value` on a **value disagreement** in `j4-execution-plan.md` |
+| the count changed to six in `j4-execution-plan.md` only, owner still seven, link intact | **caught**, `no-stale-value`, on a **value disagreement** — the link does not license the number |
+| `iommu.bypass.paths`'s `Constant` cell set to **6**, contradicting its own owner | **passes** — the cell is prose no check reads. **Fifth** wave running; see C1c, C2a, C2b and C2c. The note there stands unchanged and so does the fix, which is a checker change |
+| the owner drops the count entirely — *"there are several such paths"* | **caught twice**: `owner-has-fact` on a **pattern non-match**, and `no-stale-value` reporting that the canonical pattern matches nothing in the owner, so there is no value to compare restatements against |
+| a bypass-path row deleted from the owner's table, the count left at **7** | **passes.** The value guard compares numbers between documents; it does not count rows. Third task in a row to record it, and here the deleted row was **path 5, BMID `0xFF`** — the permanent bypass that was the whole reason the enumeration exists |
+| every `I-R`*n* token removed from the owner (all 60 occurrences rewritten to `Rule`) | **caught**, `owner-has-fact`, on a **pattern non-match** |
+| `I-R7` restated in `j4-execution-plan.md` with no link to the owner | **caught**, `restatement-is-linked` |
+| **`I-R5` inverted** — the rule rewritten to *"`GLOBAL` is retained … an entry with the bit set matches **every** BMID, which is what a genuinely-shared buffer needs"*, token kept | **passes.** A name fact guards that a rule is stated, never what it says. C2b recorded this on `W-R1` and C2c on `T-R2`; this instance is the worst of the three, because the inverted text is *the exact sentence the retired specification contained* — it does not merely read as compliance, it reads as the original design, and a reviewer who knows the IOMMU literature would have to notice that "a genuinely-shared buffer" is Thunderclap |
+| **`I-R1` narrowed** — reset-deny scoped to the on-chip DMA range `0x10`–`0x1F` only, token **and** the bypass-path count both kept | **passes**, and it is the narrowing with the sharpest live consequence in this table: BMIDs `0x80`–`0xEF` are the **guest pass-through** range ([bus/fabric-spec.md §4.4](bus/fabric-spec.md)), so the narrowed rule leaves exactly the tenant-controlled devices bypassing at reset while reading as default-deny. `I-E0` and `I-E1` are what would catch it, and neither is runnable |
+| ownership of `iommu.deny.rules` moved to `iommu/security-review.md`, which also states the tokens | **caught by the cascade**: `owner-has-fact` passes (that document does state `I-R` tokens), and `restatement-is-linked` fails over five files including the real owner's own 60 lines. Same shape as C1c's, C2a's, C2b's and C2c's last rows |
+| the binding's **doc** side changed — 0010 says the selector keys on `CPU_JCORE` | **caught**, `doc-matches-code`, on a **value disagreement** with `linux:arch/sh/mm/Makefile@jcore`. The row C2c could not have, on the repository C2b did not use |
+| the binding's **code** pattern retargeted to `CONFIG_CPU_NOPE` | **caught**, `doc-matches-code`, on a **pattern non-match**, code side |
+| the binding's **doc** phrasing destroyed, value kept — *"the `cacheops-` arm is `CPU_J2`"* | **caught twice**: `owner-has-fact` and `doc-matches-code`, both on a **pattern non-match**, doc side |
+| `iommu.bypass.paths` scanned against a document that states a *different* seven | not run, and recorded as **not attempted**: the scan pattern is anchored on the noun `bypass paths`, which appears nowhere else in `docs/`, so there is no site to test it at. The anchoring lesson the `## Value guards` preamble states was applied when the pattern was written rather than discovered afterwards |
+
+**Procedure.** The rows were committed before being perturbed, and each perturbation
+asserted a non-empty `git diff` before the checker ran — C2b's rule. **One perturbation
+was rejected by that assertion and the rejection is worth recording**, because the
+cause is new: the "delete a bypass-path row" edit targeted a literal containing
+`` `I-R6` ``, and that literal no longer existed — the pass that added owner links to
+satisfy `restatement-is-linked` had rewritten it to `` [`I-R6`](hardware-spec.md) ``
+in every file *except* the owner, where the bare token survives. The harness reported
+`EDIT FAILED (diff empty)` rather than `OK`, the row was re-run against the real text,
+and it passes. **The general form: adding a name fact rewrites the very lines a later
+perturbation wants to edit, so a perturbation script written before the linking pass
+will silently miss its targets afterwards.** That is C2a's eleventh-attempt failure
+reached by a third route, and the assertion caught it again.
+
+What C2d adds to the honest summaries above is that **a code binding on a *kernel*
+fact behaves exactly like C2b's binding on an RTL fact** — it catches divergence from
+the tree on both sides and says nothing about meaning — and that the composition C2c
+named still holds: for the nine `I-R` rules there is no code, no residue test and no
+model, so the inverted `I-R5` above would survive until a T1 fabric exists. The
+mitigation is not a checker change; it is
+[iommu/hardware-spec.md §10.1](iommu/hardware-spec.md)'s `I-E4`, whose kill criterion
+is that a harness with no way to place a `GLOBAL` entry must report **partial** rather
+than pass — because the lookup term, not the install refusal, is the half that holds
+when the install path has a bug.
+
+C2d added no `## Image layouts` row: the `I-R` rules move no context state and specify
+no byte layout.
+
 B1 added `ooo.uops.rte`, `platform.endianness`, `platform.fmax.floor`,
 `platform.fmax.j4.floor`, `platform.j4`, `mmu.l1.pipt`, `cache.l1d.write`,
 `cache.l1.index`, `cache.l2.ebr`, `ooo.gates.core`, `mmu.p4.segment`,
