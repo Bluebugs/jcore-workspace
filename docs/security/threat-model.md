@@ -103,9 +103,9 @@ ever offers device passthrough (§8, item **L2**). (c) A GPU shader, once the
 GPU exists — a launch blocker in its own right
 ([j4-remediation-plan.md §C2](../j4-remediation-plan.md)). **Specified, unbuilt
 since 2026-09-09:** the isolation mechanism is now stated
-([simd/gpu/simd-gpu-spec.md §16](../simd/gpu/simd-gpu-spec.md), Wave-3 **C2a**),
-covering **6** address producers; there is still no GPU RTL in either repo to run
-it on, and the outer boundary it leans on is **L2**, which is `NOT MET`.
+Wave-3 **C2a**), covering
+**6** address producers ([simd/gpu/simd-gpu-spec.md §16.2](../simd/gpu/simd-gpu-spec.md));
+there is still no GPU RTL in either repo to run it on, and the outer boundary it leans on is **L2**, which is `NOT MET`.
 
 ---
 
