@@ -326,6 +326,37 @@ mistakes a green run for compliance with them:
   convention. Determining a section's first content reliably means parsing
   Markdown structure, which is more machinery than the rule is worth; review
   catches it.
+
+  > **"Review catches it" has now failed four consecutive times on one axis —
+  > 2026-09-08.** [0006](0006-endianness-is-big-endian.md) was re-scoped twice,
+  > and across four rounds of revision a superseded change set survived in three
+  > places in that record: a section (*Re-scope*) with no marker at all, and two
+  > mid-section paraphrases with no marker at all. This note is added so that
+  > nobody reads the bullet above as evidence the convention is safe. It is not;
+  > it is unenforced, and it has been violated.
+  >
+  > **A marker-*placement* check was proposed as the remedy and is deliberately
+  > not built, because it would have caught none of the three.** Placement checks
+  > sections that *have* a marker. All three defects were sections and passages
+  > that had **none** — a rule about where markers go says nothing about text
+  > with no marker, so the check would have run green over every one of them and
+  > been cited afterwards as evidence the record was clean. Shipping a guard that
+  > passes without exercising the scenario it was commissioned for is worse than
+  > shipping nothing, because the next reader trusts it.
+  >
+  > **What the actual defect was**, so a future attempt aims at the right thing:
+  > all three were **paraphrases of a normative change set in a non-owning
+  > document**, which is a restatement — and `restatement-is-linked` skips
+  > `decisions/` wholesale, exactly as `no-stale-value` does, for the good reason
+  > that decision records quote superseded material on purpose. The hole is that
+  > the exemption cannot tell a *quotation* of superseded text from a *claim* in
+  > it. Closing that means a check that reads intent, which is the same thing the
+  > P4-comment sweep failed at and was deleted for
+  > ([fact-ownership.md](../fact-ownership.md) records its measured
+  > false-positive rates). No check is proposed here. What is proposed, and was
+  > done, is narrower and mechanical in the human sense: **a supersede marker
+  > must enumerate every passage it supersedes**, so the count is auditable. The
+  > marker in `0006` now names four.
 - **Choosing `SUPERSEDED BY` vs `HISTORICAL` correctly.** Both parse. Whether the
   text is *wrong* (supersede) or *accurate about a past state* (historical) is a
   judgement no regex reaches.

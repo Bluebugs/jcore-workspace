@@ -234,6 +234,18 @@ it is called out rather than glossed:
   compatibility with a documented SH-4 behaviour, not as a J-Core invention.
 - **It does not weaken §2.2.** The cache argument is about accesses that reach
   the cache arrays, all of which are 32 bits or narrower on this machine.
+- **And it is not an SH-4 quirk.** SPARC V9 — byte-invariant on every ordinary
+  access, and explicit about it (§11.1) — carves out exactly the same shape of
+  exception for exactly the same width: §6.3.1.2.2 says that for the deprecated
+  `LDD`/`STD` double-word instructions in little-endian mode, "the word at the
+  address specified in the instruction + 4 corresponds to the even register…
+  the word at the address specified in the instruction corresponds to the
+  following odd-numbered register" — a word-pair order swap, which is the
+  half-pair swap under another name. Two architectures that independently chose
+  byte invariance both made a 64-bit exception to it. That is worth knowing
+  before treating the SH-4 note as an oddity to design around: it is the
+  recurring cost of composing a 64-bit datum out of two 32-bit accesses on a
+  32-bit machine, and any J-Core FPU will meet it too.
 
 ### 3.2 SH-4's *control* is a reset strap, and J-Core does not inherit it
 
@@ -520,10 +532,18 @@ same one; only the implementation of "applied" differs, and
 [glossary §2.1](glossary.md)'s first rule is explicit that a match is at the
 level of mechanism.
 
-Of the two, **PA-RISC is the closer match and is the one to read first**: its
-`E` bit is byte-invariant and covers instruction fetch, which is exactly this
-document's combination, whereas PowerPC's `LE` is an address-munging scheme
-(§11).
+Of the three, **PA-RISC is the closest match and is the one to read first**: its
+`E` bit is byte-invariant *and* covers instruction fetch, which is exactly this
+document's combination. SPARC V9 is byte-invariant but keeps fetch big-endian,
+and PowerPC's `LE` is an address-munging scheme (§11.3, §11.3a).
+
+**One instructive divergence in SPARC V9, since it is the nearest thing to a
+counter-example.** Its RED_state reset trap does *not* copy: it forces
+`PSTATE.TLE ← 0` and `PSTATE.CLE ← 0`, "big-endian mode for traps" and
+"big-endian mode for non-traps". So even the architecture that copies on every
+ordinary trap makes reset an exception and drives both bits to the machine's
+native order. §6.1 does the same thing for the same reason, and it is worth
+knowing that this is a convergent choice rather than an arbitrary one.
 
 **The third trap destination needs no rule, and checking that is what makes the
 scheme complete.** [hypervisor/hardware-spec.md §4.1](hypervisor/hardware-spec.md)'s
@@ -725,21 +745,26 @@ matched below to a pre-2006 source, and §2.1's two matching rules are applied
 rather than merely cited: the match is on **mechanism, not motivation**, and
 §10's first open item records where a pre-2006 structure is **not sufficient**.
 
-**Every citation below was read at the source before being written down.** That
-is stated because the first draft of this section was assembled from a list of
-expected citations, and checking them changed three of the four load-bearing
-ones — see §11.4, which records what did not survive. A citation nobody opened
-is a guess with a document number attached.
+**Every citation below was read in the primary source before being written
+down**, and where a source could not be obtained that is said rather than
+papered over. This is stated because the first draft of this section was
+assembled from a list of *expected* citations, and checking them changed three
+of the four load-bearing ones (§11.3), added a fifth architecture that reframed
+the weakest clause (§11.3a), and — in §2.2, outside this section — produced one
+quotation that turned out to belong to a different ARM manual on the wrong side
+of the cutoff. That last one is withdrawn in place. **A citation nobody opened is
+a guess with a document number attached**, and this document has now generated
+one of those for every three it got right.
 
 ### 11.1 The mechanisms, and what each is matched to
 
 | Mechanism | Prior art |
 |---|---|
-| **Byte-invariant** bi-endian data format — the same byte address in both modes, only the assembly into register values changing | **PA-RISC 1.1**, `PSW[E]`, Third Edition, February 1994 (HP 09740-90039), §2 *Byte Ordering*: byte loads and stores are **unaffected** by `E`, while halfword and word operands reverse within their own addresses. **SH-4 Programming Manual** §2.5 / figure 2.5 (Renesas/Hitachi Rev. 5.0, 04/2001, ADE-602-156D) — the classification is ours, see §3.1. *The 2001 Programming Manual is cited and not the later Renesas SH-4 **Software** Manual (Rev. 6.00, REJ09B0318-0600), whose §2.5, figure 2.5 and 64-bit note are byte-identical: that edition is dated September **2006** and would breach [glossary §2](glossary.md)'s cutoff. Same words, wrong side of the line.* **ARM BE-8**, ARM ARM DDI 0100I, July 2005, §A2.7.2 |
+| **Byte-invariant** bi-endian data format — the same byte address in both modes, only the assembly into register values changing | **SPARC V9** (1994), §6.3.1.2.1 and §6.3.1.2.2, which state identically under *both* addressing conventions: "A load/store byte instruction accesses the addressed byte in both big- and little-endian modes." Its figures 35 and 36 label both halves with the **same** `Address<1:0> = 00 01 10 11`, differing only in which register field maps to each. §H.1.6 makes the mechanism explicit from the other side — a little-endian store's "data will be reordered before the bytes are written to memory", never the address. **PA-RISC 1.1**, `PSW[E]`, Third Edition, February 1994 (HP 09740-90039), §2 *Byte Ordering*: byte loads and stores are **unaffected** by `E`, while halfword and word operands reverse within their own addresses. **SH-4 Programming Manual** §2.5 / figure 2.5 (Renesas/Hitachi Rev. 5.0, 04/2001, ADE-602-156D) — the classification is ours, see §3.1. *The 2001 Programming Manual is cited and not the later Renesas SH-4 **Software** Manual (Rev. 6.00, REJ09B0318-0600), whose §2.5, figure 2.5 and 64-bit note are byte-identical: that edition is dated September **2006** and would breach [glossary §2](glossary.md)'s cutoff. Same words, wrong side of the line.* **ARM BE-8**, ARM ARM DDI 0100I, July 2005, §A2.7.2 |
 | The taxonomy itself, and the demonstration that the alternative was abandoned | **ARM DDI 0100I §A2.7.2** names `BE-8`, `BE-32` and `LE`, defines byte invariance as "the address of a byte in memory is the same irrespective of whether that byte is being accessed in a big endian or little endian manner", and §A2.7.3 makes `BE-8` mandatory at ARMv6 with `BE-32` IMPLEMENTATION DEFINED |
-| **Per-context, privileged** byte-order control | **PA-RISC** `PSW[E]` (1994) — in the PSW, saved to `IPSW` on interruption, restorable only by privileged `RFI`. **PowerPC** `MSR[LE]` (*PowerPC Architecture*, First Edition, May 1993, IBM SR28-5124-00, §10.2.3), privileged via `mtmsr`. **MIPS** `Status[RE]` bit 25 (R4000 User's Manual, 1992/1994), which reverses **user** mode's endianness relative to the kernel's |
+| **Per-context, privileged** byte-order control | **SPARC V9** `PSTATE.CLE`, bit 9 (*The SPARC Architecture Manual, Version 9*, Weaver & Germond eds., SPARC International / PTR Prentice Hall, © **1994**, ISBN 0-13-825001-4), §5.2.1.2: with `CLE = 1` "all data accesses using an implicit ASI are performed in little-endian byte order". **PA-RISC** `PSW[E]` (1994) — in the PSW, saved to `IPSW` on interruption, restorable only by privileged `RFI`. **PowerPC** `MSR[LE]` (*PowerPC Architecture*, First Edition, May 1993, IBM SR28-5124-00, §10.2.3), privileged via `mtmsr`. **MIPS** `Status[RE]` bit 25 (R4000 User's Manual, 1992/1994), which reverses **user** mode's endianness relative to the kernel's |
 | Byte order applying to **instruction fetch** as well as data, under that same per-context bit | **PA-RISC 1.1** (1994), §2 *Byte Ordering*: "**The E-bit also affects instruction fetch.**" This is the only pre-2006 source found that does so — see §11.3 |
-| A **second** privileged bit fixing the byte order the trap handler runs in, applied by hardware at the transition | **PA-RISC 1.1** (1994) *default endian bit*: "controls whether the PSW E-bit is set to 0 or 1 on interruptions" — described as **implementation-dependent** and software-writable, with no architected register named, so this document names none either. **PowerPC** `MSR[ILE]` (1993, §10.2.3): "When an interrupt is taken, this bit is copied into MSR_LE to select the Endian mode for the context established by the interrupt", tabulated for every interrupt type in Figure 68 |
+| A **second** privileged bit fixing the byte order the trap handler runs in, applied by hardware at the transition | **SPARC V9** `PSTATE.TLE`, bit 8 (1994). §5.2.1.3: "When a trap is taken, the current PSTATE register is pushed onto the trap stack and the PSTATE.TLE bit is copied into PSTATE.CLE in the new PSTATE register. **This allows system software to have a different implicit byte ordering than the current process.**" The trap-entry pseudocode in §7.6.1 *Normal Trap Processing* (printed p. 107) carries the step verbatim as `PSTATE.CLE ← PSTATE.TLE (set endian mode for traps)`, and it recurs in five further trap variants in §7.6.2. **PA-RISC 1.1** (1994) *default endian bit*: "controls whether the PSW E-bit is set to 0 or 1 on interruptions" — described as **implementation-dependent** and software-writable, with no architected register named, so this document names none either. **PowerPC** `MSR[ILE]` (1993, §10.2.3): "When an interrupt is taken, this bit is copied into MSR_LE to select the Endian mode for the context established by the interrupt", tabulated for every interrupt type in Figure 68 |
 | The hypervisor owning a guest-visible mode the guest cannot write | IBM VM/370 (1972); Popek & Goldberg, CACM 17(7), 1974 — already cited by [sh4-guest-model.md §9](sh4-guest-model.md) |
 
 ### 11.2 Applying §2.1's first rule — mechanism, not motivation
@@ -790,18 +815,49 @@ the corrections matter to which reference supports which clause:
    says so. Still comfortably pre-2006, but a citation to a 1990 edition would
    have pointed at a document that does not contain the feature.
 
-**The gap those corrections expose, stated plainly because it is this
-document's weakest citation.** The fetch half of Decision BE-1 rests on **one**
-pre-2006 source. SH-4 is silent (§3.2). ARM is worse than silent — DDI 0100I
-§A2.7.2 says that in mixed-endian configurations "instruction fetches always
-assume a little endian byte order model", so ARM's BE-8 is **positive evidence
-against** treating bi-endian fetch as ordinary. PowerPC's `MSR[LE]` does reach
-instruction fetch, but by address munging, which is a different mechanism. That
-leaves PA-RISC 1.1 (1994) carrying the fetch clause alone. It carries it well —
-byte-invariant, per-context, privileged, and explicit that `E` affects
-instruction fetch, which is precisely this document's combination in one
-sentence — but a single-source clause should be known to be one, and §10's
-screen should be told to look hardest here.
+### 11.3a The fetch clause: where the art actually stands
+
+This is the weakest citation in the document, and the first draft of this
+section described the weakness wrongly — as "one source against silence". The
+truth is more interesting and is set out as a split, because a reader deciding
+how much weight the clause carries needs the shape of the evidence, not a
+verdict about it.
+
+| Architecture | Does the per-context byte-order bit reach **instruction fetch**? |
+|---|---|
+| **PA-RISC 1.1** (1994) | **Yes**, verbatim: "The E-bit also affects instruction fetch." |
+| **PowerPC** (1993) | **Yes** — the instruction effective address is munged like any other (App. D.5, XOR of `0b100`) — but by address transformation, a different mechanism |
+| **SPARC V9** (1994) | **No**, and emphatically: "Instruction accesses are always big-endian" (§5.2.1.2), restated in §3.2, §3.2.1.2, §6.3.1.2, §H.1.6 and §K.6 |
+| **ARM BE-8** (2005) | **No**: DDI 0100I §A2.7.2 — "instruction fetches always assume a little endian byte order model" |
+| **SH-4** (2001) | Silent (§3.2) |
+
+So on *whether a per-context endian bit reaches fetch at all* the pre-2006 art
+is **2–2**, not one-against-silence. Two architectures did it and two
+deliberately did not, which is a live design question with precedent on both
+sides rather than an unexplored one.
+
+**For the clause this document actually needs — byte-invariant *and* covering
+fetch — PA-RISC remains the sole source.** PowerPC reaches fetch by munging;
+SPARC V9 and ARM are byte-invariant but stop at data. PA-RISC is the only one of
+the five that is both. §12 keeps a trigger for that, and §10's screen should be
+pointed here first.
+
+**And the search that produced this was not exhausted, which is worth admitting
+rather than burying.** SPARC V9 is named on [glossary §2](glossary.md)'s
+acceptable-source list, is already cited in five places in this workspace, and
+is the primary reference for `hypervisor/design-spec.md`'s own privilege model —
+and the first draft of this section did not consult it. It turned out to
+strengthen two rows and to settle the fetch question in a way that made the
+original framing wrong. [glossary §2](glossary.md)'s instruction to "cite
+multiple independent sources to demonstrate the idea was common knowledge" is
+not a formality about volume; it is what stops a single source's idiosyncrasies
+being mistaken for the state of the art.
+
+**What that leaves as the honest position**, since a flagged weakness is only
+useful if someone says whether it is acceptable: one solid pre-2006 source plus
+a documented split, with the gap named and a reopening trigger attached,
+satisfies [glossary §2](glossary.md) and §2.1's second rule. It does not
+substitute for the screen in §10, and this section does not claim it does.
 
 ### 11.4 Considered and not cited
 
@@ -817,6 +873,17 @@ screen should be told to look hardest here.
   re-samples its Endian Select input to determine the current endian mode."
   That is closer to SH-4's strap than to a per-context mode. It is listed here
   so that a later reader who finds it does not assume it was missed.
+- **The SPARC V9 edition caveat.** The rows above cite `© 1994 SPARC
+  International, ISBN 0-13-825001-4`, which is the copyright and ISBN carried by
+  the manual. The two freely available full-text PDFs consulted are **later
+  corrected reissues of that 1994 text** — revision `SAV09R1459912` (Rev. 1.45,
+  1999) and `SA-V09-R147-Jul2003` (Rev. 1.47, July 2003) — not scans of the 1994
+  printing, and their §5.2.1.2 wording differs slightly between revisions (the
+  1.47 text is the one quoted). Every passage cited here is present and
+  materially identical in both. The 1994 date is the copyright date of the work,
+  which is what [glossary §2](glossary.md)'s acceptable-source list names, and
+  the reissues are noted so that a reader comparing page numbers is not
+  surprised.
 - **Power ISA 2.03** (September 2006) and **ARMv7's removal of BE-32** (2007
   onward) are both **post-cutoff** and are cited nowhere in §11.1. They appear
   in §2.3 as evidence for an engineering argument, which is a different use and
@@ -835,12 +902,16 @@ screen should be told to look hardest here.
 - **The prior-art screen of §10 returns a live claim on the combination.** That
   is the one finding that changes the design rather than the schedule, and
   [glossary §2](glossary.md) rule (b) — drop the mechanism — applies.
-- **PA-RISC 1.1 turns out not to say what §11.3 reports.** The fetch clause of
-  Decision BE-1 rests on that one document. If a professional screen finds the
-  1994 Third Edition's `E`-bit text does not reach instruction fetch, or that
-  the edition history is other than reported, the fetch half loses its only
-  pre-2006 support and [glossary §2](glossary.md)'s rule (a) — find a pre-2006
-  equivalent — has to be satisfied before RTL commits.
+- **PA-RISC 1.1 turns out not to say what §11.3a reports.** For the combination
+  this document needs — byte-invariant *and* reaching instruction fetch — that
+  one document is the sole pre-2006 source; the other four architectures
+  surveyed each supply one half and not the other. If a screen finds the 1994
+  Third Edition's `E`-bit text does not reach instruction fetch, or that the
+  edition history is other than reported, the fetch half loses its only support
+  for that combination and [glossary §2](glossary.md)'s rule (a) — find a
+  pre-2006 equivalent — has to be satisfied before RTL commits. Note what would
+  *not* be lost: per-context privileged control and the two-bit trap pattern are
+  three-sourced each and are unaffected.
 - **A second bus master gains a byte-order mode of its own.** §2.2's "one image
   of memory" argument assumes the CPU is the only thing with a mode. A
   byte-swapping DMA descriptor field, say, would make that assumption false and
