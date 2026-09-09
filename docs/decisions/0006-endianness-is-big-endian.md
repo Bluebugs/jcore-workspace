@@ -21,6 +21,14 @@ than against it.*
 
 ## Re-scope, 2026-09-08
 
+> **SUPERSEDED BY [bi-endian-spec.md §1](../bi-endian-spec.md) — 2026-09-08.**
+> This entire section describes Decision B2-1, which is superseded: the mode
+> covers instruction fetch as well as the data path, and its change set was
+> specified under the wrong scheme. Read *Second re-scope* below, then
+> [bi-endian-spec.md §4.4 and §5.1](../bi-endian-spec.md). The section is kept
+> because what it says about *this record's* mis-scoping is still true and is
+> the reason the record was reopened at all.
+
 This record was **mis-scoped, not wrong.** It read a true fact — the RTL has one
 byte order and no mode bit — as an architectural exclusion, when it is unbuilt
 work the project intends to build. The SH architecture historically supported
@@ -39,29 +47,44 @@ exclusion*; the "withdrawn" verdict on [fpu/spec.md](../fpu/spec.md)'s migration
 analysis; and the *What would reopen this* list, whose triggering event has now
 occurred by direction rather than by evidence.
 
-**What replaces them** is [sh4-guest-model.md §3.1](../sh4-guest-model.md),
-Decision B2-1: a per-guest, hypervisor-owned **little-endian data mode**, with
-instruction fetch staying big-endian. Its cost is
-**unknown at this stage — needs measurement**.
+**What replaced them, as of this first re-scope,** was
+[sh4-guest-model.md §3.1](../sh4-guest-model.md), Decision B2-1: a per-guest,
+hypervisor-owned little-endian **data** mode, with instruction fetch staying
+big-endian. **That is superseded** — see the marker above and *Second re-scope*
+below. What replaces them *now* is
+[bi-endian-spec.md §1](../bi-endian-spec.md), Decision BE-1: a byte-invariant
+per-context mode covering the data path **and** instruction fetch. The cost is
+`unknown at this stage — needs measurement` under either.
 
 ---
 
 ## Second re-scope, 2026-09-08 — the fetch half is superseded
 
 > **SUPERSEDED BY [bi-endian-spec.md §1](../bi-endian-spec.md) — 2026-09-08.**
-> The *instruction-fetch* half of this record — "instruction fetch is
-> big-endian", and the *Re-scope* section's statement that the data path is
-> where the mode lands — is replaced by Decision BE-1: byte-invariant bi-endian
-> on **both** the data path and the fetch path, as a per-context mode. The
-> product-point statement in *Decision* below is **not** superseded and is
-> restated in §What survives, unchanged.
+> The *instruction-fetch* half of this record is replaced by Decision BE-1:
+> byte-invariant bi-endian on **both** the data path and the fetch path, as a
+> per-context mode. **Four** passages are affected and each carries its own
+> marker or retraction where it sits, rather than being covered only from here:
+> *Decision*'s opening clause; the whole of *Re-scope*; the change-set paraphrase
+> closing *What the code says*; and "moving the fetch path" in the *Rejected
+> alternative* preamble. The product-point statement in *Decision* below is
+> **not** superseded and is restated in §What survives, unchanged.
+>
+> *Enumerating them here is deliberate. The previous revision of this marker
+> named one passage — "the *Re-scope* section's statement" — and the other three
+> went unmarked, which is how a superseded change set survived in this record.*
 
-*No `RESOLVED` or `PENDING-MERGE` marker accompanies this, deliberately. Those
-markers assert that a **change landed in code**; this supersede is
-document-to-document within this repository, no submodule is touched, and
-[0002](0002-supersede-convention.md) §2 gives them no other meaning. A
-`PENDING-MERGE` here would be claiming something about a branch that this
-record does not depend on.*
+*No `RESOLVED` or `PENDING-MERGE` marker accompanies this, deliberately, and the
+reason is the marker grammar rather than the repository.*
+[0002](0002-supersede-convention.md) §1 defines **four exclusive forms**, and
+`SUPERSEDED BY` is the one for text that is now wrong and for which something
+else is now right — which is exactly this. `RESOLVED` and `PENDING-MERGE` assert
+that a **change landed**, which is a different claim about a different kind of
+object. *An earlier version of this note justified the omission as "no submodule
+is touched"; that reason is imprecise, since `jcore-workspace` is itself a row in
+[0002](0002-supersede-convention.md) §2's integration-branch table and its own
+changes are as merge-checkable as any submodule's. The conclusion was right for
+the wrong reason.*
 
 **What survives, unchanged.** Everything the first re-scope listed as surviving,
 plus the thing that matters most: **every J-Core product point still ships
@@ -165,11 +188,32 @@ whose only shipping member is big-endian and whose density extension targets an
 ISA variant that has no little-endian form at all.
 
 **That sentence is about a wholesale switch and must not be read wider.** It is
-not evidence that the *data* path cannot be made mode-dependent, and the
-re-scope above says it is to be. Two functions in `jcore-cpu@master`
-`core/datapath.vhm` — `to_data_o`'s byte-enable and lane mapping, and
-`align_read_data`'s load lane mux — are where that lands; neither is the fetch
-path, neither is a toolchain artifact, and changing them retargets nothing.
+not evidence that either path can never be made mode-dependent, and both now are
+([bi-endian-spec.md §1](../bi-endian-spec.md)). What survives is only the
+narrower point it was making: a mode is not a toolchain retarget, and adding one
+retargets nothing.
+
+> *This paragraph previously continued: "Two functions in `jcore-cpu@master`
+> `core/datapath.vhm` — `to_data_o`'s byte-enable and lane mapping, and
+> `align_read_data`'s load lane mux — are where that lands; neither is the fetch
+> path, neither is a toolchain artifact, and changing them retargets nothing."
+> **Both halves of that are false under Decisions BE-1 and BE-2.** The `we`
+> byte-enable map and both lane muxes are **unchanged** by the mode — changing
+> them is the word-invariant scheme BE-2 prohibits — and the fetch path is no
+> longer excluded. The change set is
+> [bi-endian-spec.md §4.2](../bi-endian-spec.md); the correction is
+> [§4.4](../bi-endian-spec.md).*
+>
+> *This was the **third** copy of that change set in the tree, and the last to be
+> found: [sh4-guest-model.md §3.1](../sh4-guest-model.md) held the original and
+> `bi-endian-spec.md` §4.4 supersedes it verbatim, but this paraphrase was not
+> named by either and carried no marker. It is recorded rather than deleted
+> because the pattern is the point — this axis has now had a false statement of
+> its change set survive **four** consecutive rounds of revision, each time in a
+> copy that the round's own supersede note did not enumerate. The lesson is not
+> "look harder"; it is that a paraphrase of a normative change set in a
+> non-owning document is a copy, and [0001](0001-one-authority-per-fact.md)
+> is a record about what happens to copies.*
 
 ## Decision
 
@@ -237,8 +281,11 @@ The *engineering* argument sometimes offered alongside it — that SH-4 and
 Dreamcast binaries are little-endian, so J-Core should be too — is the one that
 survives in part, and the re-scope above is what it bought. It does not reach
 *this* record's conclusion, because a wholesale product-line switch is not what
-little-endian guest data requires: a per-guest data mode gets the guests without
-retargeting the toolchain or moving the fetch path.
+little-endian guest data requires: a per-context mode gets the guests without
+retargeting the toolchain. *This sentence previously ended "or moving the fetch
+path". The fetch path does now move ([bi-endian-spec.md §5](../bi-endian-spec.md));
+what it does not do is retarget anything, which is the half that carried the
+argument.*
 
 **This record originally continued: "a guest's byte order is a property of the
 guest's own image and of the device model that serves it, not of the host's
