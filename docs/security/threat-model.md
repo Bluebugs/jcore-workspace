@@ -243,7 +243,7 @@ Security properties, ordered so that a failure of *n* implies nothing about
 | P4 | A guest cannot reach hypervisor memory | Hypervisor mappings absent from S/U | Architectural; loses to §7.5 and to the folded-P1 speculation escape ([hypervisor/hardware-spec.md §4.4.1a](../hypervisor/hardware-spec.md)) |
 | P5 | A guest cannot execute with another guest's privileges | `SR.HPRIV` non-renamed and serializing | Specified, unimplemented |
 | P6 | A guest cannot *observe* another guest's data through a microarchitectural channel | §8's bar, items **L1**, **L3**, **L4**, **L5**, **L6** | This is the property the bar exists to buy |
-| P7 | A device cannot read or write memory outside its domain | IOMMU | **Currently false by default** — §7.7 |
+| P7 | A device cannot read or write memory outside its domain | IOMMU | **Specified true by default, built nowhere** — §7.7a, [iommu/hardware-spec.md §3.10](../iommu/hardware-spec.md) `I-R1`. This row previously read "currently false by default", which was the reset polarity; the polarity is reversed and the block does not exist |
 
 **Non-guarantees, stated rather than discovered.** Rowhammer and DRAM-level
 effects; power, EM and thermal channels; timing analysis of a victim's own
@@ -288,7 +288,7 @@ which is how a matrix travels — a row must not be mistakable for "solved".
 | Shared MSHR occupancy | **APPLIES** | **APPLIES** | 4 MSHRs total, shared across banks *and cores* ([cache/l2-spec.md §12.3](../cache/l2-spec.md)) — a narrow, easily saturated resource |
 | **Guest→host escape via a guest-writable TSB** | `N/A (temporal)` — no hypervisor exists yet, so there is no guest | **APPLIES** | Not a channel — an escape. §7.5 |
 | **Guest→host escape via folded P1 under stale `SR.HPRIV`** | **N/A** — no speculation on `SR.HPRIV` | **MITIGATED (unimpl.)** by [hypervisor §4.4.1a](../hypervisor/hardware-spec.md) | Specified only; no silicon |
-| DMA / IOMMU | **APPLIES** | **APPLIES** | Default-bypass at reset — §7.7 |
+| DMA / IOMMU | **APPLIES** | **APPLIES** | Default-**deny** at reset as of C2d — §7.7a. Specified, unbuilt; and no DMA master exists to apply it to |
 | Rowhammer | `out of scope` | `out of scope` | Memory part + physical allocator (§5) |
 
 ---
@@ -630,7 +630,8 @@ is actually wrong is three things, all cheaper than a new state machine:
    (a global bit with no guard is a cross-domain disclosure primitive) reappearing
    one block over.
 
-**L2 requires five clauses; only these three are derived here.** The other two —
+**L2 requires five clauses; only these three are derived here.** *(Discharged —
+see §7.7a, C2d 2026-09-09. Both survive; five more clauses were added.)* The other two —
 detach/teardown re-protection, and a per-BMID quota on the shared IOTLB — are
 **inherited from [j4-remediation-plan.md §C2](../j4-remediation-plan.md) without
 independent C0 backing.** They are plausible: a device released to a tenant
@@ -645,6 +646,60 @@ off the register definitions.
 
 **Verdict: bar item ratified, mechanism restated. Launch blocker for any
 configuration with a tenant-influenced DMA master.** Item **L2**.
+
+#### 7.7a The two owed derivations, and five clauses C0 did not have *(C2d, 2026-09-09)*
+
+**Both inherited clauses survive, and each closes a different channel.**
+
+- **Detach/teardown re-protection.** The derivation is not that a teardown path was
+  weak; it is that **the only text describing one specified the opposite of what is
+  needed**. `iommu/linux-spec.md` §10.1 tested that attach and detach *"toggle the
+  `BMID_BYPASS` bit"*, and under the retired all-bypass reset a toggle back to 1
+  releases the device into unrestricted DMA. The channel is the Thunderclap window
+  reopened at the *end* of a device's life, which is when a device is handed to
+  another tenant. Closed by [iommu/hardware-spec.md §3.10](../iommu/hardware-spec.md)
+  `I-R7` and [iommu/linux-spec.md §5.4a](../iommu/linux-spec.md).
+- **The per-BMID IOTLB quota.** The channel is **not** §7.6's MSHR channel in a
+  different structure, and reading it that way understates it. The sharing structure
+  is one 64-entry pool with one free list, allocated first-fit; exhausting it makes a
+  **victim's** `dma_map_*` return `-ENOSPC`, and the victim's next unmapped DMA is a
+  fault whose documented software response is *"disable the offending device"*. That
+  is an availability break on another tenant, reachable from an ordinary mapping API —
+  architectural, not a timing channel. Closed by `I-R8`.
+
+**Neither clause is argued down. Five more are added, and three of them are worse than
+either.** C2d read the fabric spec, the hypervisor spec and the kernel, which §7.7 did
+not:
+
+1. **BMID `0xFF` was a *permanent* bypass** ([bus/fabric-spec.md §4.3](../bus/fabric-spec.md),
+   as it stood), and unlike `0x00` it carried **no rule** forbidding the fabric from
+   assigning it to a master port. A bypass no reset polarity can close.
+2. **`HCALL_HV_IOMMU_MAP(iova, ra, perms, bmid)` takes `bmid` from the guest**
+   ([hypervisor/design-spec.md §4.6](../hypervisor/design-spec.md)) with no stated
+   validation — the one IOMMU control delegated to this document's adversary. C1b's
+   lesson, arriving at a hypercall argument.
+3. **The block's *reporting* path had no substrate.** `iommu/hardware-spec.md` §2.2
+   said return `SLVERR` and suppress the data phase; `jcore-cpu:cpu2j0_pkg.vhd`'s
+   response record is `{ d, ack }` and carries no error field, so read literally the
+   deny path never acknowledges and hangs the master — and under `I-R1` the deny path
+   *is* the default path.
+4. **`IOMMU_CTRL.ENABLE` needed the same lock as `SUPER_BYPASS`**, which nobody had
+   asked for: both code paths in `iommu/linux-spec.md` that touch `IOMMU_CTRL` write
+   it as a whole word containing only `INVALIDATE_ALL`, which cleared `ENABLE` and
+   opened a full-bypass window across every probe and every resume.
+5. **The kernel's OF path fails open independently of the hardware.** A device with no
+   `iommus` property gets `-ENODEV` from `of_iommu_configure()`, which
+   `of_dma_configure_id()` swallows under a comment reading *"we'll just carry on
+   without it"* — configuring raw `dma-direct`. This is the strongest argument for
+   `I-R1` precisely because it does not depend on anyone's diligence.
+
+**And one clause is answered by deletion rather than by a guard.** §7.7 listed the
+`GLOBAL` bit's *existence* as the third defect and left "removed or made
+hyperprivileged-write-once" open. It is removed: the grant is deleted from the match
+function and the bit becomes a fault term (`I-R5`), because the legitimate use — a
+buffer shared between *k* masters — is already expressed exactly by the `.map` loop
+that writes one entry per attached BMID, which names its sharers where `GLOBAL` names
+none.
 
 ### 7.8 Lazy FP/SIMD switch — worse than LazyFP, and not because of speculation
 
@@ -998,13 +1053,21 @@ device is released; the shared IOTLB is quota'd per BMID.
 **Provenance of the five clauses is not uniform, and an implementer needs to know
 which is which.** The first three are derived in §7.7 from register definitions
 this task read. The last two — **detach/teardown re-protection and the per-BMID
-IOTLB quota** — are inherited from
+IOTLB quota** — were inherited from
 [j4-remediation-plan.md §C2](../j4-remediation-plan.md) with **no independent C0
-backing**. C2d's design step owes that derivation and may argue either down.
+backing**. **That debt is discharged in §7.7a** *(C2d, 2026-09-09)*: both clauses
+survive, neither is argued down, each closes a different and named channel, and five
+further defects are added — three of which are worse than either inherited clause. The
+requirement above is therefore no longer five clauses; the normative statement of all
+of them is [iommu/hardware-spec.md §3.10](../iommu/hardware-spec.md) `I-R1`–`I-R10`.
 
 **Ratified; mechanism narrowed** per §7.7 — "deny" is the existing miss
 behaviour, so this is a reset-polarity change plus two guards, not a new state
-machine. Evidence, all **`LITERATURE`** (§9's scale — named, not followed):
+machine. **The narrowing holds on both sides of the interface** *(C2d, 2026-09-09)*:
+in the kernel the deny state is `IOMMU_DOMAIN_BLOCKED` with the `blocked_domain` and
+`release_domain` static ops members, all three of which already exist in
+`include/linux/iommu.h` at `linux@origin/jcore`. Neither side needed a new state; both
+needed a polarity and a wiring. Evidence, all **`LITERATURE`** (§9's scale — named, not followed):
 Thunderclap (NDSS 2019) for the coarse-mapping failure; Apple DART and Windows
 Kernel DMA Protection for default-deny-from-power-on as the norm; the Linux
 deferred-attach work for the boot-window class. The *in-tree* half of this item —
@@ -1028,6 +1091,15 @@ bit, and never demonstrate that an unenumerated device actually stops); a second
 write to `SUPER_BYPASS` after the lock must not take; and a detached device must
 be blocked *before* the driver returns. Reset state is asserted by reading the
 registers out of reset, not by reading the spec.
+
+**Those three are `I-E1`, `I-E2` and `I-E3` in
+[iommu/hardware-spec.md §10.1](../iommu/hardware-spec.md)** *(C2d, 2026-09-09)*, which
+adds `I-E0` (the reset-state read, made into a test rather than a sentence), `I-E4`
+(`GLOBAL`), `I-E5` (quota) and `I-E6` (coherence, which fails at every tier today).
+Each states its own kill criterion, and three of them can report **not runnable**
+rather than passing — the distinction that matters while no IOMMU exists, since a
+harness that cannot originate a transaction under an arbitrary BMID would otherwise
+report a vacuous green.
 
 **Gated Wave-3 items:** C2d, C2a (GPU).
 
@@ -1286,7 +1358,7 @@ which bar they must clear.
 | **C2a** GPU protection *(design landed 2026-09-09; no RTL possible — no GPU exists in either repo)* | **L2**, **L6**, and a scoping question against **L1** | L2 is `N/A` only while no tenant-influenced DMA master exists. The GPU *is* one, so C2a flips L2 to blocking — and C2a does **not** move L2, because L2 is about the IOMMU and the GPU's windows are inside the GPU. The clause most likely to be missed **next** is that the row's single bar item was wrong in two directions. **L6:** [simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md) **G-R8** makes the tile buffer, texture cache and per-warp register files ownership-change sites, so L6 gains three *specified, unbuilt* structures; G-R7 adds no `undefined` site because it defines the blocked-access result. **L1:** **decided against C2a's mechanism on 2026-09-09 by C2c**, which owns L1 — an SM *is* a core for L1, so a two-tenant SM is out of bounds at launch independently of the windows, and C2a's windows are intra-tenant separation plus defence in depth. See §8 L1 |
 | **C2b** speculation coverage *(design landed 2026-09-09; **the implementation half is dispatchable in part, which no earlier Wave-3 item was** — see §8 L4)* | **L4**, **L7** part 4 | The **TSB walk** is a frontend transmitter (§7.2), and the I-side arm is on the *in-order* core too. Also: §12's code-level trigger — making the walk uncacheable flips §7.1. The clause most likely to be missed **next** is that three of this row's four named mechanisms target structures no repository contains *and are already specified* for the paused design points, so an implementer who works the list in order builds nothing that runs; the fourth, delayed speculative TLB/PTW fill, is the whole of the live work. The second is that an abort path in `core/tlb_walk.vhd` looks like the same mitigation and is not — [mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) **W-R2**: it closes the two installs and leaves the cacheable TSB reads, which are §7.1's observable. On **L7 part 4**, the clause named one counter address and there are two: `TLBINST` at `0xFF000058` counts the speculative DTLB installs this task is about, and it is the register a reader arriving from C2b will meet first |
 | **C2c** FGMT single-tenant core + microreset *(design landed 2026-09-09; no RTL possible — there is no FGMT and no hypervisor in `jcore-cpu@origin/master`)* | **L1**, both halves | The detector — "an unenforceable rule with no detector is not a control" — and it is now [hypervisor/hardware-spec.md §4.7.2](../hypervisor/hardware-spec.md) **T-R1**–**T-R5**. The clause most likely to be missed **next** is that the item's flush half named a structure — "MSHRs" — that means two different pools, one of which (**the L2's**, shared across cores) no gang switch can ever reach and which belongs to **L5**; see §8 L1. The second is that this row's mechanism is **not** the one the plan named: `fence.t` is 2020s work with no pre-2006 prior art of its own, and what survives the [glossary.md §2](../glossary.md) test is the pre-2006 *object-reuse* shape, not the instruction. The third is that C2c's own detector is a **refusal**, not a trap, for a reason §4.1 makes concrete — a trap would clobber the `HSPC`/`HSSR` the refused entry needs |
-| **C2d** IOMMU | **L2** | Two of the five clauses are inherited without C0 backing and owe a derivation (§7.7) |
+| **C2d** IOMMU *(design landed 2026-09-09; no RTL possible — there is no IOMMU, no IOTLB and no BMID in either repo, and no bus field to carry one)* | **L2** | Both inherited clauses survive and are derived in §7.7a. The clause most likely to be missed **next** is that the bar's "per-device deny state" is **not a new state on either side**: in hardware it is the existing miss behaviour, and in the kernel it is `IOMMU_DOMAIN_BLOCKED` plus `blocked_domain`/`release_domain`, which already exist — an implementer who builds a state machine has built the wrong thing. The second is that **`GLOBAL` is removed rather than guarded**, and the thing that makes removal free is the `.map` loop that already writes one entry per attached BMID. The third is `I-R2`: the J-Core bus has no error response, so "block and return `SLVERR`" hangs the master, and the deny path is now the default path. The fourth is that the worklist's *"the L2 exposes no fabric snoop port"* is right about the conclusion and wrong about every noun — there is no L2, the write-back cache that matters is the L1-D, and a snoop port **does** exist today on the L1-D and is tied off ([decisions/0010](../decisions/0010-dma-coherence-is-software-maintained.md)) |
 | **C2e** cache isolation | **L5**, **L6** | Five mechanisms, five tests. The MSHR one must target the **L2** pool, not the core-side pool that already has evidence |
 | Hypervisor (Phase 3) | **L7**, and it carries **L1**'s enforcement | L7's four parts are a single bounds-check handler's correctness; §7.5 explains why it fails silently in two directions at once |
 
@@ -1295,7 +1367,7 @@ which bar they must clear.
 | Item | Status | Blocking |
 |---|---|---|
 | L1 | **NOT MET** — rule specified; gang-switch list complete as a specification (item 7 C1a, item 8 C1b, item 9 C2c's microreset); the **detector is now specified too** ([hypervisor/hardware-spec.md §4.7.2](../hypervisor/hardware-spec.md) T-R1–T-R5) and is *specified, unbuilt* — no FGMT and no hypervisor RTL exists at `jcore-cpu@origin/master`, so T-E1 has no second thread context to place a second tenant on. **No item on the list is demonstrated.** The SM scoping question is decided (an SM *is* a core for L1) and adds an entry condition on un-parking the GPU, not a launch blocker | C2c's design is done; the RTL that builds FGMT and the hypervisor |
-| L2 | **NOT MET** — reset is all-bypass, and that reset is a *specification* value: no IOMMU RTL exists in `jcore-cpu` or `jcore-soc` at `origin/master` (case-insensitive `iommu`, `bmid`: zero files). C2a's design landed and does **not** move this item — its windows sit inside the GPU, one master port down from where L2 acts | C2d |
+| L2 | **NOT MET** — every clause is now *specified* ([iommu/hardware-spec.md §3.10](../iommu/hardware-spec.md) `I-R1`–`I-R10`, C2d) and *unbuilt*. Reset is deny in the specification; no IOMMU RTL exists in `jcore-cpu` or `jcore-soc` at `origin/master` (case-insensitive `iommu`, `bmid`, `iotlb`, `dvma`: zero files in both), so `I-E0`–`I-E5` are written and not runnable. **The prerequisite is larger than the IOMMU:** the J-Core bus carries no master identifier at all (`cpu2j0_pkg.vhd`'s `cpu_data_o_t` is `{en,a,rd,wr,we,d}`; the DDR mux tells masters apart by port position), so there is no field to put a BMID in. **The item's *launch-blocker* condition is separately `N/A` today** and must be recorded rather than skipped: §8 L2 makes it blocking only for a configuration with a tenant-influenced DMA master, and there is **no DMA master at all** — `components/dma/` is a stub with no entity and `dma_dbus_o` is tied to zero on all four boards. `N/A`-as-blocker does not make the item `MET`. C2a's design landed and does **not** move this item — its windows sit inside the GPU, one master port down from where L2 acts | the RTL that builds a BMID-carrying fabric and an IOMMU |
 | L3 | **NOT MET** — eager-across-tenants specified by C1b; *specified, unbuilt* — no FPU and no SIMD unit exists to run the five residue tests on. C1c's design landed and does **not** bear on this item: its defect is intra-tenant (§8 L3) | the RTL that builds an FPU |
 | L4 | **NOT MET** — the I-side walk arm is now *specified* ([mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) W-R1–W-R5, C2b) and unimplemented; the frontend rules of the paused specs are tightened but remain specified for cores that do not exist. **Not the same category as L2/L3/L6:** the transmitters are on `origin/master` today, so what is missing is RTL against shipping hardware, not hardware to test | C2b |
 | L5 | **NOT MET** — way-partitioning specified; metadata, L2 MSHRs, bandwidth, KSM, flush-op gating all open | C2e |
@@ -1573,4 +1645,17 @@ And for §7.2, which is what retires the "non-speculative core" premise:
   §10 at that moment is not optional tidying; it is the third clause of that
   item.
 - **A tenant-influenced DMA master is added**, which flips L2 from `N/A` to
-  blocking for that configuration.
+  blocking for that configuration. *(C2d, 2026-09-09: this is now the sharpest live
+  trigger in this list, because it is the only bar item whose blocking status turns on
+  a single RTL instantiation. `jcore-soc:targets/boards/*/soc.vhd` tying `dma_dbus_o`
+  to a constant zero is the fact that keeps it `N/A`; one board wiring that leg is the
+  whole of the change.)*
+- **The bus record gains a master-identifier field** — `jcore-cpu:cpu2j0_pkg.vhd`'s
+  `cpu_data_o_t` grows a BMID. That is the T0→T1 step
+  ([bus/fabric-spec.md §0](../bus/fabric-spec.md)) and the point at which every
+  `I-E` guard in [iommu/hardware-spec.md §10.1](../iommu/hardware-spec.md) becomes
+  runnable rather than written. *(C2d)*
+- **`arch/sh` gains a `cacheops-` arm for `CPU_JCORE`.** Today the J4 build compiles
+  none, so every DMA cache-maintenance call is a no-op
+  ([decisions/0010](../decisions/0010-dma-coherence-is-software-maintained.md)). This
+  is the only C2d finding that is reachable on hardware that exists. *(C2d)*
