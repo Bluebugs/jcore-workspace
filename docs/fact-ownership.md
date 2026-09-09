@@ -137,6 +137,32 @@ is explicit that the pointer is not evidence, and it currently lags by months.
 Checking the docs against a stale pointer would report agreement with code
 nobody runs.
 
+**A row may only name a submodule CI actually provisions**, which
+`ci-provisions-submodules` is what enforces. The `Code` cell is a promise that
+the comparison can be *made*, and that promise is kept in a second file —
+[`.github/workflows/docs-gate.yml`](../.github/workflows/docs-gate.yml), which
+clones the submodules the gate reads. Nothing made the two agree, and the gap is
+silent in the expensive direction: a developer has every submodule checked out,
+so a row naming an unprovisioned one passes locally and surfaces in CI as
+`(skipped, --strict)` — after review, after a push, on someone else's time. Not
+hypothetical: `biendian.ifetch.select` is the row it happened to and `jcore-soc`
+is the submodule.
+
+The check requires **all three** provisioning sites in that workflow — the
+`git submodule update --init` argument list, the per-submodule
+`git … fetch … origin <integration-branch>` line, and the shallow-clone guard
+loop — because each one missing leaves the same binding unverifiable, only with
+a different message and at a different step. A submodule cloned without its
+integration branch fetched fails immediately after the checkout succeeds;
+[0002 §2](decisions/0002-supersede-convention.md) is why the branch and not the
+pointer is what has to arrive. It also covers the two submodule reads that are
+*not* rows in this table — `p4-offsets-match-rtl` and `one-encoding-database` —
+so deleting the last row naming a submodule cannot quietly drop a requirement
+those two still have. A workflow the check can no longer parse is a failure
+naming the site that moved, not a pass: an unparseable workflow would otherwise
+report every submodule as missing, which is a pile of confident wrong findings
+in place of one true one.
+
 Relations, enumerated (an unknown name is a failure, not a no-op): `eq` (both
 decimal), `eq-hex` (both hexadecimal, compared numerically),
 `bytes-from-shift` (doc bytes = 2^code) and `eq-text` (neither side is a

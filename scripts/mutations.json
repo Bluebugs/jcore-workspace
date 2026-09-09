@@ -61,6 +61,13 @@
      "new": "                if False:"},
     {"name": "wording: retired-marking arm dropped",
      "old": "            if RETIRED_MARKING_RE.search(line):",
-     "new": "            if False:"}
+     "new": "            if False:"},
+    {"name": "ci-provisions: clone arm dropped", "old": "        if repo not in cloned:", "new": "        if False:"},
+    {"name": "ci-provisions: fetch arm dropped", "old": "        if repo not in fetched:", "new": "        if False:"},
+    {"name": "ci-provisions: wrong-branch arm dropped", "old": "        elif branch not in fetched[repo]:", "new": "        elif False:"},
+    {"name": "ci-provisions: shallow-guard arm dropped", "old": "        if repo not in shallow_checked:", "new": "        if False:"},
+    {"name": "ci-provisions: a moved provisioning site reads as an empty one", "old": "        if not found:\n            missing_site = True", "new": "        if False:\n            missing_site = True"},
+    {"name": "ci-provisions: unreadable workflow returns instead of skipping", "old": "        report.skip(\"ci-provisions-submodules\",", "new": "        return\n        report.skip(\"ci-provisions-submodules\","},
+    {"name": "ci-provisions: shell line continuations no longer folded", "old": "    text = re.sub(r\"\\\\\\n\\s*\", \" \", body)", "new": "    text = body"}
   ]
 }

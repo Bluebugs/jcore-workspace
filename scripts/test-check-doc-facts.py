@@ -190,6 +190,38 @@ end architecture;
 SIZES_VHD = """entity sizes is generic (image_bytes => 520); end entity;
 """
 
+# The gate's own workflow, as `ci-provisions-submodules` reads it. Written out
+# here rather than copied from `.github/` so a case can remove ONE provisioning
+# site at a time: the check's claim is that all three are required, and a
+# fixture that could only delete all of them at once could not tell that claim
+# apart from "the clone list is required".
+#
+# It names `jcore-cpu` because that is what this fixture's binding row binds to
+# AND what the checker's two hardcoded submodule reads (the P4 decode, the
+# encoding database) name. A fixture tree with no workflow at all is a separate
+# pair of cases below, not the default: the default has to be a tree that
+# passes, or every one of the other cases would be asserting two things.
+WORKFLOW = """name: docs-gate
+jobs:
+  docs-gate:
+    steps:
+      - name: Check out the submodules the checks actually read
+        run: |
+          set -euo pipefail
+          git submodule update --init --filter=tree:0 -- jcore-cpu
+      - name: Fetch the integration branches the markers resolve against
+        run: |
+          set -euo pipefail
+          git -C jcore-cpu fetch --filter=tree:0 origin master
+          for sub in jcore-cpu; do
+            if [ "$(git -C "$sub" rev-parse --is-shallow-repository)" = "true" ]; then
+              echo "::error::$sub is a shallow clone"
+              exit 1
+            fi
+          done
+      - run: python3 scripts/check-doc-facts.py --strict --check-waivers
+"""
+
 
 def fake_repo(root, name, branch, files, with_origin=False, shallow=False,
               raw_subject=None, dup_subject=None, base_branch=None,
@@ -372,10 +404,17 @@ def write_in(tmp, path, text):
 def build(tmp, registry=REGISTRY, glossary=GLOSSARY, simd=SIMD, extra=None,
           p4_map=P4_MAP, cpu_files=None, no_cpu_repo=False, cpu_origin=False,
           cpu_shallow=False, cpu_raw_subject=None, cpu_dup=None,
-          cpu_base=None, cpu_origin_branches=(), cpu_grafted=False):
+          cpu_base=None, cpu_origin_branches=(), cpu_grafted=False,
+          workflow=WORKFLOW):
     docs = os.path.join(tmp, "docs")
     os.makedirs(sandboxed(tmp, os.path.join(docs, "decisions")), exist_ok=True)
     write_in(tmp, os.path.join(docs, "fact-ownership.md"), registry)
+    # Outside docs/ on purpose: this is the tree's CI, and the check that reads
+    # it is the one asserting the registry and the workflow agree. `None` means
+    # a tree with no workflow, which is unverifiable rather than clean.
+    if workflow is not None:
+        write_in(tmp, os.path.join(tmp, ".github", "workflows", "docs-gate.yml"),
+                 workflow)
     write_in(tmp, os.path.join(docs, "glossary.md"), glossary)
     write_in(tmp, os.path.join(docs, "simd.md"), simd)
     if p4_map is not None:
@@ -1134,6 +1173,163 @@ def _(tmp):
     build(tmp, registry=REGISTRY.replace("`image is (\\d+) bytes`",
                                          "`image is (\\w+)-endian`"),
           simd=SIMD.replace("image is 520 bytes", "image is big-endian"))
+
+
+# ------------------------------------------------- ci-provisions-submodules
+#
+# The failure this reproduces happened, and the transcript is in the checker's
+# comment: `biendian.ifetch.select` became the first binding row to name
+# `jcore-soc`, `.github/workflows/docs-gate.yml` checked out two submodules,
+# and under `--strict` CI reported
+#
+#   FAIL [doc-matches-code] (skipped, --strict) jcore-soc is not checked out
+#
+# while every local run stayed green, because a developer has all the
+# submodules. The registry and the workflow have to agree and nothing made them
+# agree. These cases are that "nothing", filled in.
+
+# The binding row the default REGISTRY carries, so the rows below are edits of
+# the real thing rather than a second copy that drifts from it.
+CPU_BINDING_ROW = ("| `simd.context` | `image is (\\d+) bytes` | "
+                   "`jcore-cpu:core/sizes.vhd` | `image_bytes\\s*=>\\s*(\\d+)`"
+                   " | `eq` |")
+assert CPU_BINDING_ROW in REGISTRY
+SOC_BINDING_ROW = ("| `simd.context` | `image is (\\d+) bytes` | "
+                   "`jcore-soc:core/sizes.vhd` | `image_bytes\\s*=>\\s*(\\d+)`"
+                   " | `eq` |")
+
+# One registry, shared by the failing case and its passing control, so the two
+# differ ONLY in the workflow. A control built from different registry data
+# could pass for a reason the failing case never exercised.
+SOC_REGISTRY = REGISTRY.replace(CPU_BINDING_ROW,
+                                CPU_BINDING_ROW + "\n" + SOC_BINDING_ROW)
+
+# The same workflow with `jcore-soc` added at all three sites: the fix that was
+# actually applied.
+SOC_WORKFLOW = (
+    WORKFLOW
+    .replace("-- jcore-cpu\n", "-- jcore-cpu jcore-soc\n")
+    .replace("          git -C jcore-cpu fetch --filter=tree:0 origin master\n",
+             "          git -C jcore-cpu fetch --filter=tree:0 origin master\n"
+             "          git -C jcore-soc fetch --filter=tree:0 origin master\n")
+    .replace("for sub in jcore-cpu;", "for sub in jcore-cpu jcore-soc;"))
+assert SOC_WORKFLOW.count("jcore-soc") == 3
+
+
+@case("a binding naming a submodule CI never checks out fails", True,
+      expect_check="ci-provisions-submodules",
+      expect_text="never checks out")
+def _(tmp):
+    # THE reproduction. Locally this tree is fine; in CI the comparison cannot
+    # run, and the only thing that would have said so is a red CI run.
+    build(tmp, registry=SOC_REGISTRY)
+
+
+@case("the same binding passes once the workflow provisions the submodule",
+      False, reject_text="ci-provisions-submodules")
+def _(tmp):
+    # Shares SOC_REGISTRY with the case above: the ONLY difference is the
+    # workflow. `reject_text` rather than exit status alone, because a fixture
+    # tree exits 0 for many reasons and "this check stayed quiet" is the claim.
+    build(tmp, registry=SOC_REGISTRY, workflow=SOC_WORKFLOW)
+
+
+@case("checked out but never fetched fails -- the pointer is not evidence",
+      True, expect_check="ci-provisions-submodules",
+      expect_text="never fetches its integration branch")
+def _(tmp):
+    # 0002 section 2. `submodule update` leaves the pinned pointer, and the
+    # checks read origin/<branch>; this is the state the fix for the real
+    # failure had to add as an afterthought, one step later than the clone.
+    build(tmp, registry=SOC_REGISTRY,
+          workflow=SOC_WORKFLOW.replace(
+              "          git -C jcore-soc fetch --filter=tree:0 origin master\n",
+              ""))
+
+
+@case("fetching the wrong integration branch fails", True,
+      expect_check="ci-provisions-submodules", expect_text="INTEGRATION_BRANCH")
+def _(tmp):
+    # Provisioned, fetched, shallow-checked -- and the ref that arrives is not
+    # the one any check resolves against. `linux` is fetched at origin/jcore,
+    # so this is a copy-paste away rather than exotic.
+    build(tmp, registry=SOC_REGISTRY,
+          workflow=SOC_WORKFLOW.replace(
+              "git -C jcore-soc fetch --filter=tree:0 origin master",
+              "git -C jcore-soc fetch --filter=tree:0 origin jcore"))
+
+
+@case("a submodule outside the shallow-clone guard fails", True,
+      expect_check="ci-provisions-submodules",
+      expect_text="shallow-clone guard loop")
+def _(tmp):
+    build(tmp, registry=SOC_REGISTRY,
+          workflow=SOC_WORKFLOW.replace("for sub in jcore-cpu jcore-soc;",
+                                        "for sub in jcore-cpu;"))
+
+
+@case("an unrelated `for` loop is not the shallow guard", True,
+      expect_check="ci-provisions-submodules",
+      expect_text="no shallow-check site")
+def _(tmp):
+    # The loop is located by what it DOES, not by being a loop. A workflow that
+    # grew a loop over something else and lost this one must read as
+    # unprovisioned rather than as provisioned by the wrong loop.
+    build(tmp, registry=SOC_REGISTRY,
+          workflow=SOC_WORKFLOW.replace(
+              'if [ "$(git -C "$sub" rev-parse --is-shallow-repository)" = "true" ]; then',
+              'if [ -d "$sub" ]; then'))
+
+
+@case("a workflow with no submodule-update line fails as a moved site", True,
+      expect_check="ci-provisions-submodules", expect_text="no clone site")
+def _(tmp):
+    # Not "every submodule is missing" -- one true finding rather than a pile
+    # of confident wrong ones. The day someone rewrites this around
+    # actions/checkout's own submodule support, this is the message they need.
+    build(tmp, registry=SOC_REGISTRY,
+          workflow=SOC_WORKFLOW.replace(
+              "git submodule update --init --filter=tree:0 -- jcore-cpu jcore-soc",
+              "echo provisioning happens elsewhere now"))
+
+
+@case("a wrapped argument list still counts as provisioning", False,
+      reject_text="ci-provisions-submodules")
+def _(tmp):
+    # Shell line continuations are folded before the sites are read. Wrapping a
+    # long list across lines is an ordinary edit and must not empty a site --
+    # a check that fires on reformatting is a check that gets deleted.
+    build(tmp, registry=SOC_REGISTRY,
+          workflow=SOC_WORKFLOW.replace(
+              "-- jcore-cpu jcore-soc",
+              "\\\n            -- jcore-cpu \\\n            jcore-soc"))
+
+
+@case("a submodule read by no binding, only by the P4 check, is still required",
+      True, expect_check="ci-provisions-submodules",
+      expect_text="p4-offsets-match-rtl")
+def _(tmp):
+    # `jcore-cpu` is read by the P4 decode comparison and the encoding database
+    # whether or not any row binds to it. A check that walked the bindings
+    # table alone would go quiet the day the last jcore-cpu row was deleted,
+    # while two hardcoded reads carried on needing it.
+    build(tmp, registry=REGISTRY.replace(CPU_BINDING_ROW, SOC_BINDING_ROW),
+          workflow=SOC_WORKFLOW.replace(" jcore-cpu", "").replace(
+              "          git -C jcore-cpu fetch --filter=tree:0 origin master\n",
+              ""))
+
+
+@case("no workflow at all SKIPS, and the skip exits 0 without --strict", False)
+def _(tmp):
+    build(tmp, workflow=None)
+
+
+@case("no workflow at all fails under --strict", True,
+      expect_check="ci-provisions-submodules", flags=("--strict",))
+def _(tmp):
+    # The pair 0002 asks for everywhere else in this suite: unverifiable is not
+    # clean, and --strict is what says so.
+    build(tmp, workflow=None)
 
 
 # --------------------------------------------------- p4-offsets-match-rtl
