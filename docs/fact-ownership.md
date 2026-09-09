@@ -105,6 +105,8 @@ are the substitute for a check that cannot be written cleanly — see
 | `fpu.fpds` | `FPDS`: 2-bit FP dirty state, per thread context, hyperprivileged-only, **not** in the FPU image | [fpu/spec.md §7.7](fpu/spec.md) | `\bFPDS\b` |
 | `simd.vds` | `VDS`: 2-bit SIMD dirty state, per thread context, hyperprivileged-only, **not** `SR.VD` | [simd/spec.md §2.6.1](simd/spec.md) | `\bVDS\b` |
 | `security.l6.undefined` | **1** open `undefined` site under bar item L6: `movca.l`'s L2 line (C2e) | [security/threat-model.md §8](security/threat-model.md) | `\*\*1\*\* open .undefined. site` |
+| `simd.fp.ownership` | FP SIMD requires FPU ownership (`SR.FD` = 0); rules `S-R1`–`S-R5` | [simd/spec.md §2.4.1](simd/spec.md) | `\bS-R[1-5]\b` |
+| `fpu.kernelfpu` | Kernel-mode FP/SIMD rules `K-R1`–`K-R5`; the exit scrub is `K-R3` | [fpu/spec.md §6.3.1](fpu/spec.md) | `\bK-R[1-5]\b` |
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
@@ -136,6 +138,23 @@ image, and saying so is the check —
 [fpu/spec.md §7.7](fpu/spec.md) argues why its two dirty bits are not context
 state, and if that argument were wrong the FPU image's field table would have to
 change and `context-image-sums` would see it.
+Wave-3 **C1c** added `simd.fp.ownership` and `fpu.kernelfpu`, both name facts of
+the `fpu.fpds` / `simd.vds` kind, and **changed no existing row** — in particular
+not `hyp.gangswitch.items`, because C1c adds no gang-switch item: the defect it
+fixes is intra-tenant, and the cross-tenant direction of the same registers was
+closed by C1b's FP-R3. **What these two rows buy, and what they do not.** They buy
+that a document mentioning `S-R1` or `K-R3` must link the spec that defines it,
+which is the defence against a second rule of the same name appearing in
+`hypervisor/hardware-spec.md` or in a Linux-side document. They do **not** check
+that the rules say anything in particular: `owner-has-fact` is satisfied by the
+owner mentioning the token at all, so **rewriting `S-R1` to say the opposite would
+pass**, and C1c confirmed that by perturbation rather than by assuming it. The
+same weakness applies to every name fact in this table and is stated here once.
+C1c also added no `## Code bindings` row and no `## Image layouts` row, for
+C1b's reason: no FPU or SIMD unit exists in `jcore-cpu@origin/master`, no
+`kernel_fpu` API exists in `linux@origin/jcore`, and neither rule set changes a
+context image.
+
 B1 added `ooo.uops.rte`, `platform.endianness`, `platform.fmax.floor`,
 `platform.fmax.j4.floor`, `platform.j4`, `mmu.l1.pipt`, `cache.l1d.write`,
 `cache.l1.index`, `cache.l2.ebr`, `ooo.gates.core`, `mmu.p4.segment`,

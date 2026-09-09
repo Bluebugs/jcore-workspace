@@ -892,10 +892,28 @@ one — and make the no-saved-image branch the *same* write as the ordinary one
 rather than a second path, which is what stops a save/restore test between two
 established owners from passing over it. Five residue tests are specified and
 none has been run: there is no FPU and no SIMD unit in `jcore-cpu@origin/master`.
-The item also still carries C1c's half, the `FPSCR` ownership fix and the
-kernel-`fpu` discipline, which C1b does not touch.
 
-**Gated Wave-3 items:** C1b, C1c.
+**C1c's half landed 2026-09-09, and it does not move this item either — for a
+different reason from C1b's, and the difference is worth stating.** C1c found
+what [j4-remediation-plan.md §C1](../j4-remediation-plan.md) called the "vertical
+FP SIMD ownership hole" and it is real: [simd/spec.md §2.4](../simd/spec.md) makes
+every governed FP operation a reader of `FPSCR.RM` and, under `VCSR.IEE = 1`, a
+writer of `FPSCR.FLAG`, while the FPU-ownership requirement was attached to the
+FP-scalar writeback of a horizontal reduction alone — so a **vertical** FP block
+read and wrote `FPSCR` with `SR.FD = 1`, taking its rounding mode from and
+returning its sticky flags to whichever context was parked as the FPU's owner.
+[simd/spec.md §2.4.1](../simd/spec.md) closes it.
+
+**But it is not a cross-tenant channel, and this item's boundary is the tenant.**
+C1b's FP-R1 and FP-R3 already name `FPSCR` in the scrub value and apply it
+unconditionally at every ownership installation, so the incoming tenant reads
+`FPSCR`'s reset value whatever the outgoing tenant's SIMD did. What C1c fixes is a
+wrong-rounding-mode correctness defect and a channel **between two tasks inside one
+guest** — which no item of this bar requires, exactly as §10 item 7 says of the
+intra-guest AnC primitive. **L3 is unchanged by it**, and stays `NOT MET` for
+C1b's reason: five residue tests, nothing to run them on.
+
+**Gated Wave-3 items:** C1b. C1c's design is done and adds no clause to this item.
 
 ### L4 — Speculation covers loads **and** the frontend
 
@@ -1051,7 +1069,7 @@ which bar they must clear.
 |---|---|---|
 | **C1a** SQ residue *(design landed 2026-09-09; no RTL possible — see §7.8)* | **L6**, and **L1**'s added clause | The gang-switch list of [hypervisor §4.7.1](../hypervisor/hardware-spec.md) did not mention the store queue; adding the scrub without adding it to *that list* would have left L1 unmet. It is item 7 there now. The clause most likely to be missed **next** is that neither bar item moved to `MET`: there is no store-queue RTL to test |
 | **C1b** eager FP/SIMD switch *(design landed 2026-09-09; no RTL possible — see §7.8)* | **L3**, **L6**, **L1**'s added clause | L3's *no-saved-image* branch — an eager save/restore between two established owners passes without touching it (§7.8). The clause most likely to be missed **next** is that the branch is not the only one: `HEDR[3]`/`HEDR[24]` delegation hands the first-use trap to the guest, so a scrub written into that handler is switched off by configuration |
-| **C1c** FPSCR ownership | **L3** | — |
+| **C1c** FPSCR ownership *(design landed 2026-09-09; **the fix is above this bar, not on it** — see §8 L3)* | **L3**, and it turns out **none of L3** | That the defect is **not** cross-tenant. C1b's FP-R3 already scrubs `FPSCR`, so the exposure is between two tasks inside one guest: wrong rounding mode from the parked FPU owner's `FPSCR.RM`, sticky flags accumulated into it. The clause most likely to be missed **next** is [simd/spec.md §2.4.1](../simd/spec.md) **S-R2** — the natural optimisation is to require ownership only when `VCSR.IEE = 1`, since that is when `FPSCR` is *written*, and it leaves the `FPSCR.RM` read open in the **default** mode. The second is **S-R3**: §3.2's prefix encodes `H`/`ww`/`rrr`/`N` and nothing that says FP, so "checked at prefix decode" is unimplementable without scanning the block's governed opcodes |
 | **C2a** GPU protection | **L2** | L2 is `N/A` only while no tenant-influenced DMA master exists. The GPU *is* one, so C2a flips L2 to blocking |
 | **C2b** speculation coverage | **L4**, **L7** part 4 | The **TSB walk** is a frontend transmitter (§7.2), and the I-side arm is on the *in-order* core too. Also: §12's code-level trigger — making the walk uncacheable flips §7.1 |
 | **C2c** FGMT microreset | **L1** | The detector. "An unenforceable rule with no detector is not a control" |
@@ -1065,7 +1083,7 @@ which bar they must clear.
 |---|---|---|
 | L1 | **NOT MET** — rule specified; gang-switch list complete as a specification (item 7 C1a, item 8 C1b); no detector, and no item on the list demonstrated | C2c |
 | L2 | **NOT MET** — reset is all-bypass | C2d |
-| L3 | **NOT MET** — eager-across-tenants specified by C1b; *specified, unbuilt* — no FPU and no SIMD unit exists to run the five residue tests on | C1c, and the RTL that builds an FPU |
+| L3 | **NOT MET** — eager-across-tenants specified by C1b; *specified, unbuilt* — no FPU and no SIMD unit exists to run the five residue tests on. C1c's design landed and does **not** bear on this item: its defect is intra-tenant (§8 L3) | the RTL that builds an FPU |
 | L4 | **NOT MET** — specified for cores that do not exist; I-side walk arm uncovered on the core that does | C2b |
 | L5 | **NOT MET** — way-partitioning specified; metadata, L2 MSHRs, bandwidth, KSM, flush-op gating all open | C2e |
 | L6 | **NOT MET** — **1** open `undefined` site, was three; the store-queue and FP/SIMD sites are *specified, unbuilt* — the scrubs are stated and `jcore-cpu` has neither queues nor an FPU to run the residue tests on | C2e, and the RTL that builds the queues and the FPU |
@@ -1181,7 +1199,7 @@ close one is scope expansion, not compliance.
    miss ([mmu/hardware-spec.md §7.0](../mmu/hardware-spec.md)) — is a
    data-dependent hardware signal on the fast path, where the old review assumed
    a software slow path.
-7. **[accepted, by omission — the uncomfortable one]** **The AnC primitive of §7.1, intra-guest.** No bar item covers it, so launch would ship it open. That is a decision this document is making by not making it, and §11 gives it an owner.
+7. **[accepted, by omission — the uncomfortable one]** **The AnC primitive of §7.1, intra-guest.** No bar item covers it, so launch would ship it open. That is a decision this document is making by not making it, and §11 gives it an owner. **A second instance turned up on 2026-09-09 and this time it was closed anyway:** Wave-3 C1c found that a vertical FP SIMD block read and wrote another *task's* `FPSCR` inside one guest ([simd/spec.md §2.4.1](../simd/spec.md)). No bar item required the fix — L3's boundary is the tenant — and it was made because the same defect gives wrong FP results. **Two intra-guest channels found, one closed for a reason unrelated to this bar, is not a policy**, and it is the evidence that the omission above is a real gap rather than a theoretical one.
 8. **[gated — L1]** **Gang-switch residue in any structure the §4.7.1 list omits.** The list is
    the control; anything absent from it is a channel. Both structures this document named left the
    omitted set on 2026-09-09 — the store-queue buffers as

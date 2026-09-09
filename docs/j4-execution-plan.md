@@ -109,7 +109,7 @@ minimize-loss step is settled.
 |---|---|---|---|---|
 | C1a | SQ buffer residue scrub + defined-safe guest reads. **Design DONE 2026-09-09** — [sq/spec.md §6.5](sq/spec.md), [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md) item 7. **The implementation half is not dispatchable and this row's `docs → jcore-cpu` is wrong as written** — see below. | docs → jcore-cpu | Opus | *blocked on the queues existing* |
 | C1b | Eager (across-tenant) FP/SIMD switch + register scrub; 2-bit dirty tracking; movmu-style bulk save. **Design DONE 2026-09-09** — [fpu/spec.md §7.7](fpu/spec.md), [simd/spec.md §2.6.1](simd/spec.md), [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md) item 8. **The implementation half is not dispatchable in either repo** — see below. | docs → jcore-cpu + linux | Opus | *blocked on an FPU existing* |
-| C1c | Vertical-FP-SIMD FPSCR ownership fix + kernel-fpu discipline. | docs → linux | Opus | Sonnet |
+| C1c | Vertical-FP-SIMD FPSCR ownership fix + kernel-fpu discipline. **Design DONE 2026-09-09** — [simd/spec.md §2.4.1](simd/spec.md), [fpu/spec.md §6.3.1](fpu/spec.md), [simd/spec.md §2.6.2](simd/spec.md). **The defect is real and is *not* the bar item this row is filed under; the implementation half is not dispatchable in `linux`** — see below. | docs → linux | Opus | *blocked on an FPU existing* |
 | C2a | GPU memory protection (base+bounds or IOMMU/BMID) — launch blocker before user shaders. | docs → jcore-cpu | Opus | Opus |
 | C2b | Speculation: delay-on-miss + frontend coverage (commit-time predictor updates, tenant-tagged BTB, degenerate-STT taint, delayed spec TLB/PTW). | docs → jcore-cpu | Opus | Opus |
 | C2c | FGMT single-tenant-core + fence.t-style microreset on realloc. | docs → jcore-cpu | Opus | Opus |
@@ -148,6 +148,36 @@ and C1b's design is entirely hypervisor-side and guest-invisible by construction
 with `CONFIG_SH_FPU` on would have nothing to change. `docs → jcore-cpu + linux` is therefore wrong
 in both directions for this row, and the `Implement Opus` cell describes work that cannot be
 started.
+
+**C1c reverses this table too, and it also reverses the reason it was scheduled.**
+Three findings, in the order they matter.
+
+1. **The defect is real, and [j4-remediation-plan.md §C1](j4-remediation-plan.md) already stated it
+   precisely** — "close the case where SIMD reads/writes FPSCR while SR.FD=1 and FPSCR belongs to
+   the parked owner (wrong rounding-mode + sticky-flag corruption)". [simd/spec.md §2.4](simd/spec.md)
+   makes every governed FP operation read `FPSCR.RM` and, under `VCSR.IEE = 1`, write
+   `FPSCR.FLAG`; the ownership requirement was attached to the FP-scalar writeback path alone, so a
+   **vertical** FP block never took it. §2.1 of that document said in so many words that no SIMD
+   instruction reads or writes `FPSCR`, which was false against its own §2.4 *and* its own §5.7.
+   The fix is [simd/spec.md §2.4.1](simd/spec.md).
+2. **It is not a cross-tenant channel, so it does not bear on L3**, the bar item the
+   [security/threat-model.md](security/threat-model.md) reverse index files it under. C1b's FP-R1
+   and FP-R3 already name `FPSCR` in the scrub value and apply it unconditionally at every
+   ownership installation, so the tenant boundary was closed before C1c looked at it. What C1c
+   fixes is a wrong-rounding-mode correctness defect and a channel between two tasks **inside one
+   guest**, which no item of that bar requires. **C1c makes a fix the security bar does not ask
+   for, and L3 is exactly where it was.**
+3. **The `linux` half is not dispatchable, and "kernel-`fpu` discipline" does not mean what the row
+   implies.** There is no `kernel_fpu_begin` under `arch/sh` in `linux@origin/jcore` (`128e8958`),
+   `arch/sh` does not select `ARCH_HAS_KERNEL_FPU_SUPPORT`, and there is no consumer that would
+   call one — no `arch/sh/crypto`, no `lib/crypto/sh`, no `lib/raid/raid6/sh`, and no SH hook in
+   generic `crypto/`, `lib/crc/` or `lib/raid/`. What `arch/sh` *does* have is a rule stronger than
+   the generic kernel contract: `arch/sh/kernel/cpu/fpu.c` `BUG()`s on an `SR.FD` trap taken from
+   kernel mode — and it is inside `#ifdef CONFIG_SH_FPU`, which C1b established cannot be set on
+   this target. So the discipline exists, is correct, and is compiled out, and there is nothing for
+   Sonnet to add. The rules are [fpu/spec.md §6.3.1](fpu/spec.md) and
+   [simd/spec.md §2.6.2](simd/spec.md), and they bind the task that lands `CPU_HAS_FPU`, which this
+   plan does not contain.
 
 One further plan item did not survive checking. §E.10 prices C1's fix as
 "movmu-style bulk save + per-register zero bit + background scrub", which reads as three cost
