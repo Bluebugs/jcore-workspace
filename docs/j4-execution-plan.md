@@ -107,7 +107,7 @@ minimize-loss step is settled.
 
 | # | Task | Repo(s) | Design | Implement |
 |---|---|---|---|---|
-| C1a | SQ buffer residue scrub + defined-safe guest reads. | docs → jcore-cpu | Opus | Opus |
+| C1a | SQ buffer residue scrub + defined-safe guest reads. **Design DONE 2026-09-09** — [sq/spec.md §6.5](sq/spec.md), [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md) item 7. **The implementation half is not dispatchable and this row's `docs → jcore-cpu` is wrong as written** — see below. | docs → jcore-cpu | Opus | *blocked on the queues existing* |
 | C1b | Eager (across-tenant) FP/SIMD switch + register scrub; 2-bit dirty tracking; movmu-style bulk save. | docs → jcore-cpu + linux | Opus | Opus |
 | C1c | Vertical-FP-SIMD FPSCR ownership fix + kernel-fpu discipline. | docs → linux | Opus | Sonnet |
 | C2a | GPU memory protection (base+bounds or IOMMU/BMID) — launch blocker before user shaders. | docs → jcore-cpu | Opus | Opus |
@@ -115,6 +115,19 @@ minimize-loss step is settled.
 | C2c | FGMT single-tenant-core + fence.t-style microreset on realloc. | docs → jcore-cpu | Opus | Opus |
 | C2d | IOMMU default-deny + per-device block + no global-match IOTLB + coherent-DMA owner. | docs → jcore-cpu + jcore-soc + linux | Opus | Opus |
 | C2e | Cache isolation beyond ways (DAWG-semantics metadata + MSHR reservation + bandwidth QoS + per-tenant KSM + privileged flush ops). | docs → jcore-cpu + linux | Opus | Opus |
+
+**C1a's implementation step reverses this table, and the reversal is recorded rather than
+absorbed.** This plan schedules every C-item as design-then-implement in the same wave. C1a cannot
+be: there is **no store queue in `jcore-cpu` or `jcore-soc` at all** — no region decode, no
+buffers, no `QACR0`/`QACR1`, no SH-4 `PREF` — so there is no artifact for an implementer to add a
+scrub to. The rules in [sq/spec.md §6.5](sq/spec.md) are not a follow-on to the baseline queues of
+that document's §1–§5; they must land **inside** whatever task builds them, for the reason
+[sq/spec.md §6.4](sq/spec.md) gives about the byte-order mode: the
+[hypervisor/hardware-spec.md §4.4.3](hypervisor/hardware-spec.md) carve-out is enabled with the
+queues, and after that there is no point at which a guest would notice a missing scrub. So the
+Wave-3 implementer for C1a is not "an implementer for C1a" — it is the store-queue task, and it
+does not exist in this plan. Until it does, **L6**'s store-queue site is specified and unbuilt, and
+no residue test can be run red, which is the precondition for running one green.
 
 ### Final
 
