@@ -99,7 +99,9 @@ wire away, on a different block".
 **they do no work at all.**
 
 - `arch/sh/mm/Makefile:8-14` selects a cache-operations file on `CPU_J2`,
-  `CPU_SUBTYPE_SH7619`, `CPU_SH2A`, `CPU_SH3` or `CPU_SH4`.
+  `CPU_SUBTYPE_SH7619`, `CPU_SH2A`, `CPU_SH3` or `CPU_SH4`. The first arm is the one
+  that matters here, and it is the value this record is code-bound to: the
+  `cacheops-` selector keys on `CPU_J2`.
 - `arch/sh/configs/jcore_defconfig:1` sets `CONFIG_CPU_SUBTYPE_JCORE=y`, which selects
   `CPU_JCORE`, which selects **`CPU_SH2`** — not `CPU_J2`, and `j2_defconfig` is a
   separate file. **`cacheops-y` is empty for the J4 build.**

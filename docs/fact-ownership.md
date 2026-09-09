@@ -113,6 +113,9 @@ are the substitute for a check that cannot be written cleanly — see
 | `mmu.walk.spec` | I-side walk speculation rules `W-R1`–`W-R5`; the arm delay is `W-R1` | [mmu/hardware-spec.md §5.0a](mmu/hardware-spec.md) | `\bW-R[1-5]\b` |
 | `hyp.microreset.classes` | Structure classes the microreset clears: **4** | [hypervisor/hardware-spec.md §4.7.1a](hypervisor/hardware-spec.md) | `\*\*4\*\* structure classes` |
 | `hyp.tenancy.rules` | Tenancy-check rules `T-R1`–`T-R5`; the refusal is `T-R2` | [hypervisor/hardware-spec.md §4.7.2](hypervisor/hardware-spec.md) | `\bT-R[1-5]\b` |
+| `iommu.deny.rules` | IOMMU default-deny rules `I-R1`–`I-R10`; reset polarity `I-R1`, `GLOBAL` removal `I-R5` | [iommu/hardware-spec.md §3.10](iommu/hardware-spec.md) | `\bI-R(?:10\|[1-9])a?\b` |
+| `iommu.bypass.paths` | Paths reaching memory with no IOTLB permission check: **7** | [iommu/hardware-spec.md §3.10](iommu/hardware-spec.md) | `\*\*7\*\* bypass paths` |
+| `cache.dma.cacheops` | J4 Linux build compiles **no** cache-operations file; `cacheops-` keys on `CPU_J2` | [decisions/0010](decisions/0010-dma-coherence-is-software-maintained.md) | `` `cacheops-` selector keys on `` |
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
@@ -422,6 +425,7 @@ formatting.
 | `biendian.dside.bytelane` | `` onto `we = "([01]+)"` — bit 3 `` | `jcore-cpu:core/datapath.vhm` | `when "00" =>\s+r\.we := "([01]+)"` | `eq-text` |
 | `biendian.ifetch.select` | `` `instr_o\.a\((\d+)\)` — an address bit `` | `jcore-soc:targets/data_bus_pkg.vhd` | `if instr_o\.a\((\d+)\) = '0' then` | `eq` |
 | `mmu.walk.spec` | `` `shadow_wr <= (\w+) and walk_side_i` `` | `jcore-cpu:core/cpu.vhd` | `shadow_wr\s*<=\s*(\w+) and walk_side_i;` | `eq-text` |
+| `cache.dma.cacheops` | `` `cacheops-` selector keys on `(CPU_\w+)` `` | `linux:arch/sh/mm/Makefile` | `cacheops-\$\(CONFIG_(CPU_J2)\)` | `eq-text` |
 
 Notes on what is deliberately **not** here, so the gaps are visible rather than
 inferred from silence:
@@ -674,6 +678,7 @@ Two escapes, and they are different things:
 | `gpu.protect.producers` | `\*\*(\d+)\*\* address producers` | `\*\*(\d+)\*\* address producers` |
 | `mmu.walk.transmitters` | `\*\*(\d+)\*\* transmitters` | `\*\*(\d+)\*\* transmitters` |
 | `hyp.microreset.classes` | `\*\*(\d+)\*\* structure classes` | `\*\*(\d+)\*\* structure classes` |
+| `iommu.bypass.paths` | `\*\*(\d+)\*\* bypass paths` | `\*\*(\d+)\*\* bypass paths` |
 
 ## Image layouts
 
