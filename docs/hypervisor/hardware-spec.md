@@ -1448,8 +1448,8 @@ restore, which is precisely the no-image branch [../security/threat-model.md §8
 
 - **Item 8 is on the *outgoing* side, at item 8's position.**
   [`FP-R3`, fpu/spec.md §7.7](../fpu/spec.md) is explicit that the gang switch writes
-  `FPDS` = `00` "because that write *is* how it
-  records that the physical file no longer belongs to the **outgoing** vCPU", and that a restore
+  [`FPDS`](../fpu/spec.md) = `00` "because that write *is* how it records that the physical file
+  no longer belongs to the **outgoing** vCPU", and that a restore
   "**if there is one**, follows and overwrites the whole file".
   Same for [`VDS`, §2.6.1 `V-R3`](../simd/spec.md). So the write happens whether or not a
   restore follows it, and a fresh vCPU gets the scrub with no restore after it.
