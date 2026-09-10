@@ -1765,7 +1765,7 @@ This is the cleaner model — it lets the kernel be the "bootloader" for the hyp
 > **Decision `H-B1`. `HYP_AT_RESET` is normative for any configuration that will host more
 > than one tenant. §7.2 is a development facility and MUST NOT be built into a tenant-facing
 > bitstream.** *(Wave-3 **C3**, 2026-09-10. This replaces the recommendation that stood here,
-> which read: "**Recommendation:** Implement both. The fuse bit (option 1) for production
+> which previously read: "**Recommendation:** Implement both. The fuse bit (option 1) for production
 > systems where the hypervisor is fully trusted; the HCALL bootstrap (option 2) for
 > development.")*
 >

@@ -322,13 +322,13 @@ either assignment.
 
 **Interrupt vectoring — this paragraph was wrong, and it was the leg Decision
 B2-3 stood on.** *(Corrected by C3, 2026-09-10.)* It previously read: *"[aic/aic2-spec.md §3.4]
-delivers at `VBR + 0x600 + vector_number * 0x20`. SH-4 has one interrupt entry point at
-`VBR + 0x600` and discriminates with `INTEVT` … The per-vector stride is a J-Core convention."*
+delivers at `VBR + 0x600 + vector_number * 0x20` ([priv-arch/design-spec.md §4.5](priv-arch/design-spec.md)). SH-4 has one interrupt entry point at
+`VBR + 0x600` ([priv-arch/design-spec.md §4.5](priv-arch/design-spec.md)) and discriminates with `INTEVT` … The per-vector stride is a J-Core convention."*
 The first sentence quoted [aic/aic2-spec.md §3.4](aic/aic2-spec.md) accurately; **§3.4 was
 itself wrong**, and the last sentence promoted one document's error into a property of the
 machine. There is no stride and there never was one. `jcore-cpu@origin/master`'s
 `decode/gen-go/spec/sh4/exceptions.toml` gives the `Interrupt` entry as
-`operation = "SPC<-PC; SSR<-SR; MD/RB/BL; IMASK; INTEVT<-vec; PC<-VBR+0x600"` with a vector
+`operation = "SPC<-PC; SSR<-SR; MD/RB/BL; IMASK; INTEVT<-vec; PC<-VBR+0x600"` ([priv-arch/design-spec.md §4.5](priv-arch/design-spec.md)) with a vector
 slot of `xbus = "VBR"`, `ybus = "1536"`, `arith = "ADD"` — a flat add of `0x600`, with the
 8-bit event vector going to `INTEVT` and never to the PC. **J-Core does exactly what SH-4
 does here**, which is what the second sentence said SH-4 does, so the two sentences described
@@ -343,7 +343,7 @@ the same behaviour and the paragraph called it a divergence anyway.
 > **The decision stands; its interrupt-vectoring leg does not, and is replaced.**
 > *(C3, 2026-09-10.)* The retired argument was "a stock SH-4 guest entered at a strided
 > vector lands somewhere its own handler table does not describe". A stock guest entered on
-> this machine's interrupt path lands at `VBR + 0x600`, which is precisely where its table
+> this machine's interrupt path lands at `VBR + 0x600` ([priv-arch/design-spec.md §4.5](priv-arch/design-spec.md)), which is precisely where its table
 > says to land. Three legs carry the decision without reference to the vector, and they are
 > stronger than the one they replace because none of them is a property of one number:
 >

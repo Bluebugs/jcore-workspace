@@ -317,7 +317,7 @@ by another name and go to `do_page_fault()` with the MMUFSR-derived
 > used to be a 256-entry *pointer table* in sh2/ex.S's layout, feeding
 > sh2/entry.S's `exception_handler` — correct for SH-2, which vectors through
 > the table and pushes PC/SR on the stack. J4 does neither. `VBR+0x100` landed
-> *inside that table* and executed a `.long` as instructions, and `VBR+0x600`
+> *inside that table* and executed a `.long` as instructions, and `VBR+0x600` ([../priv-arch/design-spec.md §4.5](../priv-arch/design-spec.md))
 > landed in whatever slow-path code followed the fast path. Only `VBR+0x400` was
 > ever right, because it was the only vector CI exercised. *Guards:
 > `mmulinuxexc` covers `+0x100` and `+0x600`; `mmulinux` covers `+0x400`.*

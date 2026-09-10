@@ -203,7 +203,7 @@ winner = argmax over sources s of (PRIO[s] | (ENABLE[s] & PEND[s] & target_match
 If `PRIO[winner] > SR.IMASK` on the owning CPU (and the CPU is not in a delay-slot / BL-blocked window), AIC2 asserts `cpu_event_i_t.irq_level = PRIO[winner]` and `vector_number = winner`. The CPU's exception logic accepts, latches `INTEVT` from the 8-bit vector, and jumps to a **single, flat** interrupt entry point — `VBR + 0x600` ([../hypervisor/hardware-spec.md §4.2](../hypervisor/hardware-spec.md) for the offset, [../priv-arch/design-spec.md §4.5](../priv-arch/design-spec.md) for the supervisor-mode table it belongs to). The vector number selects **which `INTEVT` value the handler reads**, not which address it enters.
 
 > **THERE IS NO PER-VECTOR STRIDE, and this paragraph previously said there was.**
-> *(C3, 2026-09-10.)* It previously read `VBR + 0x600 + vector_number * 0x20` and cited
+> *(C3, 2026-09-10.)* It previously read `VBR + 0x600 + vector_number * 0x20` (owner: [../priv-arch/design-spec.md §4.5](../priv-arch/design-spec.md)) and cited
 > [../mmu/hardware-spec.md §5](../mmu/hardware-spec.md) for "the vector conventions AIC2
 > follows". Both halves were wrong, and they were wrong in a way that no check could see,
 > because the cited authority is silent: [../mmu/hardware-spec.md §5](../mmu/hardware-spec.md)
@@ -213,12 +213,12 @@ If `PRIO[winner] > SR.IMASK` on the owning CPU (and the CPU is not in a delay-sl
 >
 > The shipping RTL settles it. `jcore-cpu@origin/master`'s
 > `decode/gen-go/spec/sh4/exceptions.toml` defines the `Interrupt` entry as
-> `operation = "SPC<-PC; SSR<-SR; MD/RB/BL; IMASK; INTEVT<-vec; PC<-VBR+0x600"`, and its
+> `operation = "SPC<-PC; SSR<-SR; MD/RB/BL; IMASK; INTEVT<-vec; PC<-VBR+0x600"` ([../priv-arch/design-spec.md §4.5](../priv-arch/design-spec.md)), and its
 > vector slot is literally `xbus = "VBR"`, `ybus = "1536"`, `arith = "ADD"`, `zbus = "PC"` —
 > a constant add of `0x600` with the 8-bit event vector going to `INTEVT` and nowhere near the
 > program counter. The file's own header says so in prose: *"a DIRECT fixed-vector jump
 > PC <- VBR+0x100 (general exceptions, [../mmu/hardware-spec.md §5](../mmu/hardware-spec.md))
-> or VBR+0x600 (interrupt) … Interrupt INTEVT = the d8
+> or VBR+0x600 (interrupt — [../priv-arch/design-spec.md §4.5](../priv-arch/design-spec.md)) … Interrupt INTEVT = the d8
 > event vector"*. That is **stock SH-4 behaviour**, not a J-Core convention, and it agrees
 > with `arch/sh/kernel/cpu/sh3/entry.S`'s "0x600: Interrupt / NMI vector" rather than
 > departing from it.
@@ -556,7 +556,7 @@ The hypervisor's convention with AIC2 is:
 - **What makes the dispatch-time delegation safe is [`A2-R1`](#52-delivery-rules), and only that.** With `HEDR[15] = 1` installed, *every* interrupt the CPU accepts goes to the guest — the CPU has no per-source knowledge and cannot have any. `A2-R1` is therefore not an optimisation of the fast path; it is the whole of the argument that the delegation is confined to the guest's own sources.
 
 > **This list previously gave three different reasons, and none of them worked.**
-> *(Rewritten by C3, 2026-09-10.)* The retired text said, in the same nine lines, that the
+> *(Rewritten by C3, 2026-09-10.)* The retired text previously read, in the same nine lines, that the
 > arrangement was safe *"because host-owned sources have been masked at the AIC2 level for the
 > duration of the vCPU's quantum"*; that *"host-owned sources never fire on a running guest vCPU
 > because they never satisfy AIC2's `GUEST_OWNED[s]=1` predicate"*; and that *"this avoids the
@@ -572,8 +572,10 @@ The hypervisor's convention with AIC2 is:
 > - **The `GUEST_OWNED` claim was a non-sequitur.** Failing `GUEST_OWNED[s] = 1` is precisely
 >   what selected the branch that delivered, so the predicate named as the reason nothing
 >   happens was the predicate that made it happen.
-> - **The third sentence contradicted the first.** "Masked at the AIC2 level for the duration of
->   the quantum" *is* masking at vCPU switch; the two sentences are five lines apart.
+> - **The third sentence contradicted the first.** What the list previously read as its first
+>   reason — "masked at the AIC2 level for the duration of
+>   the quantum" — *is* masking at vCPU switch, which its third sentence denied was needed; the
+>   two were five lines apart.
 >
 > All three are gone. The single reason is `A2-R1`, it is stated as a rule with a number, and it
 > is stated at AIC2 — the only place in the machine that holds both halves of the condition.

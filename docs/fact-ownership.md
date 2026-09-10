@@ -71,6 +71,7 @@ are the substitute for a check that cannot be written cleanly — see
 | `mmu.tsb.tag.shift` | TSB tag granularity: **4 KB**, `JCORE_TSB_TAG_SHIFT` = 12 — never `PAGE_SHIFT` | [mmu/hardware-spec.md §7](mmu/hardware-spec.md) | `JCORE_TSB_TAG_SHIFT` |
 | `mmu.vector.miss` | TLB **miss** vector: `VBR + 0x400` | [mmu/hardware-spec.md §5](mmu/hardware-spec.md) | `VBR ?\+ ?0x400` |
 | `mmu.vector.prot` | TLB **protection** vector: `VBR + 0x100` — *not* `0x400` | [mmu/hardware-spec.md §5](mmu/hardware-spec.md) | `VBR ?\+ ?0x100` |
+| `priv.vector.interrupt` | Interrupt vector: `VBR + 0x600`, **flat** — no per-vector stride | [priv-arch/design-spec.md §4.5](priv-arch/design-spec.md) | `VBR ?\+ ?0x600` |
 | `mmu.mmufsr.addr` | `MMUFSR` at P4 offset `0x02C` (`0xFF00002C`) | [soc/p4-mmio-map.md §3.2](soc/p4-mmio-map.md) | `0xFF00002C\|0x0?2C.{0,12}MMUFSR\|MMUFSR.{0,12}0x0?2C` |
 | `bus.bmid.width` | `BMID`: **8 bits**, `0x00`/`0xFF` reserved | [bus/fabric-spec.md §4](bus/fabric-spec.md) | `8-bit BMID` |
 | `hyp.expevt.hcall` | `HCALL`: EXPEVT `0x1D0` at `VBR_HYP + 0x180` | [hypervisor/hardware-spec.md §4.2](hypervisor/hardware-spec.md) | `0x1D0` |
@@ -703,6 +704,7 @@ formatting.
 |---|---|---|---|---|
 | `mmu.page.base` | `(\d+) KB base page` | `linux:arch/sh/configs/jcore_defconfig` | `CONFIG_PAGE_SIZE_(\d+)KB=y` | `eq` |
 | `mmu.tsb.entry` | `(\d+)-byte entr` | `jcore-cpu:core/cpu.vhd` | `entry_bytes\s*=>\s*(\d+)` | `eq` |
+| `priv.vector.interrupt` | `[\|] Interrupt [\|] .VBR \+ 0x([0-9A-Fa-f]+)` | `jcore-cpu:decode/gen-go/spec/sh4/exceptions.toml` | `INTEVT<-vec; PC<-VBR\+0x([0-9A-Fa-f]+)` | `eq-hex` |
 | `mmu.tsb.entry` | `(\d+)-byte entr` | `linux:arch/sh/include/cpu-jcore/cpu/mmu_context.h` | `#define JCORE_TSB_ENTRY_BYTES\s+(\d+)` | `eq` |
 | `mmu.tsb.set` | `(\d+)-byte set` | `jcore-cpu:core/datapath_pkg.vhd` | `shift_left\(v_idx, (\d+)\)` | `bytes-from-shift` |
 | `mmu.tsb.tag.shift` | `` `JCORE_TSB_TAG_SHIFT` = \*\*(\d+)\*\* `` | `linux:arch/sh/include/cpu-jcore/cpu/mmu_context.h` | `#define JCORE_TSB_TAG_SHIFT\s+(\d+)` | `eq` |
@@ -1077,6 +1079,12 @@ correct prose, F declined to recommend one, and nothing here narrows it.
 | `l6.sq.readback` | [sq/spec.md §4](sq/spec.md) | `(?:\*\*)?undefined(?:\*\*)? content` |
 | `l6.fpu.restore` | [fpu/spec.md §7.3](fpu/spec.md) | `FR/XF/FPUL = undefined` |
 | `l6.l2.movca` | [cache/l2-spec.md §17.5](cache/l2-spec.md) | `remainder undefined until written` |
+| `aic2.vector.stride` | [aic/aic2-spec.md §3.4](aic/aic2-spec.md) | `VBR \+ 0x600 \+ vector` |
+| `guest.vector.stride` | [sh4-guest-model.md §3.4](sh4-guest-model.md) | `VBR \+ 0x600 \+ vector` |
+| `aic2.hostowned.masked` | [aic/aic2-spec.md §5.5](aic/aic2-spec.md) | `masked at the AIC2 level` |
+| `hyp.bootstrap.both` | [hypervisor/hardware-spec.md §7.2](hypervisor/hardware-spec.md) | `Implement both` |
+| `density.word1.opcode` | [isa-density/spec.md §4.5](isa-density/spec.md) | `not a valid\s+opcode` |
+| `mmu.word1.opcode` | [mmu/hardware-spec.md §5.2](mmu/hardware-spec.md) | `not a valid\s+opcode` |
 
 ## Image layouts
 
