@@ -15,6 +15,53 @@ at the root of `docs/` beside the two plan documents. This file sits there for t
 same reason. Anything here that *is* a decision has been written into the owning
 document instead; this file records findings and points at them.
 
+> **What happened next, 2026-09-10 — read this before acting on anything below.**
+> A follow-up task acted on this review's blocking findings, and several
+> statements here are now descriptions of a tree that no longer exists. They are
+> left standing because a review is a dated report and rewriting one destroys the
+> record of what was true when it was written; this note is the supersede marker.
+> What changed:
+>
+> - **§3.1's two collisions are resolved**, and neither by annotation.
+>   [`P-R8`](cache/l2-spec.md) now *requires* the per-core split and rejects the
+>   P4 move, and [0010](decisions/0010-dma-coherence-is-software-maintained.md)
+>   decision 4 carries the matching kernel constraint — so §6's "must not be
+>   dispatched as written" is discharged. The L2 domain tag is
+>   `HTCR.TENANT`, not `PDID`, so **§4's second reason for L5 being unmet is
+>   fixed in the design** and survives only as a status note.
+> - **§3.2's stale statements are retired**, and **§3.3's two ownerless
+>   obligations have owners** — both are now rows in
+>   [security/threat-model.md §11](security/threat-model.md)'s defect table,
+>   which is the structural fix §3.3 asks for.
+> - **§2.2 rank 5 is implemented**, not recommended: `site-absence-claim` and
+>   `fact-ownership.md`'s `## Absence claims`. **Rank 6 is not**, and the reason
+>   given here still holds.
+> - **§5.1's gate figures are superseded**: 23 named checks, 183 fixture cases,
+>   48 mutations killed with 0 survivors.
+> - **§7's five prior-art sites are grounded or dropped.** Two figures this
+>   review did not question turned out not to exist in the sources they are
+>   attributed to; see [security/threat-model.md §9](security/threat-model.md).
+>
+> **And four of this review's own claims did not survive the follow-up's
+> checking**, which is the same thing this review says about every task before
+> it. *(a)* §3.1 and [security/threat-model.md §11](security/threat-model.md)
+> said the [`0xabcd00c0`](cache/l2-spec.md) block is placed by `turtle_1v0/design.yaml`; **two**
+> boards instantiate it, `mimas_v2` as well, and `turtle_1v0/board.dts` hands
+> Linux the same two words twice. *(b)* §6's suggested resolution — split the
+> cross-core fields per core — is right, but it is not a relayout of one block:
+> bit 28 is the IPI `arch/sh/kernel/cpu/sh2/smp-j2.c` uses for **every** J-Core
+> IPI, an IPI cannot be split per core, so the fix separates two facilities and
+> acquires a second kernel dependency. *(c)* §7 called the speculative-taint
+> mechanism "a naming violation and not a design hole"; the naming is worse than
+> stated — the structure the name points at is claimed **in force** by AMD
+> US10956157B1 — and better, because the owning specs had already refused it in
+> writing. *(d)* §2.2 rank 5 proposed anchoring the absence claim "on the site's
+> own noun rather than on the word `undefined`"; measured against
+> [sq/spec.md](sq/spec.md), noun-anchoring fires on correct prose all through a
+> document that legitimately narrates its own history, so the implemented check
+> anchors on the retired **wording** instead. The shape was right; the anchor was
+> not.
+
 ---
 
 ## 1. The verdict, for a reader who did not follow the programme
