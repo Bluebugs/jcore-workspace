@@ -570,8 +570,12 @@ Three consequences, so that nothing here reads as a closure:
 
   *Updated 2026-09-09:* C1b took the first of those two —
   [../fpu/spec.md §7.7](../fpu/spec.md) and [../simd/spec.md §2.6.1](../simd/spec.md).
-  That leaves **1** open `undefined` site — `movca.l`'s — on [../security/threat-model.md §8](../security/threat-model.md)'s count. The B0c check is still
-  absent, and C1b did not write it either, for C1a's reason: a check owned by whoever happened to
+  C2e then took the third, `movca.l`'s ([../cache/l2-spec.md §16.2](../cache/l2-spec.md) `P-R7`),
+  which leaves **0** open `undefined` sites on [../security/threat-model.md §8](../security/threat-model.md)'s
+  count — and moves that bar item
+  nowhere, because its evidence bar is a residue test demonstrated red first and none of the four
+  sites has hardware. The B0c check is still
+  absent, and neither C1b nor C2e wrote it either, for C1a's reason: a check owned by whoever happened to
   need it is a check nobody maintains.
 
 **Prior art, pre-2006.** Reading storage whose owner has changed as a defined constant rather than

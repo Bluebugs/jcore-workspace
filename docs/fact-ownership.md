@@ -104,7 +104,7 @@ are the substitute for a check that cannot be written cleanly — see
 | `hyp.gangswitch.items` | Gang-switch flush sequence: **10** numbered items; 7 SQ, 8 FP/SIMD, 9 microreset | [hypervisor/hardware-spec.md §4.7.1](hypervisor/hardware-spec.md) | `\*\*10\*\* (?:numbered )?items` |
 | `fpu.fpds` | `FPDS`: 2-bit FP dirty state, per thread context, hyperprivileged-only, **not** in the FPU image | [fpu/spec.md §7.7](fpu/spec.md) | `\bFPDS\b` |
 | `simd.vds` | `VDS`: 2-bit SIMD dirty state, per thread context, hyperprivileged-only, **not** `SR.VD` | [simd/spec.md §2.6.1](simd/spec.md) | `\bVDS\b` |
-| `security.l6.undefined` | **1** open `undefined` site under bar item L6: `movca.l`'s L2 line (C2e) | [security/threat-model.md §8](security/threat-model.md) | `\*\*1\*\* open .undefined. site` |
+| `security.l6.undefined` | **0** open `undefined` sites under bar item L6; all three specified away | [security/threat-model.md §8](security/threat-model.md) | `\*\*0\*\* open .undefined. site` |
 | `simd.fp.ownership` | FP SIMD requires FPU ownership (`SR.FD` = 0); rules `S-R1`–`S-R5` | [simd/spec.md §2.4.1](simd/spec.md) | `\bS-R[1-5]\b` |
 | `fpu.kernelfpu` | Kernel-mode FP/SIMD rules `K-R1`–`K-R5`; the exit scrub is `K-R3` | [fpu/spec.md §6.3.1](fpu/spec.md) | `\bK-R[1-5]\b` |
 | `gpu.protect.producers` | GPU address producers under the window check: **6** (`P1`–`P6`) | [simd/gpu/simd-gpu-spec.md §16.2](simd/gpu/simd-gpu-spec.md) | `\*\*6\*\* address producers` |
