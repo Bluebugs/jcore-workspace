@@ -127,6 +127,7 @@ The L2 controller is a parameterized VHDL entity. The baseline matches the J32-O
 | `NUM_THREADS_PER_CORE` | integer | 1   | 1, 2                           | all  | FGMT contexts per core; used to size lock-owner field |
 | `LOCK_TIMEOUT_CYC` | integer |    256  | 64–4096                        | T1/T2 | Forward-progress backstop (cycles)    |
 | `SNOOP_FABRIC`     | enum    | broadcast | broadcast, ring                | T1/T2 | `ring` reserved for future ≥6-core configs (see §5.4) |
+| `NUM_DOMAINS`      | integer |       1  | 1–8                            | T1/T2 | L2 trust domains of §16.1, **including the host domain `H`**. `1` is the unpartitioned build. Sizes `L2WAYMASK`, `L2DRRQ` and the `P-R3` reservation *(added post-F, 2026-09-09: `P-R3`'s elaboration constraint was written over this name and over a miss-capacity generic spelled differently from §4's, and neither name was in this table)* |
 
 Derived quantities for the T1 baseline (`L2_SIZE_KB=128, L2_WAYS=8, L2_LINE_BYTES=32, NUM_BANKS=4, NUM_CORES=2, NUM_THREADS_PER_CORE=2, ADDR_WIDTH=32`):
 
@@ -636,7 +637,7 @@ reachable by every core at once and **no core-granular control can reach it** �
 "MSHRs" that list names are the core-side pool of
 [ooo/j32lt-spec.md §7.4](../ooo/j32lt-spec.md), not this one. Under trust-domain partitioning the
 pool is statically reserved and the sizing above becomes a constraint rather than a preference:
-see §16.2 `P-R3` (reservation and `L2_MSHRS / NUM_DOMAINS >= 2`) and `P-R4` (no cross-domain
+see §16.2 `P-R3` (reservation and `NUM_MSHRS / NUM_DOMAINS >= 2`) and `P-R4` (no cross-domain
 coalescing, which is a separate channel that `P-R3` does not touch).
 
 ---
@@ -649,6 +650,7 @@ coalescing, which is a separate channel that `P-R3` does not touch).
 type l2_l1i_req_t is record
     req_valid : std_logic;
     core_id   : std_logic_vector(log2(NUM_CORES)-1 downto 0);   -- T1+
+    domain    : std_logic_vector(6 downto 0);                   -- T1/T2: {VALID, HTCR.TENANT} (§16.1)
     addr      : std_logic_vector(ADDR_WIDTH-1 downto 0);
 end record;
 
@@ -660,6 +662,14 @@ end record;
 ```
 
 L1-I issues a line read; L2 responds asynchronously. The `core_id` field is required at T1 so the L2 can route the response back to the originator on a multi-core fabric.
+
+`domain` is the way-partition tag of [§16.1](#161-way-partitioning-by-trust-domain-t1t2) and is
+present only at T1/T2. It is `{VALID, TENANT[5:0]}` read from the issuing thread context's `HTCR`
+([hypervisor/hardware-spec.md §2.10](../hypervisor/hardware-spec.md)); `VALID = 0` selects the
+host domain `H`. *(Added post-F, 2026-09-09. §16.1 said the tag was "carried on the fabric
+alongside the existing `owner` field of §6". Neither of these records had a domain field, §6's
+`owner` is a lock owner and not a domain, and none of this traffic is on the fabric — it is
+core-to-L2. Without the field the partition has no index and every rule of §16.2 is inert.)*
 
 ### 13.2 L1-D coherence interface `[T1/T2]`
 
@@ -678,6 +688,7 @@ type l2_l1d_msg_t is record
     addr      : std_logic_vector(ADDR_WIDTH-1 downto 0);
     core_id   : std_logic_vector(log2(NUM_CORES)-1 downto 0);
     thread_id : std_logic_vector(log2(NUM_THREADS_PER_CORE)-1 downto 0);
+    domain    : std_logic_vector(6 downto 0);   -- T1/T2: {VALID, HTCR.TENANT} (§16.1, §13.1)
     install_state : std_logic_vector(1 downto 0);   -- M/S/I on DataResp
     data      : std_logic_vector(8*L2_LINE_BYTES-1 downto 0); -- on DataResp, Wb, Unlock-with-data
     byte_en   : std_logic_vector(L2_LINE_BYTES-1 downto 0);   -- on partial-write merge
@@ -743,7 +754,17 @@ This is the existing `dcache_mcl.vhm` interface widened to `ADDR_WIDTH` and to t
 | `L2_SNOOP_CNT`|   64 | T1/T2 | Counter: snoop messages issued (Inv+Downgrade+Recall) |
 | `L2_LOCK_TO_CNT`| 64 | T1/T2 | Counter: lock timeouts (§6.5)                   |
 | `L2_LOCK_NACK_CNT`| 64 | T1/T2 | Counter: GetM-Locked NACKs                     |
+| `L2WAYMASK[d]` |   32 | T1/T2 | §16.1 allocation mask, low 8 bits, one per domain `d` over `NUM_DOMAINS`. Reset all-ones. An illegal value is rejected per §16.2 `P-R1` and sets `L2_STATUS.WAYMASK_REJECT` |
+| `L2MSHRRSV`  |    32 | T1/T2 | Read-only: the per-domain MSHR reservation `NUM_MSHRS / NUM_DOMAINS` that §16.2 `P-R3` fixes at elaboration. Present so a hypervisor can read what it got rather than recompute it |
+| `L2DRRQ[d]`  |    32 | T1/T2 | §16.2 `P-R5` deficit-round-robin quantum, one per domain `d`. Equal quanta are the reset state |
 ```
+
+*The last three rows were added post-F, 2026-09-09.* §16.1 and §16.2 specify `L2WAYMASK` and
+`L2DRRQ` as hyperprivileged registers and [hypervisor/design-spec.md §6.2](../hypervisor/design-spec.md)
+obliges a hypervisor to write both on every tenant admission — and neither appeared in any
+register map in this document, so there was nothing for that hypervisor to write to. `L2MSHRRSV`
+is new rather than restored: `P-R3`'s reservation is an elaboration-time constant and §6.2 item 2
+tells the hypervisor to "assign the reservation", which it cannot; it can only read it.
 
 **Privilege.** This whole block is hyperprivileged and not guest-visible: it sits at `0xFF040000`
 in P4 ([soc/p4-mmio-map.md §3](../soc/p4-mmio-map.md)), P4 is `SR.MD = 1` only, and a guest's P4
@@ -853,9 +874,43 @@ L2WAYMASK[d]   8 bits (one per way)   -- ways into which domain d may allocate
   rather than a miss on a line the attacker also maps**, which is Flush+Reload's reload half and
   is **accepted** at §16.3 row 8. Unrestricted hits remain the right choice; the reason is that
   the alternative costs shared pages, not that the alternative buys nothing.
-- The domain tag travels with the request. It is the same `PDID` the CPU specs use for predictor
-  tagging ([hypervisor/hardware-spec.md §2.8](../hypervisor/hardware-spec.md)), carried on the
-  fabric alongside the existing `owner` field of §6.
+- **The domain tag travels with the request, and it is `HTCR.TENANT` — not `PDID`.** *(Decided
+  post-F, 2026-09-09. This bullet read "It is the same `PDID` the CPU specs use for predictor
+  tagging …, carried on the fabric alongside the existing `owner` field of §6", and all three of
+  those halves were wrong: the register, the transport, and the field.)*
+
+  `PDID` is **optional**. [hypervisor/hardware-spec.md §2.8](../hypervisor/hardware-spec.md)
+  requires it only "on any implementation that speculates" and says explicitly it is "not required
+  on the in-order J2/J32 cores", with `CPUINFO` bit `[17] = PDID_SUPPORT` reporting its presence —
+  and [decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md) makes dual-issue
+  **in-order** with 2-thread FGMT the default path. A partition indexed by `PDID` therefore has no
+  index at all on the default part: §16.1 and every rule of §16.2 would be inert there, while
+  [hypervisor/hardware-spec.md §4.7](../hypervisor/hardware-spec.md) still asserts this channel is
+  closed by way-partitioning "required in the baseline dual-core configuration". Wave-3 **C2c**
+  reached the same conclusion for its own check and allocated a new mandatory register rather than
+  reuse `PDID`; that argument binds here for the same reason, and this section did not have it.
+
+  The tag is `{VALID, TENANT[5:0]}` taken from the issuing thread context's **`HTCR`**
+  ([hypervisor/hardware-spec.md §2.10](../hypervisor/hardware-spec.md)). A request from a context
+  with `VALID = 1` carries domain `TENANT`; a request from a context with `VALID = 0` — which
+  under [`T-R1`](../hypervisor/hardware-spec.md) is never a guest — carries the reserved **host
+  domain** `H`. Hardware still never
+  interprets the *value* of `TENANT`, which is §2.10's own rule: it uses it as an index and reads
+  only `VALID`. `L2WAYMASK` is indexed over the tenants plus `H`, and `L2WAYMASK[H]` resets to
+  all-ones, so an unvirtualized or T0 system is unaffected exactly as before.
+
+  **`HTCR` has to be present wherever this partition is.** §2.10 required it only on
+  implementations with more than one thread context, which would leave a single-threaded dual-core
+  T1 part — the very configuration the paragraph above says the channel exists in — holding a
+  partition with no tag. §2.10's presence rule now names a way-partitioned shared L2 as a second
+  trigger.
+
+  **How it travels: a new field on the L1↔L2 message, not "the fabric".** The domain reaches the
+  L2 by no route today. §13.2's `l2_l1d_msg_t` carries `core_id` and `thread_id` and no domain;
+  §13.1's L1-I request carries `core_id`; and §6.2's `owner` is a **lock** owner,
+  `{core_id, thread_id}` written into the tag array — not a bus attribute and not a domain. None
+  of those messages traverses the SoC fabric at all; they are core-to-L2. §13.1 and §13.2 gain a
+  `domain` field, and that field is where the cost of this section actually sits.
 - `L2WAYMASK` is hyperprivileged. A mask of all-ones is the unpartitioned behaviour, which is the
   reset state, so T0 and non-virtualized systems are unaffected.
 
@@ -879,9 +934,14 @@ one-way flush is 16 KB of write-back, ~82 µs at ~200 MB/s — against a full-L2
 ~655 µs, which is the reason partitioning is specified here rather than "flush the L2 at every
 tenant switch".
 
-**Cost.** ~200 gates: an 8-bit mask register per domain, and an AND into the pLRU victim-select
-mask. No tag-array change, no data-array change, no change to the state machine of §11 or the
-coherence protocol of §7. The domain tag is already on the fabric.
+**Cost.** An 8-bit mask register per domain and an AND into the pLRU victim-select mask are the
+cheap half; no tag-array change, no data-array change, no change to the state machine of §11 or
+the coherence protocol of §7. *The "~200 gates" this paragraph carried is removed rather than
+annotated ([decisions/0005](../decisions/0005-unmeasured-figures-are-removed.md)), because it was
+costed against "the domain tag is already on the fabric", which is false* — the tag is not on the
+fabric and is not anywhere else either. The real cost is the `domain` field added to §13.1 and
+§13.2, seven bits wide on every L1↔L2 message in both directions, plus the `HTCR` read port that
+sources it. No figure is offered for it and none is invented.
 
 **Prior art (pre-2006).** MIT **column caching** — Chiou, Jain, Devadas & Rudolph, "Dynamic cache
 partitioning via columnization" (DAC 2000) and Chiou, *Extending the Reach of Microprocessors:
@@ -973,9 +1033,15 @@ core-side pool and not this one; see [security/threat-model.md §8](../security/
 **L1**). The rule:
 
 ```
-L2_MSHRS / NUM_DOMAINS >= 2          -- checked at elaboration, not at runtime
-per-domain cap = reservation = L2_MSHRS / NUM_DOMAINS
+NUM_MSHRS / NUM_DOMAINS >= 2         -- checked at elaboration, not at runtime
+per-domain cap = reservation = NUM_MSHRS / NUM_DOMAINS
 ```
+
+*The names are §4's, and until this was checked they were not.* This block was written over a
+miss-capacity generic that appears in no configuration-parameter table in this document — §4
+calls it **`NUM_MSHRS`** — and over `NUM_DOMAINS`, which was not a generic at all. An elaboration
+constraint written over two names the entity does not declare cannot be elaborated. Both are §4
+rows now *(post-F, 2026-09-09)*.
 
 Each domain may hold at most its share and always has its whole share available. **There is no
 shared remainder**, and that is the point: a remainder any domain may take is exactly the
@@ -983,7 +1049,7 @@ occupancy channel this rule exists to remove, one level down from the ways.
 
 *Cost, stated rather than estimated.* On the T1 baseline the pool is 4 and two domains get 2 each,
 which halves a single domain's L2-level memory-level parallelism when it is the only domain
-running. A 3- or 4-domain deployment must raise `L2_MSHRS` to 8, which §12.3 already names as the
+running. A 3- or 4-domain deployment must raise `NUM_MSHRS` to 8, which §12.3 already names as the
 alternative and already says costs LUTs. Neither cost is measured here; **`P-E2`** owes the
 measurement, and no number is invented for it
 ([decisions/0005](../decisions/0005-unmeasured-figures-are-removed.md)).
@@ -1068,10 +1134,60 @@ So one write invalidates the *other* core's L1-I and L1-D wholesale and interrup
 `targets/boards/turtle_1v0/design.yaml` at `base-addr: 0xabcd00c0` — **not in P4**. Its protection
 today is therefore a stage-2 page-mapping policy and not a privilege level, and under
 [security/threat-model.md §8](../security/threat-model.md) **L1**, where a core is a tenant, a
-mapping mistake hands one tenant a whole-cache flush of another's core. The J4 requirement is that
-this register move into P4 alongside the L2 CSRs, or that its cross-core fields be split per core;
-until one of those happens the mapping policy is the only control and it belongs on the reviewed
-list. Recorded as a defect with an owner in [security/threat-model.md §11](../security/threat-model.md).
+mapping mistake hands one tenant a whole-cache flush of another's core.
+
+**The J4 requirement is the per-core split, and the P4 move is rejected.** *(Decided post-F,
+2026-09-09. This rule previously offered "move into P4 alongside the L2 CSRs, **or** split its
+cross-core fields per core" as two equal options and left the choice to the integrator. It is not
+open, because the two options differ in what they do to a guest kernel's DMA maintenance and
+[decisions/0010](../decisions/0010-dma-coherence-is-software-maintained.md) decision 4 builds that
+maintenance on this very register.)*
+
+- **Rejected — move the block into P4.** P4 is `SR.MD = 1` and a guest's P4 accesses trap
+  wholesale, so the register would become unreachable from a guest *at all*. 0010 decision 4
+  requires `__flush_purge_region` / `__flush_invalidate_region` to do real work on every streaming
+  `dma_map_*` / `dma_sync_*`; behind a wholesale P4 trap each of those becomes a hypercall on the
+  DMA hot path. Nothing in this specification can price that, and the DMA API's callers cannot see
+  it, so the P4 move turns a correctness fix into a performance cliff that appears only under
+  virtualization.
+- **Required — split the cross-core fields per core.** Each core's cache-control word becomes a
+  separate facility at a separate address, on its own page so a stage-2 mapping can grant it per
+  core. Core 0 then has no architectural means of invalidating core 1's L1s, and the control a
+  guest kernel needs stays guest-reachable.
+
+**Why the split satisfies this rule rather than merely narrowing it.** Two steps, both checkable.
+
+1. *A core's own L1 belongs to the core's own domain.* [`T-R1`](../hypervisor/hardware-spec.md)
+   ([hypervisor/hardware-spec.md §4.7.2](../hypervisor/hardware-spec.md)) refuses `HRTE` unless
+   every co-resident context on the core carries the same `HTCR.TENANT`, so under the FGMT default
+   path of [decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md) the contexts
+   sharing one L1 are one tenant. A per-core facility therefore reaches lines belonging to the
+   issuer's own domain and to the hypervisor, and to no other tenant.
+2. *Reaching the hypervisor's own lines confers nothing new.* The shipping L1s are direct-mapped
+   and 8 KB — `jcore-cpu@origin/master:cache/cache_pkg.vhd` sets `cache_line_width_bits` to 5
+   ("32 byte lines") and `cache_index_bits` to 8 ("8k byte cache"), with one valid bit per line and
+   no way dimension — so any code running on that core can already evict every line in it by
+   touching 8 KB of its own memory. A whole-cache invalidate is a faster spelling of a capability
+   the issuer has by construction. This rule is about *cross-domain* reach, not about invalidation
+   as such.
+
+**What the split costs, which the previous text did not carry: the IPI shares the word and is
+load-bearing today.** Bit 28 is not a stray field. `linux@origin/jcore`'s
+`arch/sh/kernel/cpu/sh2/smp-j2.c` sends **every** J-Core IPI by read-modify-writing bit 28 of the
+target core's word — its own comment reads *"Generate the actual interrupt by writing to CCRn bit
+28"* — and `jcore-soc@origin/master:targets/boards/turtle_1v0/board.dts` hands Linux the same two
+words twice, once as `jcore,cache` (`cpu-offset = <4>`) and once as `jcore,ipi-controller` at
+`0xabcd00c0`. An IPI is cross-core by definition and cannot be split per core, so this is not a
+relayout of one block: it separates a per-core cache control from a cross-core interrupt facility,
+and the interrupt facility needs its own privilege argument rather than inheriting the cache one.
+The specified destination for it is [aic/aic2-spec.md §3.5](../aic/aic2-spec.md)'s `IPI_SEND`,
+which is itself unbuilt — the shipping boards carry `jcore,aic1`. So this rule has a second SoC
+dependency and a second kernel dependency, in `smp-j2.c`, beside the `cache-j2.c` one 0010 names.
+
+Until the split happens the mapping policy is the only control and it belongs on the reviewed list.
+Recorded as a defect with an owner in [security/threat-model.md §11](../security/threat-model.md);
+the kernel half is [decisions/0010](../decisions/0010-dma-coherence-is-software-maintained.md)
+decision 4, which is written against this same register and carries the matching constraint.
 
 ### 16.3 What partitioning does not close `[T1/T2]` *(C2e, 2026-09-09)*
 
@@ -1111,10 +1227,11 @@ or prose — so these are specified and unbuilt, exactly like §22.1a's tests.
 | # | Experiment | Kill criterion |
 |---|---|---|
 | **`P-E1`** | Model the pLRU tree with two disjoint aligned masks and `P-R2` in force. Domain A performs a scripted hit sequence in its own ways; record every pLRU node B's victim search reads | **Killed if any node B reads was written by A.** Must be run *without* `P-R2` first and produce a non-empty set, or the experiment is vacuous — the same red-before-green discipline **L6** requires of a residue test |
-| **`P-E2`** | Measure L2-level MLP and miss-service throughput for one domain, at `L2_MSHRS=4`/2 domains and at `L2_MSHRS=8`/4 domains, against the unpartitioned pool | **Killed if the single-domain loss from `P-R3` exceeds the cost of the alternative it replaced** — a full-L2 flush per tenant switch, which §16.1 prices at ~655 µs. If reservation is worse than flushing, reservation is the wrong mechanism |
+| **`P-E2`** | Measure L2-level MLP and miss-service throughput for one domain, at `NUM_MSHRS=4`/2 domains and at `NUM_MSHRS=8`/4 domains, against the unpartitioned pool | **Killed if the single-domain loss from `P-R3` exceeds the cost of the alternative it replaced** — a full-L2 flush per tenant switch, which §16.1 prices at ~655 µs. If reservation is worse than flushing, reservation is the wrong mechanism |
 | **`P-E3`** | Measure the interference bound `P-R5` claims: with domain A saturating its quantum, the worst-case increase in B's L2 service latency, over a fixed epoch | **Killed if the measured worst case is unbounded, or if it exceeds the bound the hypervisor's admission policy assumes.** An asserted bound does not discharge **L5**; this row exists because that is stated there in those words |
 | **`P-E4`** | `movca.l` residue test, per **L6**: tenant A writes a recognisable pattern through the L2; tenant B issues `movca.l` to a line whose physical address A used, then reads the bytes it did not write | **Must be demonstrated red before `P-R7` and green after.** If it cannot be made red, the test is not testing `P-R7` |
 | **`P-E5`** | Enumerate every path by which one domain can cause an invalidate, flush or lock of a line in another domain's ways, and check each against `P-R8` | **Killed if any path exists that is reachable from non-hyperprivileged state.** The known one is the `0xabcd00c0` register of `P-R8`; the experiment exists because that one was found by reading the SoC's board YAML, which is not where anyone looks for a security control |
+| **`P-E6`** | Elaborate the L2 with `NUM_DOMAINS > 1` on a model whose CPU reports `CPUINFO[18] = TENANCY_CHECK` **clear** — no `HTCR`, hence no domain tag *(added post-F, 2026-09-09)* | **Killed if elaboration succeeds.** This is the failure §16.1 shipped with and nobody could see: a partition whose tag register is absent on the microarchitecture [decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md) makes the default, isolating nothing while [hypervisor/hardware-spec.md §4.7](../hypervisor/hardware-spec.md) asserts the channel closed. A build that cannot carry the tag must refuse to build the partition rather than build an inert one |
 
 ---
 
@@ -1448,6 +1565,7 @@ entity l2_cache is
         ADDR_WIDTH           : integer := 32;    -- 32 (T0/T1) or 40 (T2)
         NUM_CORES            : integer := 1;     -- 1 (T0) or ≥2 (T1/T2)
         NUM_THREADS_PER_CORE : integer := 1;     -- 1 or 2 (FGMT)
+        NUM_DOMAINS          : integer := 1;     -- §16.1 trust domains, incl. host domain H
         LOCK_TIMEOUT_CYC     : integer := 256;
         SNOOP_FABRIC         : string  := "broadcast"
     );
@@ -1502,10 +1620,13 @@ Architecture is structured as `l2_bank` × `NUM_BANKS`, `mshr_pool`, `writeback_
 5. **ECC for L2 data**: relevant for ASIC; defer.
 6. **NUMA-style L2 partitioning** for ≥4-core configurations: defer.
 7. **The cache-control register at `0xabcd00c0` is outside P4** and can invalidate the other
-   core's L1s (§16.2 `P-R8`). Moving it into P4 beside the L2 CSRs, or splitting its cross-core
-   fields per core, is an SoC change this specification cannot make; owner is RTL / SoC
-   integration, tracked at [security/threat-model.md §11](../security/threat-model.md).
-8. **`L2_MSHRS` above 4 is now load-bearing, not a preference.** §16.2 `P-R3` makes the pool size a
+   core's L1s (§16.2 `P-R8`). `P-R8` now *requires* the per-core split and rejects the P4 move,
+   so what is open here is the SoC work and not the choice: splitting the block per core, moving
+   the bit-28 IPI to a facility of its own, and giving each core's word its own page. This
+   specification cannot make that change; owner is RTL / SoC integration, tracked at
+   [security/threat-model.md §11](../security/threat-model.md), with the kernel half in
+   [decisions/0010](../decisions/0010-dma-coherence-is-software-maintained.md) decision 4.
+8. **`NUM_MSHRS` above 4 is now load-bearing, not a preference.** §16.2 `P-R3` makes the pool size a
    function of the domain count, so the "defer the resize decision" of §12.3 is deferred only for
    the two-domain case.
 9. **MMU coordination on TLB shootdown**: the [mmu/design-spec.md §4.6](../mmu/design-spec.md) lazy-shootdown path now relies on L1-D coherence; cross-check the actual shootdown bandwidth once both subsystems are stable.

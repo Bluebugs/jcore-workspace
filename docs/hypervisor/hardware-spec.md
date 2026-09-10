@@ -480,8 +480,19 @@ HTCR    Hypervisor Tenancy Control      [5:0] TENANT, [6] VALID, [7] VIOL, [31:8
 ```
 
 **Per thread context** (§2.9), hyperprivileged, present on every implementation
-with more than one thread context. `CPUINFO` bit `[18] = TENANCY_CHECK` reports
-its presence.
+with more than one thread context **or with the way-partitioned shared L2 of
+[../cache/l2-spec.md §16.1](../cache/l2-spec.md)**. `CPUINFO` bit
+`[18] = TENANCY_CHECK` reports its presence.
+
+*The second trigger was added post-F, 2026-09-09.* §4.7.2 allocated this register
+so the tenancy check would not rest on the optional `PDID`; the L2 partition then
+rested on `PDID` anyway, in a document that had not read this one. It now uses
+`HTCR.TENANT`, which makes `HTCR` the carrier of the L2 domain tag as well as the
+operand of `T-R1` — and a single-threaded dual-core part, which is exactly the
+configuration §16.1 says the L2 channel exists in, would have had no `HTCR` under
+the one-context rule. **`TENANT` acquires a second consumer and no second
+meaning:** hardware still never interprets the number, and the L2 uses it as an
+index while reading only `VALID`.
 
 | Field | Written by | Meaning |
 |---|---|---|
@@ -496,7 +507,8 @@ obligation** (§2.8): 64 concurrent tenants, and a hypervisor that recycles a
 number must complete a gang switch (§4.7.1) on every core the retired tenant
 occupied before the number is reused. The width is deliberately the same as
 `PDID`'s so a hypervisor can carry one tenant number, but the two registers are
-**not** interchangeable and §4.7.2 explains why the check is not built on `PDID`.
+**not** interchangeable and §4.7.2 explains why neither the check nor the L2
+partition is built on `PDID`.
 
 **Why this is a new register and not a field of an existing one.** Every
 per-context register this specification already defines is either written by the
@@ -1276,7 +1288,7 @@ the boundary:
 | 3 | Invalidate predictors, BTB, RAS and stride tables, **per context** | [../ooo/j32ooo-spec.md §20.4](../ooo/j32ooo-spec.md) | one register write each |
 | 4 | Invalidate L1-I and L1-D | SH-4 `CCR.ICI` / `CCR.OCI`. **L1-D is write-through** ([../ooo/j32ooo-spec.md §11.2](../ooo/j32ooo-spec.md)), so there is no dirty data to write back and this is an invalidate, not a flush | one register write each |
 | 5 | Flush the TLB | tens of entries; `ASID_TAG` tagging makes this unnecessary for *correctness*, and it is done for the channel | negligible |
-| 6 | Switch `TSBBR`, `PDID`, `L2WAYMASK` | already per-guest (§2.8, design-spec §3.8, [../cache/l2-spec.md §16.1](../cache/l2-spec.md)) | three register writes |
+| 6 | Switch `TSBBR`, `PDID`, `HTCR` | already per-guest or per-context (§2.8, §2.10, design-spec §3.8). **`L2WAYMASK` is not in this list and was, until post-F 2026-09-09:** it is indexed *by* the tenant rather than switched with it, so a gang switch that reassigns ways writes it as part of admitting the incoming tenant ([design-spec.md §6.2](design-spec.md) item 1), not as part of the context swap. Switching `HTCR` is what re-points the L2 tag ([../cache/l2-spec.md §16.1](../cache/l2-spec.md)) | three register writes |
 | 7 | **Scrub the store-queue buffers, per context** | [../sq/spec.md §6.5](../sq/spec.md) rule **SQ-R3**: the hyperprivileged `HSQCR` write clears the buffer of every queue whose written `VALIDn` is 0, so the `HSQCR` write that ends [../sq/spec.md §7](../sq/spec.md)'s restore **is** the scrub | none — it is item 10's own `HSQCR` write |
 | 8 | **Scrub the FP and SIMD register files, per context** | [../fpu/spec.md §7.7](../fpu/spec.md) rule **FP-R3** and [../simd/spec.md §2.6.1](../simd/spec.md) rule **V-R3**: the hyperprivileged `FPDS` / `VDS` write that records the change of owner applies each file's defined scrub value to every bit of it, in the same step | the two writes, plus each file's save and only where the dirty state says the outgoing tenant wrote it |
 | 9 | **Microreset the core's untagged transient state** | §4.7.1a: write `HMRC.SCRUB` = 1 (§2.11), then poll `HMRC.SCRUB` to 0 | unknown at this stage — needs measurement |
@@ -1576,6 +1588,16 @@ built on it would be absent on exactly the microarchitecture
 [../decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md) makes the default path.
 And `PDID`'s privilege was, until this task, stated three different ways in three sections (§2.8),
 one of which licensed a guest to write it. A check is only as trustworthy as the register it reads.
+
+**The same two reasons decided the L2's domain tag, six weeks late.**
+[../cache/l2-spec.md §16.1](../cache/l2-spec.md) sited the whole way partition on `PDID` while
+this paragraph was being written, and [design-spec.md §6.2](design-spec.md) presented the reuse as
+a virtue. On the default in-order part that partition would have had no index, so §16.1 and every
+rule of §16.2 would have been inert while §4.7 asserts the channel closed by way-partitioning
+"required in the baseline dual-core configuration" — a false security claim surviving the
+hardware being built. §16.1 now takes `{VALID, TENANT}` from `HTCR`, which is why §2.10's presence
+rule grew a second trigger. *(Resolved post-F, 2026-09-09.)* Note what this argument is **not**:
+it is not that `PDID` is untrustworthy where it exists, and §2.8 keeps it for the predictors.
 
 **Prior art (pre-2006).** Every part of this check is an old mechanism used for a new reason,
 which [../glossary.md §2.1](../glossary.md) rule 1 says is the level the match is made at.
