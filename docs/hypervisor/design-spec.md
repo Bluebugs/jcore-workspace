@@ -553,9 +553,52 @@ read as complete:
   cross-guest behaviour with no timing apparatus at all — generalises to every counter the CPU
   specs add, and is why those count committed events only.
 
+- **The shared L2 is below every guarantee above, and the guarantees do not reach it.** "Different
+  guests get different ASID ranges" is a *translation* statement; the L2 of
+  [cache/l2-spec.md §2](../cache/l2-spec.md) is one set of tag and data arrays shared by every
+  core, indexed by physical address, and two guests on two cores are inside it at the same instant.
+  What separates them there is [cache/l2-spec.md §16.1](../cache/l2-spec.md)'s way partitioning
+  plus [§16.2](../cache/l2-spec.md)'s `P-R1`–`P-R8`, and [§16.3](../cache/l2-spec.md) is the list
+  of what those do not close. The obligations that land on **this** document are in §6.2.
+
 The through-line is that this section's isolation arguments are necessary and remain true; they are
 just not sufficient once the core speculates, and none of them fails loudly when the
 microarchitectural half is missing.
+
+### 6.2 Obligations this document takes on from the L2 partition *(C2e, 2026-09-09)*
+
+Four, and the fourth is the one a hypervisor author would not think to look for.
+
+1. **Assign legal masks, or flush.** [cache/l2-spec.md §16.1](../cache/l2-spec.md) already requires
+   that mutually distrusting tenants get disjoint `L2WAYMASK` values, or that a descheduled
+   tenant's ways be flushed before reassignment. [§16.2](../cache/l2-spec.md) `P-R1` adds that a
+   legal mask is an **aligned power-of-two group of ways**: two tenants get 4+4 and three get
+   4+2+2 on an eight-way L2. An illegal write leaves the previous mask standing and sets
+   `WAYMASK_REJECT` in `L2_STATUS`, so **a hypervisor that does not read that bit back will run
+   with the previous tenant's mask and no error**. Read it back.
+2. **Assign the reservation and the quantum with the mask.** `P-R3`'s per-domain MSHR reservation
+   and `P-R5`'s `L2DRRQ` quantum are hyperprivileged, exactly like `L2WAYMASK`, and are part of the
+   same act of admitting a tenant. Setting the mask alone leaves two of the five mechanisms inert.
+3. **`PDID` is the carrier here too.** The domain tag the L2 consults is the same `PDID` that
+   [hardware-spec.md §2.8](hardware-spec.md) carries to the predictors, per
+   [cache/l2-spec.md §16.1](../cache/l2-spec.md). One identifier, three consumers — predictors,
+   IOMMU BMID ranges (§3.7) and now the L2 — so a `PDID` reuse bug is simultaneously a predictor
+   channel and a cache-partition failure.
+4. **Do not deduplicate pages across guests, and do not conclude that this removes cross-guest
+   shared memory.** [cache/l2-spec.md §16.2](../cache/l2-spec.md) `P-R6` is the rule; two halves
+   matter here. *The host half:* there is no per-tenant page-dedup mode to configure — on
+   `linux@origin/jcore`, KSM merges across every opted-in `mm_struct` system-wide, with no cgroup
+   or namespace boundary and the NUMA node as its only partitioning axis, so the control is on or
+   off and must be off in the host. It is off today only in the sense that neither
+   `arch/sh/configs/jcore_defconfig` nor `arch/sh/configs/j2_defconfig` sets `CONFIG_KSM`, which is
+   an absence rather than a control; making it a control is what the rule is for. *The half that
+   catches people:* **the hypervisor's own shared read-only mappings are cross-guest shared memory
+   by construction.** [cache/l2-spec.md §16.1](../cache/l2-spec.md) names them — "the hypervisor's
+   own text, a shared page" — as the reason L2 hits are deliberately not confined to a partition.
+   So the Flush+Reload precondition survives the dedup decision, and
+   [security/threat-model.md §10](../security/threat-model.md) item 14 accepts the residual rather
+   than claiming it closed. A hypervisor that maps fewer pages to more than one guest has less of
+   this channel; that is a design lever this document has and the hardware does not.
 
 ## 7. Limitations and Trade-offs
 
