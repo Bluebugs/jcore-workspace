@@ -125,6 +125,8 @@ are the substitute for a check that cannot be written cleanly — see
 | `cache.l2.isolation.rules` | Cache-isolation rules beyond ways: `P-R1`–`P-R8` | [cache/l2-spec.md §16.2](cache/l2-spec.md) | `\bP-R[1-8]\b` |
 | `cache.l2.residuals` | Residual channels §16.2 leaves: **10** — 4 closed, 2 mitigated, 4 accepted | [cache/l2-spec.md §16.3](cache/l2-spec.md) | `\*\*10\*\* residual channels` |
 | `soc.cachectrl.base` | Shipping cache-control MMIO block: `0xabcd00c0`, **outside P4** | [cache/l2-spec.md §16.2](cache/l2-spec.md) | `0xabcd00c0` |
+| `cache.userflush.dside` | `sys_cacheflush(2)` data side on J-Core: **not performed** | [security/threat-model.md §8](security/threat-model.md) | `cacheflush_user_dside_acts` |
+| `cache.userflush.iside` | `CACHEFLUSH_I` on J-Core: **accepted residual**, not closed (§10 item 19) | [security/threat-model.md §10](security/threat-model.md) | `unprivileged whole-L1-I invalidate` |
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
@@ -771,6 +773,36 @@ inferred from silence:
   green. An uncovered fact asserted to be covered, under a heading promising the
   gaps were visible. `## Image layouts` below now names the facts that must have
   a table, and a registered fact whose owner has none is a failure.)*
+- **`cache.userflush.dside` has no binding row yet, and the two that belong here
+  are written out below so they can be pasted in rather than reinvented.** The
+  fact — that `sys_cacheflush(2)`'s data side does not run on J-Core — is carried
+  in code by two lines that do not exist on `linux@origin/jcore`; they are on the
+  branch that fixed it. Adding the rows now would fail `doc-matches-code` on a
+  **code-side pattern non-match**, which is the mechanism working correctly and is
+  still a red gate, so the rows wait for the merge. This is the **second** time
+  [0002 §2](decisions/0002-supersede-convention.md)'s pointer rule has made a
+  fix's own guard unlandable at authorship time; `cache.dma.cacheops` was the
+  first, and 0010 §Enforcement's "the binding's red is a merge-time signal"
+  generalises past that one row.
+
+  | Fact ID | Doc pattern | Code | Code pattern | Relation |
+  |---|---|---|---|---|
+  | `cache.userflush.dside` | `` performs it only where\s+`(cacheflush_user_dside_acts)\(\)` `` | `linux:arch/sh/kernel/sys_sh.c` | `if \((cacheflush_user_dside_acts)\(\)\) \{` | `eq-text` |
+  | `cache.userflush.dside` | `` on a `CONFIG_(CPU_JCORE)` build it is\s+not `` | `linux:arch/sh/include/asm/cacheflush.h` | `return !IS_ENABLED\(CONFIG_(CPU_JCORE)\);` | `eq-text` |
+
+  **The second row catches an inversion, and that is worth stating because this
+  file says elsewhere that name facts cannot.** The `!` sits *inside* the code
+  pattern and *outside* its capture group, so dropping it — the one-character edit
+  that turns the gate into its opposite while leaving every guarded wording intact
+  — makes the pattern match nothing and fails the row. Verified by running both
+  patterns against `origin/jcore` (0 matches, both), against the fix branch (1
+  match each, capturing `cacheflush_user_dside_acts` and `CPU_JCORE`), against the
+  branch with the `!` removed (0 matches), and against the branch with the `if`
+  replaced by `if (1)` (0 matches). **Read the limit honestly**: this works because
+  this rule's polarity is a single token that a tight pattern can be anchored
+  around. It is not a general answer to C3's inverted-`A2-R1` finding, and nothing
+  here claims one.
+
 - **The P4 register offsets are not rows here.** They are a table-vs-table
   comparison (`p4-offsets-match-rtl`), which also catches a register the RTL
   decodes and the map does not list — something a per-fact binding cannot see.
@@ -1109,6 +1141,8 @@ row worth its cost.
 | `hyp.bootstrap.both` | [hypervisor/hardware-spec.md §7.2](hypervisor/hardware-spec.md) | `Implement both` |
 | `density.word1.opcode` | [isa-density/spec.md §4.5](isa-density/spec.md) | `not a valid\s+opcode` |
 | `mmu.word1.opcode` | [mmu/hardware-spec.md §5.2](mmu/hardware-spec.md) | `not a valid\s+opcode` |
+| `cacheflush.noop.threatmodel` | [security/threat-model.md §11](security/threat-model.md) | `every path it dispatches to is a no-op` |
+| `cacheflush.noop.review` | [j4-final-review.md](j4-final-review.md) | `every path\s+it dispatches to is a no-op` |
 
 ## Image layouts
 

@@ -1387,6 +1387,68 @@ section that already existed.** The design is
 | no cross-tenant **page deduplication** | **specified**, [`P-R6`](../cache/l2-spec.md), and **narrowed in two directions**. There is no "per-tenant KSM" to build: on `linux@origin/jcore` KSM's merge scope is every opted-in `mm` system-wide with no cgroup or namespace boundary, the only axis being the NUMA node — the control is on or off. It is off, in that neither `arch/sh/configs/jcore_defconfig` nor `arch/sh/configs/j2_defconfig` sets `CONFIG_KSM`. Narrowing: KSM *inside* one guest is intra-tenant and is permitted; and **turning KSM off does not remove cross-tenant shared memory**, because §16.1's own text names the hypervisor's shared read-only mappings, which are shared by construction |
 | **privilege-gated** `ocbi`/`ocbp`/`pref` | **reversed** — see §7.6a. Per [cache/l2-spec.md §17.5](../cache/l2-spec.md)'s own table none of `ocbi`/`ocbp`/`ocbwb` evicts from the L2, so they are not a flush primitive across the partition; `pref` and `movca.l` reach the L2 by *allocating* and were already confined by §16.1. Decision: **they stay user-mode**. The genuinely ungated facility is a register outside P4, [`P-R8`](../cache/l2-spec.md) |
 
+**The user-mode flush primitive was asked about twice and found on the third try,
+in the kernel — and this programme's own merged patch is what put it there.**
+*(2026-09-10, from the task that fixed it.)*
+
+*First, the object §7.6a reversed onto does not exist on the shipping part.* §7.6a
+read [cache/l2-spec.md §17.5](../cache/l2-spec.md)'s own table to decide that
+`ocbi`/`ocbp`/`ocbwb` do not evict from an L2 and may therefore stay user-mode.
+There is a prior question it did not ask. **`jcore-cpu@origin/master` decodes none
+of them.** `ocbi`, `ocbp`, `ocbwb` and `movca.l` occur in that repository only in
+`docs/insns.json` — the SH-family encoding database
+[decisions/0003](../decisions/0003-canonical-encoding-database.md) makes canonical
+for the *family*, which is not a statement of what this core implements — and in
+`tools/insns2asm/internal/sel/sel.go`'s assembler allow-list. No file under
+`decode/gen-go/spec/`, the decoder generator's source of truth, declares any of
+them; its `sh4/` directory holds `bank`, `exceptions`, `mmu` and `mov` and nothing
+else. (`pref` is the one that is real, declared in `sh2a/misc.toml`.) So the
+decision "**they stay user-mode**" settles nothing about the part that ships: the
+sub-clause is discharged for the object it names, and was never asked about the
+object that exists.
+
+*Second, the primitive that does exist is a syscall, and this programme created
+it.* §11 recorded on 2026-09-09 that `sys_cacheflush(2)` was a no-op on J4 and
+therefore "neither a flush primitive nor a channel". **`mountain-reverie/linux`#16
+(merged, `3c1453a`, 2026-09-10) made it one**, as a side effect of giving the J4
+the cache maintenance
+[decisions/0010](../decisions/0010-dma-coherence-is-software-maintained.md)
+decision 4 asked for. `arch/sh/kernel/sys_sh.c` checks only that the range lies in
+one of the caller's own VMAs and then dispatches
+`CACHEFLUSH_D_INVAL`/`_D_WB`/`_D_PURGE` into
+`__flush_invalidate_region`/`__flush_wback_region`/`__flush_purge_region`, which
+from that commit are `cache-jcore.c`'s and **ignore `start` and `size`** — the
+CCR's `cache_ctrl_t` is `{en, inv}` with no address in it. One page and a loop, and
+the whole L1-D goes. Before `#16` the same three resolved to `noop__flush_region`,
+so this is a channel a fix opened, not one that was always there.
+
+*Third, the fix splits on correctness, and the split is not symmetric.* The **data
+side is closed** — `sys_cacheflush()` performs it only where
+`cacheflush_user_dside_acts()` is true, which on a `CONFIG_CPU_JCORE` build it is
+not — because the
+L1-D is write-through and memory already holds every byte the caller stored;
+because userspace cannot hold a DMA buffer cached in the first place
+(`dma_mmap_*()` → `dma_pgprot()` → `pgprot_noncached()`, which on SH is
+`pgprot_writecombine()` and clears `_PAGE_CACHABLE`) and a streaming mapping is
+synced by the kernel in `arch_sync_dma_for_cpu()`; and because the helpers never
+honoured `start`/`size`, so no range semantics are being withdrawn.
+`arch_sync_dma_for_cpu()` keeps the real helpers — it has a correctness
+requirement userspace does not, and is not reachable by an unprivileged caller.
+The **instruction side stays open**, as §10 item 19, accepted with a reason and on
+the precedent item 11 set for the L1-I wrong-path fill: JITs need an I-cache
+invalidate to be correct, the whole-cache one is the only mechanism, and the L1-I
+holds no data.
+
+**L5's verdict does not move, and why it does not is the useful part.** Both
+reasons this item is `NOT MET` are about an L2 that does not exist; this finding is
+about an L1 that does, so it neither closes nor opens a sub-clause and the status
+below stands unchanged. What it changes is the *standing* of one line in the table
+above: the `ocbi`/`ocbp`/`pref` row reads as discharged, and it is discharged only
+for instructions the J4 cannot execute. **The recurring shape is worth naming**: a
+question this document asked of a *specification* was answered about a *part*, and
+the answer was in the other repository — the same error §7.6a caught itself making
+once already, arriving from the opposite direction.
+
 **This does not make L5 `MET`, and the gap is not only evidence.** *That sentence
 read "the gap is now entirely evidence" until post-F, 2026-09-10, and it was the
 claim that hid the finding below.* There is no L2 in `jcore-cpu@origin/master` or
@@ -1843,6 +1905,38 @@ close one is scope expansion, not compliance.
     own the encodings ([isa-density/spec.md §3.4](../isa-density/spec.md),
     [isa-pcrel/spec.md §3.1](../isa-pcrel/spec.md)), which is where C3 filed it.
 
+19. **[accepted] The unprivileged whole-L1-I invalidate, through `sys_cacheflush(2)`.**
+    *(Added 2026-09-10 by the task that closed this channel's data-side half. It is the
+    first residual in this list that a change made **inside this programme** created; see
+    §8 **L5** for how it got here.)* On J-Core the cache-control register offers a
+    whole-cache invalidate and no line-granular operation at all: `cache_ctrl_t` is
+    `{en, inv}` (`jcore-soc@origin/master:targets/data_bus_pkg.vhd`), `icache_modereg.vhm`
+    pulses `ic0_inv`/`dc0_inv` from bits 8 and 9 of a written word, and `inv` clears the
+    whole valid-bit array in one cycle (`jcore-cpu@origin/master:cache/dcache_ccl.vhm`).
+    So `CACHEFLUSH_I` invalidates the entire L1-I, and `sys_cacheflush(2)` is
+    unprivileged and range-checked only against the caller's own VMAs.
+    **It stays, and stays deliberately.** Self-modifying code and JITs need an I-cache
+    invalidate to be correct, this is the only mechanism the hardware has, and a JIT that
+    writes on one core and branches to the code on another needs the cross-core reach too.
+    Accepting it with the reason stated is the precedent item 11 set for the L1-I
+    wrong-path fill; the alternative is to break `__clear_cache` and call that a fix.
+    **It is a weaker primitive than the data-side one that was removed**: the L1-I holds
+    no data, so what an attacker gets is a denial of service and an eviction-timing
+    signal, not a data channel.
+    *Two scope limits, both checked this session, and **neither is a mitigation**.*
+    *(i)* A J4 kernel **cannot enable `CONFIG_SMP` today** — `CPU_SUBTYPE_JCORE` does not
+    `select SYS_SUPPORTS_SMP` and `config SMP depends on SYS_SUPPORTS_SMP`
+    (`linux@origin/jcore:arch/sh/Kconfig`) — so `cacheop_on_each_cpu()`'s
+    `num_online_cpus() > 1` is never true and the reach is the calling core's own L1-I.
+    Under **L1** that is one tenant, which is the position §7.6a took for `ocbi`. It is
+    also one `select` away from being cross-tenant, on a SoC that ships two cores.
+    *(ii)* On the **ASIC** vehicle it reaches no hardware:
+    `jcore-soc@origin/master:targets/asic/gf180_j4mmu/soc.vhd` binds all four of
+    `icache0_ctrl`/`icache1_ctrl`/`dcache0_ctrl`/`dcache1_ctrl` to `CACHE_CTRL_ON`, whose
+    `inv` is tied `'0'`, and that target's `board.dts` has no `jcore,cache` node, so
+    `jcore_cache_ccr_init()` takes its warn path. That is a bring-up gap, not a design
+    decision, and closing it re-arms this item.
+
 ---
 
 ## 11. Defects found while writing this, deliberately left for later
@@ -1878,7 +1972,7 @@ now the implementation half of C2b.
 | **J32-FM — the product — has no owning specification.** One glossary table cell is its entire definition, and the glossary is not authoritative | Wave-2 **B3** |
 | **The guest-`ASIDR` justification has expired** — *the contradiction is corrected, the security question is not.* [hypervisor/design-spec.md §5](../hypervisor/design-spec.md) now records that `ASIDR` is the TLB **match** input on every translation (`core/cpu.vhd`, `asid => dp_mmu_regs.asidr(...)` into both TLB instances) and a TSB index input on every miss, so the "write-only staging state consulted only at `LDTLB` time" argument for leaving a guest write untrapped is void; the stale one-`LDTLB`-trap costing beside it is likewise marked. **Whether the write must now be trapped is a hypervisor-design decision B1 did not make.** | Wave-2 **B1** (doc) → **Wave-3** (decide) |
 | **The cache-control register at `0xabcd00c0` is outside P4 and reaches the other core.** `jcore-cpu@origin/master`'s `cache/icache_modereg.vhm` decodes core 1's whole-cache invalidate bits (`ic1_inv`, `dc1_inv`) and an IPI to core 1 in one word, and `jcore-soc@origin/master`'s `targets/boards/turtle_1v0/design.yaml` places the block at `base-addr: 0xabcd00c0` — outside the P4 segment that [soc/p4-mmio-map.md §3](../soc/p4-mmio-map.md) makes `SR.MD = 1` and non-guest-visible. Under **L1**, where a core is a tenant, its only protection is a stage-2 mapping policy. The fix is now **decided, not optional**: [`P-R8`](../cache/l2-spec.md) requires the **per-core split** and rejects the P4 move, because P4 would put a guest's `dma_sync_*` behind a hypercall on the DMA hot path. Three things grew when the collision with [decisions/0010](../decisions/0010-dma-coherence-is-software-maintained.md) was resolved *(post-F, 2026-09-10)*: the block is instantiated by **two** boards, `mimas_v2` and `turtle_1v0`, not one; `turtle_1v0/board.dts` hands Linux the same two words **twice**, as `jcore,cache` and as `jcore,ipi-controller`; and bit 28 is the SMP IPI that `arch/sh/kernel/cpu/sh2/smp-j2.c` uses for every IPI, so the split has to give the interrupt a facility of its own ([aic/aic2-spec.md §3.5](../aic/aic2-spec.md) `IPI_SEND`, unbuilt — the boards ship `jcore,aic1`). **This is shipping RTL, not a paused spec**, which puts it in **L4**'s category and not **L5**'s. *(Found by C2e, 2026-09-09; rule stated as [cache/l2-spec.md §16.2](../cache/l2-spec.md) `P-R8`; scope corrected post-F)* | RTL / SoC integration, with kernel halves in `cache-j2.c` ([0010](../decisions/0010-dma-coherence-is-software-maintained.md) decision 4) and `smp-j2.c` |
-| **`decisions/0010`'s open hazard about the J4 cache path resolves, and it resolves to one branch.** That record — Wave-3 **C2d** — already owns the finding that the J4 Linux build compiles no cache-operations file, and says of `cpu_cache_init()` that "whichever way that read goes, the destination is either the `skip` label or `sh2_cache_init()`". It goes one way only, and the premise beside it is wrong: the J4 does **not** inherit the SH-2 `SH_CCR` (a different register from the stock SH-4 one that [sh4-guest-model.md §3.2](../sh4-guest-model.md) owns), because that define sits inside `#if defined(CONFIG_CPU_SUBTYPE_SH7619)` in `arch/sh/include/cpu-sh2/cpu/cache.h` and `jcore_defconfig` does not set that symbol. With it undefined the `#ifdef` guard leaves `cache_disabled` at zero, so `skip` is **never** taken and the weak-undefined `sh2_cache_init()` is always the destination. *(Also new, and small:* `sys_cacheflush(2)` is reachable from unprivileged userspace on SH, validated only against the caller's own VMAs, and on J4 every path it dispatches to is a no-op — so it is neither a flush primitive nor a channel there. C2e went looking for the kernel's user-mode flush primitive and this is what it found.*)* Not a channel, and **not C2e's bar item** | `linux`, J4 bring-up — the same owner `decisions/0010` gives |
+| **`decisions/0010`'s open hazard about the J4 cache path resolves, and it resolves to one branch.** That record — Wave-3 **C2d** — already owns the finding that the J4 Linux build compiles no cache-operations file, and says of `cpu_cache_init()` that "whichever way that read goes, the destination is either the `skip` label or `sh2_cache_init()`". It goes one way only, and the premise beside it is wrong: the J4 does **not** inherit the SH-2 `SH_CCR` (a different register from the stock SH-4 one that [sh4-guest-model.md §3.2](../sh4-guest-model.md) owns), because that define sits inside `#if defined(CONFIG_CPU_SUBTYPE_SH7619)` in `arch/sh/include/cpu-sh2/cpu/cache.h` and `jcore_defconfig` does not set that symbol. With it undefined the `#ifdef` guard leaves `cache_disabled` at zero, so `skip` is **never** taken and the weak-undefined `sh2_cache_init()` is always the destination. *(C2e went looking for the kernel's user-mode flush primitive and found it here. The finding is no longer small and no longer lives in this row.* `sys_cacheflush(2)` *is reachable from unprivileged userspace on SH and validated only against the caller's own VMAs — both still true. The rest of the clause **used to read** that on J4 "every path it dispatches to is a no-op — so it is neither a flush primitive nor a channel there", and* `mountain-reverie/linux`#16 *ended that on 2026-09-10: from* `3c1453a` *the data-side ops dispatched into* `cache-jcore.c`*'s region helpers, which ignore* `start`*/*`size` *and invalidate the whole L1-D. The data side is now gated off for userspace and the instruction side is an accepted residual — §8 **L5** and §10 item 19 carry it, and this row keeps only the* `cpu_cache_init()` *half.)* Still **not C2e's bar item** | `linux`, J4 bring-up — the same owner `decisions/0010` gives |
 | Intra-guest AnC (§7.1) has no bar item and no owner | Wave-3, after C2b |
 | **The grep-level `undefined` absence guard has an owner again.** [sq/spec.md §6.5](../sq/spec.md) filed it with Wave-1 task **B0c**, which had closed on 2026-08-25 — six weeks before the filing — so it was filed against a destination that could not act; C1b and C2e each declined it and it was absent from `scripts/check-doc-facts.py`. Task F identified it as rank 5 of its checker audit and recommended rather than implemented, because the per-site patterns are the owning specs' call. **Implemented post-F as `site-absence-claim`**, with the first three sites owned by the documents that closed them. Further closed sites are added by the document that closes them, not by a sweep | [fact-ownership.md](../fact-ownership.md) `## Absence claims`, one row per closing document |
 | **The GPU's bus-master identifier allocation has an owner again.** [simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md) filed it with [bus/fabric-spec.md](../bus/fabric-spec.md), which contained **no occurrence of "GPU"** and whose §4.4 allocation table had no GPU row — a filing against a destination that could not act on it, and a precondition of the clause above it. **Closed post-F**: `bus/fabric-spec.md` §4.4 now carries the allocation, so the obligation has moved from "unscheduled" to "blocked on a bus that carries a master identifier at all", which is **L2**'s blocker and is already tracked | [bus/fabric-spec.md §4.4](../bus/fabric-spec.md) (allocation) → **L2** (the field to carry it) |
@@ -1965,7 +2059,20 @@ And for §7.2, which is what retires the "non-speculative core" premise:
   ([bus/fabric-spec.md §0](../bus/fabric-spec.md)) and the point at which every
   `I-E` guard in [iommu/hardware-spec.md §10.1](../iommu/hardware-spec.md) becomes
   runnable rather than written. *(C2d)*
-- **`arch/sh` gains a `cacheops-` arm for `CPU_JCORE`.** Today the J4 build compiles
-  none, so every DMA cache-maintenance call is a no-op
-  ([decisions/0010](../decisions/0010-dma-coherence-is-software-maintained.md)). This
-  is the only C2d finding that is reachable on hardware that exists. *(C2d)*
+- **`arch/sh` gains a `cacheops-` arm for `CPU_JCORE`.** *(C2d.)* This trigger's
+  condition **used to read** that "today the J4 build compiles none, so every DMA
+  cache-maintenance call is a no-op"; it was the only C2d finding reachable on
+  hardware that exists, and **it fired on 2026-09-10**, as
+  `mountain-reverie/linux`#16 (`3c1453a`) —
+  [decisions/0010](../decisions/0010-dma-coherence-is-software-maintained.md)
+  decision 4. **It is the first code-change tripwire in this list to have the chance
+  to fire, and nothing moved when it did**: the change landed, the doc gate stayed
+  green (0010 §Enforcement says why — the binding pinned the value it captured, and
+  reads `origin/jcore` rather than the branch), and §11's clause asserting that
+  `sys_cacheflush(2)` dispatched only to no-ops on J4 stayed on the page for a day
+  after it became false. What the trigger was for turned out to be right: the arm
+  made the DMA path real **and** turned an unprivileged syscall into a whole-cache
+  invalidate. §8 **L5** and §10 item 19 carry the result. **The tripwire is not
+  retired — it is re-armed at the next step**, which is `CPU_SUBTYPE_JCORE` gaining
+  `select SYS_SUPPORTS_SMP`: that is the single line that turns item 19's residual
+  from one core's own L1-I into every core's, with no other code change.

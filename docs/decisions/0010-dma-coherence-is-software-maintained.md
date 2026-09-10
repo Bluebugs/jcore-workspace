@@ -297,6 +297,28 @@ each of them would have cost the next implementer time.
   separate question and this decision does not answer it**; it only refuses to answer it
   accidentally, from the DMA path.
 
+**The change opened a security channel, and this record is where the cost belongs.**
+*(2026-09-10, from the task that closed it.)* Decision 4 asked for real
+`__flush_*_region()` primitives. They have a second caller nobody costed:
+`sys_cacheflush(2)`, an **unprivileged** syscall that validates only that the range is in
+one of the caller's own VMAs and then dispatches straight into all three of them
+(`arch/sh/kernel/sys_sh.c`). Before `#16` those were `noop__flush_region()` on a J4 build
+and the syscall did nothing; after it they are `cache-jcore.c`'s, which ignore `start` and
+`size`, so one page and a loop became a whole-L1-D invalidate on demand — a denial of
+service, and the **Flush** half of a Flush+Reload. The data side is now skipped for
+userspace on J-Core, gated by
+[`cacheflush_user_dside_acts()`](../security/threat-model.md), which costs nothing
+because the L1-D is write-through and userspace cannot hold a DMA buffer cached
+(`dma_pgprot()` → `pgprot_noncached()` clears `_PAGE_CACHABLE` on SH); the DMA path keeps
+the real helpers, which is the whole point of the asymmetry.
+[`CACHEFLUSH_I`](../security/threat-model.md) stays reachable and is an accepted residual
+— [security/threat-model.md](../security/threat-model.md) §8 **L5** and §10 item 19.
+**The lesson for this record is not about caches.** Decision 4 named the DMA API as the
+consumer of the primitives it asked for, and the primitives it asked for are arch-wide
+function pointers with a syscall on the other end. *A decision that names one caller of a
+mechanism it introduces has not enumerated the callers*; the one it missed here was the
+only unprivileged one.
+
 **The stride collision is left exactly where this record put it, and there is now a third
 reason.** `arch/sh/kernel/cpu/sh2/probe.c:49`'s `j2_ccr_base + 4*cpu` is still wrong —
 `icache_modereg` decodes `db_i.a(5 downto 2)`, `jcore-soc`'s `board.dts` says
