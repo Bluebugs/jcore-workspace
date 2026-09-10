@@ -567,6 +567,15 @@ Three consequences, so that nothing here reads as a closure:
   ([../cache/l2-spec.md §17.5](../cache/l2-spec.md), Wave-3 **C2e**). L6 also asks for a grep-level
   CI check that no tenant-visible "undefined" is reintroduced; that check does not exist in
   `scripts/check-doc-facts.py` today and is owed by **B0c**, not by this task.
+  ***Superseded 2026-09-10: the check exists, and the filing was misaddressed.*** B0c had
+  **already closed**, on 2026-08-25, six weeks before this section filed work with it, so the
+  obligation had no owner from the moment it was written — Task F found that and ranked it 5. It is
+  now `site-absence-claim`, driven by [../fact-ownership.md](../fact-ownership.md)'s
+  `## Absence claims`, and this document owns one of its three rows. It is **not** the grep-level
+  check this bullet asked for: a scan for the word "undefined" fires on correct prose all through
+  §2, §6.5 and §7 of this very document, where the SH-4 manual's own "undefined" is narrowed rather
+  than contradicted. What is checked is that a **retired wording** does not reappear as current
+  text.
 
   *Updated 2026-09-09:* C1b took the first of those two —
   [../fpu/spec.md §7.7](../fpu/spec.md) and [../simd/spec.md §2.6.1](../simd/spec.md).
@@ -576,7 +585,9 @@ Three consequences, so that nothing here reads as a closure:
   nowhere, because its evidence bar is a residue test demonstrated red first and none of the four
   sites has hardware. The B0c check is still
   absent, and neither C1b nor C2e wrote it either, for C1a's reason: a check owned by whoever happened to
-  need it is a check nobody maintains.
+  need it is a check nobody maintains. *(That reason survives and is why the fix, when it came
+  post-F on 2026-09-10, put one row per closing document in the registry rather than one sweep
+  owned by nobody. What did not survive is "still absent": see the note above.)*
 
 **Prior art, pre-2006.** Reading storage whose owner has changed as a defined constant rather than
 as whatever it last held is the object-reuse requirement: TCSEC (DoD 5200.28-STD, 1985) makes it a
