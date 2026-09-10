@@ -373,6 +373,76 @@ when the install path has a bug.
 C2d added no `## Image layouts` row: the `I-R` rules move no context state and specify
 no byte layout.
 
+Wave-3 **C2e** added `cache.l2.isolation.rules`, `cache.l2.residuals` and
+`soc.cachectrl.base` — the C2d shape again, a name fact plus a value fact plus a code
+binding, and the binding is the first row in this file pointing at a **board file**
+rather than at RTL or at kernel source. It exists because C2e is otherwise in C2a's and
+C2c's position: there is no L2 in `jcore-cpu@origin/master` or `jcore-soc@origin/master`
+— every case-insensitive `l2` match is a textio variable in a `dcache_tb`, an FPGA ball
+name `"L2"` in a `pad_ring.vhd`, a TLB comment or prose — so `cache.l2.isolation.rules`
+guards rules about hardware nobody has built.
+
+`soc.cachectrl.base` is registered under protest and the protest is the row. `0xabcd00c0`
+appeared in **no** document in this workspace before C2e, and no document owns non-P4 SoC
+addresses at all — [soc/p4-mmio-map.md](soc/p4-mmio-map.md) owns P4 and this block is
+outside it. Owning it from [cache/l2-spec.md §16.2](cache/l2-spec.md) is a compromise:
+that is where the normative rule about it lives (`P-R8`), and the alternative was a
+security-relevant address stated in three documents with no owner, which is the exact
+failure [decisions/0001](decisions/0001-one-authority-per-fact.md) exists to prevent. If
+the SoC ever gets its own address map, the row moves. It carries **no value guard**, and
+the reason is a checker limit rather than a choice: `check_no_stale_value` builds its
+licensing set with `re.findall(r"\d[\d,]*")` over the `Constant` cells, so a hex address
+can never be in it and any guard row would fail as `stray` however correct. Every other
+hex fact in this file is guarded the same way — by a code binding only — so this is a
+standing gap and not a new one.
+
+**Fourteen** perturbations were run, of which **seven** pass:
+
+| Perturbation | Result |
+|---|---|
+| the owner's residual count changed from 10 to 8 | **caught**, `owner-has-fact`, on a **pattern non-match** — *on the second attempt.* On the first it **passed**, and the reason was in the owner: the changelog entry restated the count, the registry pattern still matched there, and `no-stale-value` then licensed both 10 and 8 because both digits appear somewhere in some `Constant` cell. **A count stated twice inside its own owner has no guard.** The changelog was reworded to state it once and the perturbation re-run |
+| a second document states a *different* residual-channel count, link to the owner intact | **caught**, `no-stale-value`, on a **value disagreement**. The link does not license the number — the same result C2c recorded, on a different fact |
+| `cache.l2.residuals`'s `Constant` cell set to **8**, contradicting its own owner | **passes** — the cell is prose no check reads. **Sixth** wave running; see C1c, C2a, C2b, C2c and C2d. Nothing has changed and neither has the fix, which is a checker change: compare the cell against the value guard's canonical capture |
+| the owner drops the count entirely — *"the residual channels classified below"* | **caught twice**: `owner-has-fact` on a **pattern non-match**, and `no-stale-value` reporting that the canonical pattern matches nothing in the owner |
+| a row deleted from §16.3's table, the count left at **10** | **passes.** The guard compares numbers between documents; it does not count rows. Third instance — C2b's transmitter row and C2c's class row are the others — and it matters here for the same reason it mattered there: §16.3 *is* the honesty list, so deleting a row is exactly how an accepted channel becomes an undocumented one, which is the defect the section defines itself against |
+| every `P-R`*n* token rewritten in the owner (all 20+ occurrences) | **caught**, `owner-has-fact`, on a **pattern non-match** |
+| `P-R3` restated in `j4-execution-plan.md` with no link | **caught**, `restatement-is-linked` |
+| **`P-R2`(b) inverted** — *"updates replacement state exactly as an in-partition hit does"*, token kept | **passes.** A name fact guards that a rule is *stated*, never what it says. Fourth instance after C2b's `W-R1`, C2c's `T-R2` and C2d's `I-R5`, and this one is the plainest: the inverted text is a verbatim restatement of the channel [security/threat-model.md §10](security/threat-model.md) item 2 exists to describe, sitting under a bullet headed "Out-of-partition hit" |
+| **`P-R3` narrowed** — *"except that a domain may exceed its share while no other domain has a request outstanding"*, token and constraint intact | **passes**, and it is the narrowing with the sharpest consequence in this set. That sentence reads like a harmless efficiency clause and is precisely the shared remainder `P-R3`'s own next sentence says must not exist: a domain that can expand into idle entries reveals, by the latency of its own expansion, that the other domain went idle. C2c recorded the same shape on `T-R1`; the lesson repeats because prose is what states the closure argument and prose is guarded by nothing |
+| the owner's cache-control base changed to `0xabcd00c4` | **caught**, `doc-matches-code`, against `jcore-soc:targets/boards/turtle_1v0/design.yaml`. The one C2e fact with real code behind it, and the binding does its job |
+| a second document restates the base as `0xabcd00c4`, link intact | **passes**, and this is a limit no previous wave has recorded. A code binding checks the **owner** against the code; it says nothing about restatements, and the value guard that would is impossible for a hex fact (above). So every hex address in this workspace can drift in any non-owning document without a single check firing. `sh4guest.ccr.stock`, `sh4guest.qacr0.stock`, `mmu.mmufsr.addr` and `mmu.vector.miss` are in the same position; only the last is digits-only enough to be guarded, and it is |
+| ownership of `cache.l2.isolation.rules` moved to `security/threat-model.md` | **caught by the cascade**: `owner-has-fact` passes, and `restatement-is-linked` fails over 60 lines of the real owner plus `hypervisor/design-spec.md` and `sq/spec.md`. Same shape as C1c's, C2a's, C2b's, C2c's and C2d's last rows |
+| **`P-R7` inverted** — `movca.l`'s remainder *"undefined until written, as before"*, token kept, and `security.l6.undefined` left at **0** | **passes**, and this is the one worth reading twice. Two registered facts now disagree — the spec says a tenant-visible value is undefined, the bar item's count says no such site exists — and **no check relates them**, because one is a name fact over `P-R` tokens and the other is a value fact counting sites in a different document. The count is maintained by hand. `security.l6.undefined` reaching 0 is therefore an assertion by whoever last edited it, not a property of the tree |
+| §17.5's `movca.l` table row reverted to the "undefined until written" wording, `P-R7` left intact | **passes**, for the same reason and one step worse: this is the sentence a reader of the instruction table actually reads, and it can be reverted while the rule that replaced it still stands three sections earlier. Both halves of the same fix must be edited to change the behaviour, and neither half is guarded |
+
+That second row is written without the number it used, deliberately: the guard's scan
+pattern is anchored on the noun phrase, so spelling the perturbation out here would fire
+the check against this file — which is the same trap C2a's note records hitting, and it
+was avoided this time by reading that note first.
+
+**Procedure.** The rows were committed before being perturbed; each perturbation asserted
+a non-empty `git diff` over `docs/` before the checker ran and reverted afterwards, and
+the tree was confirmed clean and green at the end. The `P-R` token removal was written as
+a regular-expression substitution with a minimum match count from the start, which is
+C2c's lesson applied rather than rediscovered. **One perturbation reported a false green
+and was caught by re-reading the output rather than by the harness** — the residual-count
+row above — and that is the honest headline of this run: the assertion that a perturbation
+*perturbed* does not assert that it perturbed the *only* copy.
+
+What C2e adds to the previous waves' honest summaries is a fourth limit, and it composes
+with C2c's rather than replacing it. C2c's was that a name fact and a code binding both
+fail where there is no code. C2e's is that **two registered facts can be made to
+contradict each other with every check green**, because nothing in this file relates one
+fact to another. The `P-R7` rows are the demonstration: `security.l6.undefined = 0` and a
+specification that says "undefined" are simultaneously licensed. The mitigation is not a
+checker change either — it is [cache/l2-spec.md §16.4](cache/l2-spec.md)'s **`P-E4`**, the
+`movca.l` residue test, which must fail before `P-R7` and pass after, and which cannot be
+run because there is no L2.
+
+C2e added no `## Image layouts` row: `P-R1`–`P-R8` move no context state and specify no
+byte layout. The one byte-level fact it does state — `movca.l`'s line is `R0`'s word plus
+zeros — is a line's contents and not a saved context image.
+
 B1 added `ooo.uops.rte`, `platform.endianness`, `platform.fmax.floor`,
 `platform.fmax.j4.floor`, `platform.j4`, `mmu.l1.pipt`, `cache.l1d.write`,
 `cache.l1.index`, `cache.l2.ebr`, `ooo.gates.core`, `mmu.p4.segment`,
