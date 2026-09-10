@@ -114,8 +114,9 @@ It does not permit adopting a mechanism on that basis. Every entry here is in th
   scheduling (hard-real-time thread plus best-effort threads sharing the pipe).
 - **BRISKI** — a RISC-V barrel processor targeting kilo-core FPGA overlays; a useful reference
   point for area/Fmax of a pure-barrel approach. **Not dated at source** beyond its own README,
-  and it does not need to be: RISC-V postdates the cutoff, so no RISC-V core can be pre-2006 prior
-  art for anything.
+  and it does not need to be for the policy question: it is a RISC-V design, every RISC-V artifact
+  cited anywhere in this tree is 2019 or later, and nothing here is grounded on it — so if it were
+  somehow pre-2006 no entry above would change.
 
 ### 4.3 Removed: a live patent that was cited as prior art
 
