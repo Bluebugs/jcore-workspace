@@ -629,6 +629,51 @@ narrows that. Three sites are registered; a fourth closed site adds its own row,
 and the table's prose says so, because a sweep that guessed at wordings would be
 the "check that fires on correct prose" this project switches off within a month.
 
+### 2026-09-10 — `cache.userflush.*`, and a blind spot `site-absence-claim` has only in tables
+
+Two Registry rows and two `## Absence claims` rows were added by the task that
+closed the `sys_cacheflush(2)` data-side channel
+([security/threat-model.md §8](security/threat-model.md) **L5**, §10 item 19).
+Every row was perturbed against a **committed** tree with a non-empty `git diff`
+asserted first, per C2b's rule.
+
+| Perturbation | Result |
+|---|---|
+| `cacheflush_user_dside_acts` removed from the owner's §8 text, Registry row kept | **caught**, `owner-has-fact`, on a **pattern non-match** |
+| the same token restated in `j4-execution-plan.md` with no link to the owner | **caught**, `restatement-is-linked` |
+| `unprivileged whole-L1-I invalidate` reworded in §10 item 19, Registry row kept | **caught**, `owner-has-fact`, on a **pattern non-match** |
+| the same phrase restated in `j4-execution-plan.md` with no link | **caught**, `restatement-is-linked` |
+| ownership of `cache.userflush.dside` moved to [decisions/0010](decisions/0010-dma-coherence-is-software-maintained.md), which also states the token | **caught by the cascade**: `owner-has-fact` passes, `restatement-is-linked` fails against the real owner. Same shape as C1c's, C2a's, C2b's, C2c's, C2d's and C2e's last rows |
+| the retired no-op sentence reasserted as current prose in §7.6a, far from any marker | **caught**, `site-absence-claim` |
+| the retired sentence deleted from `threat-model.md` outright, leaving nothing to match | **caught**, by the second arm |
+| the retired sentence reasserted as a new numbered item in `j4-final-review.md` | **caught**, `site-absence-claim`, on the second row — which is why there are two rows and not one |
+| the same sentence reasserted in a **third** document (`j4-execution-plan.md`, which has no row) | **passes.** Known and stated in the preamble: the claim is anchored per (document, wording). Recorded again because this task is the first to have the sentence live in two documents at once, which is when the limit stops being theoretical |
+| **§8 L5's decision inverted in place** — "the **data side is closed**" rewritten to "the data side is **left open, deliberately**", every registered token and every retraction intact | **passes.** C3's finding, reproduced on a new pair of rows. A name fact guards that a rule is stated, never what it says |
+| §10 item 19 relabelled `[closed]` instead of `[accepted]`, wording otherwise intact | **passes.** §10's two-kinds-of-entry distinction is prose no check reads; the label that decides whether a channel is a residual or a closure is unguarded |
+
+**And one result that is new, was found by mis-siting a perturbation, and is a
+defect rather than a limit.** The first attempt reasserted the retired sentence in
+the §11 table row *immediately after* the row carrying the retraction marker, and
+the gate returned **exit 0**. That is not the per-document limit above; the same
+sentence one row further down is caught. `ABSENCE_LOOKBACK = 2` is calibrated for
+**prose** — the comment beside it says so, citing `fpu/spec.md` §7.7's marker-line
+and block-quotation-below idiom — and in a Markdown table **one line is one row**.
+So a wording retired inside a table row silently exempts the **next two rows** from
+its own absence claim, and those rows can be arbitrarily long and about entirely
+different subjects. Demonstrated at `security/threat-model.md`: the marker sits in
+the `decisions/0010` row, and reasserting the sentence in either of the two rows
+below it passes while the third fails.
+
+**Not fixed here, and the reason is a rule and not an omission.** The narrowing
+that closes it — when the matched line is a table row, accept a marker only on that
+same row — is a change to a check with 183 fixtures behind it, and a checker change
+with no fixture asserting the new edge is the exact failure the existing
+"marker three lines above **fails**" fixture exists to prevent. Adding that fixture
+moves the required count, which is the gate this task was given. So it is recorded
+with its demonstration, at the row it was found on, for whoever owns
+`check-doc-facts.py` next. **The mitigation available today is placement**: do not
+retire a wording inside a table row that has neighbours you would mind losing.
+
 **Rank 6, hex drift, is still open and still recommended rather than
 implemented.** `check_no_stale_value` builds its licensing set with a
 decimal-only scan, so a hex fact can carry no value guard. Task F ranked it 6
