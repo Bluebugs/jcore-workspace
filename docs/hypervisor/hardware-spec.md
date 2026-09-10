@@ -1739,7 +1739,71 @@ The kernel boots normally (HPRIV=0). The hypervisor is loaded as a kernel module
 
 This is the cleaner model — it lets the kernel be the "bootloader" for the hypervisor. The downside is that the kernel briefly has more privilege than the hypervisor (until the first HCALL); a Trusted Computing Base argument could prefer the reset-time option.
 
-**Recommendation:** Implement both. The fuse bit (option 1) for production systems where the hypervisor is fully trusted; the HCALL bootstrap (option 2) for development.
+> **Decision `H-B1`. `HYP_AT_RESET` is normative for any configuration that will host more
+> than one tenant. §7.2 is a development facility and MUST NOT be built into a tenant-facing
+> bitstream.** *(Wave-3 **C3**, 2026-09-10. This replaces the recommendation that stood here,
+> which read: "**Recommendation:** Implement both. The fuse bit (option 1) for production
+> systems where the hypervisor is fully trusted; the HCALL bootstrap (option 2) for
+> development.")*
+>
+> **Why the old recommendation could not stand.** Its condition was backwards. "Production
+> systems where the hypervisor is fully trusted" makes trust in the hypervisor a per-deployment
+> variable, and it is not one: the hypervisor is item 1 of the TCB unconditionally
+> ([../security/threat-model.md §2](../security/threat-model.md)), which is what makes §7.2's
+> own admitted downside fatal rather than merely awkward. And "for development" was prose in a
+> recommendation, with no rule number, no verification point in §9, and nothing in the build to
+> stop it shipping — the pattern this programme has already paid for twice.
+>
+> **What the inversion actually is**, stated in three legs so that a partial fix cannot be
+> mistaken for a fix:
+>
+> 1. **Ordering.** TCB item 1 is created by a component on no TCB list at all. §7.2 says so:
+>    "the kernel briefly has more privilege than the hypervisor".
+> 2. **Provenance of the entry vector.** `SR.HPRIV` is enterable only by trap (§2, §5), and
+>    `VBR_HYP` and the handler bytes are written by S-mode Linux before any hyperprivileged
+>    instruction has ever retired — [linux-spec.md §5.1](linux-spec.md) lists "Install
+>    hyperprivileged trap handlers at VBR_HYP" as a step of the *guest-to-be* kernel's boot.
+>    S-mode software therefore chooses what code first runs at `HPRIV = 1`.
+> 3. **Provenance of the initial state.** §7.2's `ACTIVATE_HYP` takes "a pointer to the
+>    hypervisor's setup descriptor" from the caller. No document states any validation on it.
+>    That is the shape [../iommu/security-review.md](../iommu/security-review.md) rated
+>    **Critical** as `IS-C5` when it appeared on one argument of one hypercall — here it
+>    configures the TCB itself.
+>
+> **A lock is not the fix, and this is the part worth writing down.** The tree's reflex for a
+> boot-time trust problem is a self-arming write-once lock, and it has a good one:
+> [`I-R4`](../iommu/hardware-spec.md) arms `SB_LOCK` on the first accepted `WRITE_ENTRY`. That
+> shape does **not** transfer. A `VBR_HYP` lock armed on first `HPRIV` entry would freeze
+> whatever bytes the untrusted kernel had already installed — it makes the adversary's choice
+> permanent rather than preventing it. Leg 2 is not "the vector can be changed later"; it is
+> "the vector was never the hypervisor's to begin with", and nothing you latch *after* the
+> handoff reaches a decision taken *before* it. Legs 1 and 3 are likewise untouched by any
+> latch. **The only control that acts before the untrusted party does is running first**, which
+> is §7.1, which already exists and which §10 prices at ~5 LUTs. This decision therefore adds
+> no mechanism at all; it removes an option.
+>
+> **What §7.2 remains good for.** A single-tenant development board, where the kernel that
+> loads the hypervisor and the hypervisor are the same person's, and where being able to
+> iterate on hypervisor code without rebuilding a bitstream is worth real time. That is a
+> genuine use and it is why this is a build-configuration rule rather than a deletion. On such
+> a build, §9 point 4's "behaviour of `HCALL` executed at HPRIV=1 is implementer-defined" also
+> stops being a loose end that matters, because there is no adversary to re-enter through it.
+>
+> **Prior art (pre-2006), and it is prior art for the decision, not for a mechanism.**
+> W. A. Arbaugh, D. J. Farber and J. M. Smith, *A Secure and Reliable Bootstrap Architecture*
+> (the copy read carries "© 1997 IEEE"; it is universally attributed to the IEEE Symposium on
+> Security and Privacy, 1997, and that venue line is **not** visible in the copy checked here).
+> Read at source. It states this exact failure in 1997: *"Without such a secure bootstrap the
+> operating system kernel cannot be trusted since it is invoked by an untrusted process."* It
+> names the workaround this spec was about to take and rejects it: *"Designers of trusted
+> systems often avoid this problem by including the boot components in the trusted computing
+> base (TCB). That is, the bootstrap steps are explicitly trusted. We believe that this
+> provides a false sense of security to the users of the operating system, and more important,
+> is unnecessary."* And it gives the ordering rule `H-B1` applies: *"integrity of a layer can
+> be guaranteed if and only if: (1) the integrity of the lower layers is checked, and (2)
+> transitions to higher layers occur only after integrity checks on them are complete."*
+> §7.2 satisfies neither clause; §7.1 makes clause (2) vacuous by having no lower layer to
+> transition from.
 
 ## 8. Per-CPU Considerations (SMP)
 
@@ -1818,6 +1882,18 @@ Critical RTL verification:
     scope class, not once. A `SCRUB` that reads 0 on the very next cycle fails this point on an
     implementation whose caches invalidate one set per cycle: that is constraint 4's silent failure
     and the whole reason the bit is readable.
+
+25. **`HYP_AT_RESET` is the only entry to HS mode on a tenant-facing build (§7, `H-B1`):** on a
+    bitstream intended to host more than one tenant, an `HCALL` carrying the `ACTIVATE_HYP` service
+    code from supervisor mode with `SR.HPRIV = 0` must reach the ordinary `HCALL` path
+    (`VBR_HYP + 0x180`, `EXPEVT = 0x1D0`) and find no bootstrap handler behind it — i.e. it is an
+    unrecognised service code, not a privilege transition. **This point is a build-configuration
+    check, and stating it as one is deliberate**: `H-B1` is not a rule hardware can enforce at
+    runtime, because on a §7.2 build the bootstrap path is exactly the behaviour that is wanted.
+    What can be checked is that a build which sets `HYP_AT_RESET` contains no second path, and
+    that a build which does not is not shipped to tenants. The second half is a release gate, not
+    a test, and it is named here because a rule whose only enforcement is a release gate should
+    say so rather than look like a testable property.
 
 ### 9.1 Additional verification points on a speculative implementation
 
