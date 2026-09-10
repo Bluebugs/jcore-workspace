@@ -1,5 +1,14 @@
 # J4 remediation programme — whole-implementation review
 
+**This file holds two reviews of the same programme, in one place deliberately:
+a programme with two competing final reviews is the defect this whole effort has
+been about.** **Part I** is **Task F2** (2026-09-10), a delta review of the 25
+commits that landed after F — the post-F blocking-findings work, the first code
+in the programme, two submodule repoints, and C3. **Part II** is **Task F**
+(2026-09-09), the original whole-implementation review, unaltered. Read Part I
+first: it says which of F's conclusions survived, and it corrects F's own record
+of what it reviewed.
+
 **Task F.** Reviewed 2026-09-09 against `main` at `eb62a37`, branch `final/f-review`.
 Scope: all merged tracks — Wave 0 (hotfixes), Wave 1 (foundations), Wave 2
 (reconciliation), Wave 3 (eight security designs).
@@ -14,6 +23,461 @@ in this tree for a programme-level report is [j4-wave0-status.md](j4-wave0-statu
 at the root of `docs/` beside the two plan documents. This file sits there for the
 same reason. Anything here that *is* a decision has been written into the owning
 document instead; this file records findings and points at them.
+
+---
+
+## Part I — Task F2, the second review
+
+**Task F2.** Reviewed 2026-09-10 against `final/f2-review` at `405c250`, cut from
+a freshly-merged `main`. Scope: **the delta since F** — the 25 commits that
+landed after F's own commit `b76c545..405c250`, and the consistency of the tree
+those commits left behind. It is not a re-survey; where F and the work that acted
+on F agree and I found nothing to the contrary, this part says nothing.
+
+Code evidence is from remote refs only, per
+[decisions/0002 §2](decisions/0002-supersede-convention.md):
+`jcore-cpu@origin/master` `e8a5a4e1`, `jcore-soc@origin/master` `39b6abe3`,
+`linux@origin/jcore` `3c1453a9`. Note that the workspace *pins* `jcore-cpu` at
+`6475932e`, which lags `origin/master`; nothing below is read from a checked-out
+pointer.
+
+**Two corrections to this document's own front matter before anything else.**
+F's header says it reviewed "`main` at `eb62a37`". `eb62a37` is not an ancestor
+of F's commit and exists on no branch but `wave1/foundations`; F's actual base
+was `b76c545`, which is on `main`. And the work since F is **25** commits, not
+27: fourteen post-F blocking-findings commits, two submodule repoints, and nine
+for C3.
+
+### F2.1 The verdict
+
+**The single most valuable thing the post-F work and C3 produced is the first
+code in the programme, and it is also the thing that broke the most.** The
+kernel patch is right; the six documents that describe the kernel are now wrong,
+one of them is the gate's own registry, and the tripwire the threat model wrote
+for exactly this event did not fire. That is not a criticism of the patch. It is
+the measurement F's §2 predicted: the machinery guards attribution and
+arithmetic, and the one thing it has never had to survive is a fact changing in
+the code.
+
+**F's second-most important sentence is still true after 25 commits.** 68
+registered facts; 14 carry a value guard; 31 carry a code binding; 6 carry an
+enumeration; **not one carries both a value guard and a code binding**, and 23
+carry none of the three.
+
+**And the inversion gap is not narrowed.** C3's per-rule polarity fact is a real
+mechanism and it works on the rule it was written for. It covers 2 of the ~70
+normative rule identifiers in `docs/`, none of the four F named, and I defeated
+it in one edit using this tree's own house style — §F2.4.
+
+### F2.2 What the new work closed
+
+- **The [`P-R8`](cache/l2-spec.md) ↔ [0010](decisions/0010-dma-coherence-is-software-maintained.md)
+  decision-4 collision is closed, and then *built*.** `linux@origin/jcore`
+  `3c1453a9` is the squash merge of `mountain-reverie/linux`#16. Verified at the
+  remote: `arch/sh/mm/Makefile` carries `cacheops-$(CONFIG_CPU_JCORE) :=
+  cache-jcore.o`; `arch/sh/mm/cache-jcore.c` writes only
+  `jcore_ccr_base + hard_smp_processor_id()` inside `preempt_disable()`;
+  `cache-j2.c`'s `for_each_possible_cpu()` loops are gone; and
+  `arch/sh/Kconfig`'s `DMA_NONCOHERENT` now selects `ARCH_HAS_SYNC_DMA_FOR_CPU`.
+  The kernel half of [`P-R8`](cache/l2-spec.md) is honoured: no cross-core write
+  to the block survives except `j2_send_ipi()`'s, which [`P-R8`](cache/l2-spec.md) names and accepts.
+- **F's finding (b) holds.** `arch/sh/kernel/cpu/sh2/smp-j2.c`'s `j2_send_ipi()`
+  writes `1U<<28` to `j2_ipi_trigger + cpu` — the **target** core's word — and
+  the RTL decodes `db_i.d(28)`. It is the only `send_ipi` J-Core registers.
+- **The L2 carrier fix is right.** [hypervisor/hardware-spec.md
+  §2.10](hypervisor/hardware-spec.md) gained a second presence trigger — `HTCR`
+  is now required on any implementation "with more than one thread context **or
+  with the way-partitioned shared L2**" — which is what makes moving the L2 tag
+  off the optional `PDID` an actual fix rather than a rename. `P-E6` refuses to
+  elaborate a partition on a part that reports `CPUINFO[18]` clear. §F2.3 records
+  the one place the old rule survived.
+- **C3's §5.5 rewrite is one coherent reason and not a fourth.** The three
+  incompatible justifications are gone and the replacement is a single rule with
+  a number, stated at AIC2. I checked for a fourth reason and there is none.
+- **C3's `msk` claim is true of shipping RTL.** `cpu2j0_pkg.vhd`'s
+  `cpu_event_i_t` carries a `msk` bit, and `decode/decode_core.vhm` lines 681 and
+  769 gate acceptance on `( ibit < event_i.lvl or event_i.msk = '1' )`. `IRL=15`
+  really is maskable and `msk` really is the bit that is not.
+- **The prior-art class is closed for C3's own text.** C3 adds four external
+  citations — Arbaugh/Farber/Smith 1997, Yarrow-160, Abadi et al. CCS 2005, and
+  `A2-R1` explicitly owing none beyond §5.8's pre-2006 rows. All are pre-2006,
+  all correctly attributed, every quoted passage corroborated at source, and no
+  new figure is attributed to an external work. The residue is the post-F sweep's,
+  not C3's — §F2.3.
+- **F's two ownerless obligations have owners**, and both rows are in
+  [security/threat-model.md §11](security/threat-model.md)'s defect table. I
+  confirmed both.
+
+**A clean bill where I looked hard and found nothing**, stated because a delta
+review that reports only breakage is not a measurement. C3 retired the
+per-vector interrupt stride ([priv-arch/design-spec.md §4.5](priv-arch/design-spec.md)
+owns the real value); every surviving occurrence of the strided form in the tree
+is a marked-retired quotation or an absence-claim tripwire pattern, [sh4-guest-model.md §3.4](sh4-guest-model.md) does re-derive
+**B2-3** on three legs that use no vector, and
+[priv-arch/design-spec.md §4.5](priv-arch/design-spec.md) — named as the owner —
+agrees. C3 retired the "an interior word is not a valid opcode" claim; nothing in
+`isa-pcrel`, `encoding-sweep.md`, the non-FPU encoding database,
+`bi-endian-spec.md` or any delay-slot or exception-restart passage reasons from
+it. C3 retired the "implement both" HCALL bootstrap option; no document still
+offers the two as interchangeable. And C3's two-part test on §5's
+denial-of-service scope-out reconciles with §7.7a rather than adding a fifth
+position — the new text quotes §7.7a's own wording, and the other three documents
+that scope DoS out do it against [`I-R8`](iommu/hardware-spec.md) rather than
+against §5.
+
+### F2.3 What the new work broke
+
+**A. The kernel merge falsified six documents and nobody swept.** All verified at
+`linux@origin/jcore` `3c1453a9` this session.
+
+1. **[fact-ownership.md](fact-ownership.md) row `cache.dma.cacheops`.** The
+   `Constant` cell was updated to "The J4's `cacheops-` arm compiles
+   `cache-jcore.o`". Its `owner-has-fact` **pattern was not**: it still reads
+   `` `cacheops-` selector keys on `` ([0010](decisions/0010-dma-coherence-is-software-maintained.md)),
+   a string whose only occurrence anywhere in `docs/` is that record's line 107, a
+   present-tense bullet asserting that the selector keys on `CPU_J2` and that
+   `cacheops-y` is empty for the J4. **The name guard for this fact is anchored
+   to a sentence that contradicts the fact and is now false**, so correcting the
+   sentence turns the row red for the wrong reason. This is the failure class the
+   row's own post-mortem is about, in the row itself.
+2. **[0010](decisions/0010-dma-coherence-is-software-maintained.md) lines
+   100–118** — the whole "the kernel side is worse than 0007 assumed" list — is
+   written in the present tense and is false at `origin/jcore`, with **no
+   supersede marker**. Decision 4 immediately below it carries one.
+3. **[j4-execution-plan.md](j4-execution-plan.md) lines 495–499 and 518–523.**
+   The programme's dispatch document still says the J4 build "compiles **no**
+   cache-operations file at all" and that decision 4 "**is** dispatchable, in
+   `linux`, today". The one buildable item in the programme is still listed as
+   buildable after it was built.
+4. **[security/threat-model.md §12](security/threat-model.md)'s tripwire fired
+   and nothing moved.** The bullet reads "**`arch/sh` gains a `cacheops-` arm for
+   `CPU_JCORE`.** Today the J4 build compiles none, so every DMA
+   cache-maintenance call is a no-op." That is the trigger's own condition and it
+   has happened. This is the first time in the programme a code-change tripwire
+   has had the chance to fire, and it did not.
+5. **[security/threat-model.md](security/threat-model.md) §11, and this one is
+   security-relevant.** The row says of `sys_cacheflush(2)` that "on J4 every path
+   it dispatches to is a no-op — so it is neither a flush primitive nor a channel
+   there." `arch/sh/kernel/sys_sh.c` dispatches straight into
+   `__flush_invalidate_region` / `__flush_purge_region` / `flush_icache_range`,
+   and `cache-jcore.c`'s region helpers **ignore `start`/`size` and invalidate the
+   whole L1-D**. Unprivileged userspace holding any valid VMA can now force a
+   whole-L1-D invalidate. The code's reason for ignoring the region is sound — the
+   L1-D is write-through with no writeback path — but the *channel* conclusion
+   rested on "it is a no-op", and that premise is gone.
+6. **The J4 ASIC target has no cache maintenance and no document says so.**
+   `jcore-soc@origin/master:targets/asic/gf180_j4mmu/board.dts` has neither a
+   `jcore,cache` node nor an IPI node, so `jcore_cache_ccr_init()` takes its warn
+   path there and every J4 cache primitive stays a no-op on the ASIC vehicle.
+   0010's "Done" section reads as unconditional.
+
+   *Also under-stated rather than false:* `CPU_JCORE` selects `CPU_SH2`, `OF`,
+   `OF_EARLY_FLATTREE` and `ARCH_SUPPORTS_HUGETLBFS` — **not**
+   `SYS_SUPPORTS_SMP` — and `config SMP depends on SYS_SUPPORTS_SMP`. A J4 kernel
+   cannot enable SMP at all today, so the "cross-core reach comes from the IPI"
+   dependency the split acquires is a `CPU_J2` fact and, for the J4, prospective.
+
+**B. The `HTCR` fix did not reach the whole of `HTCR`'s own document.**
+[hypervisor/hardware-spec.md](hypervisor/hardware-spec.md) line 2045, in the cost
+summary, still says `HTCR` is "required only on implementations with more than
+one thread context" — the exact rule §2.10 replaced 1,500 lines above, and the
+exact rule that made the `PDID` version of this defect possible. Same document,
+same register, two presence rules.
+
+**C. C3 added a fourth action to a three-write list.** Gang-switch item 6 now
+reads "Switch `TSBBR`, `PDID`, `HTCR`, **and re-seed the TSB victim selector**"
+and its `Cost` cell still reads "three register writes".
+
+**D. `A2-R1` is stated at a block that cannot see its own predicate — which is
+the defect C3 says it is fixing.** C3's argument is that a rule stated where it
+cannot see the property it depends on is not enforceable, so it moved the rule to
+AIC2. AIC2 cannot see it either. [aic2-spec.md §2.2](aic/aic2-spec.md)'s signal
+list is `cpu_event_i_t` (outbound), `cpu_event_o_t`, `aic_com`, direct source
+lines and an MMIO slave port; `cpu_event_o_t` at `jcore-cpu@origin/master` is
+`{ack, lvl, slp, dbg}`, with no mode bit. §5.1's hyperprivileged bank holds
+`GUEST_OWNED` and `GVCPU_TARGET` and no "which `(G, V)` is dispatched on TC *t*"
+state, and §7.4's dispatch sequence writes only those two. So "a guest vCPU is
+dispatched on `TARGET[s]` with `SR.HPRIV = 0`" has no wire and no register. C3's
+note says the predicate "costs nothing new" because §5.2's fast path already
+needs it — that is true, and the fast path never had it either. **§5.5 now makes
+`A2-R1` "the whole of the argument" that the delegation is confined to the
+guest's own sources**, so the whole of that argument rests on an input the
+specification does not provide. This is a specification gap, not an RTL one: it
+is fixed by naming the port or the register, in §2.2 and §5.1.
+
+**E. `A2-R1` has no way to stop re-firing.** It leaves `PEND[s]` set and
+deliberately files nothing in `HVDP` — "a host-owned source has no `(G, V)` to
+file it under" — so the hypervisor's ping carries no identification (`HVDP_SUMMARY`
+reads zero for it, and §5.4 says reading `HVDP_SUMMARY` is how the hypervisor
+finds out what happened), and on return to the guest `ENABLE[s] & PEND[s]`
+requalifies and the rule fires again. The rule's own text permits the hypervisor
+to "undispatch **or defer**"; deferring livelocks. The only safe response is
+undispatch, which makes "serviced one HS entry later than before" an
+under-statement: the real cost is a vCPU undispatch per host-owned interrupt.
+Two smaller things in the same section: §5.2's pseudocode still spells both slow
+paths "at `IRL=15`" with no `msk`, and conformance item T2-9 attaches the `msk`
+requirement to `A2-R1` alone rather than to the internal vector.
+
+**F. The prior-art sweep's own residue.** The post-F commit says the retired
+speculative-taint name "is retired everywhere it appeared". It is not.
+[security/threat-model.md](security/threat-model.md) line 1264 — the **L4 bar
+requirement itself** — still names it; line 510 states the poison-bit framing
+that [ooo/j32ooo-spec.md §20.7](ooo/j32ooo-spec.md) forbids **by name** ("Do not
+'simplify' §9.4 rule 3 into a poison bit, and do not reintroduce the name");
+[j4-execution-plan.md](j4-execution-plan.md) line 114 carries it unannotated. And
+F §7 item 3 recurs verbatim one file over:
+[j4-remediation-plan.md](j4-remediation-plan.md) line 816 still gives UCP
+(MICRO **2006**) and DAWG (2018) as the *adopted answer* for C2's cache
+isolation, ~320 lines above the §E.10 entry that was re-grounded.
+
+**G. A removed figure survived twice, which [0005](decisions/0005-unmeasured-figures-are-removed.md)
+does not permit.** The post-F carrier fix **removed** §16.1's "~200 gates" — the
+section says so in terms, "removed rather than annotated … because it was costed
+against 'the domain tag is already on the fabric', which is false". The figure is
+still in that document's own changelog at line 26 ("way partitioning closes it for
+~200 gates"), and still in
+[security/threat-model.md](security/threat-model.md)'s evidence table at line
+1643, sourced to the section that no longer carries it and with `Synthesize` as
+the action — commissioning synthesis of a number that has been withdrawn. The
+neighbouring rows of that same table were updated on 2026-09-10.
+
+**H. Three self-referential counts that the same commits got wrong.**
+[ooo/j32ooo-spec.md](ooo/j32ooo-spec.md) line 1257 says the retired
+speculative-taint name "was being carried by **five** other documents"; at
+`e98119a^` it appears in **four** (`j4-execution-plan.md`,
+`j4-remediation-plan.md`, `mmu/hardware-spec.md`, `security/threat-model.md`),
+and the commit message says six — three numbers for one set.
+[j4-execution-plan.md](j4-execution-plan.md) line 269 says "§9.4 rule 3 is
+already what the plan's **fourth** name pointed at" two lines above "**Two of the
+plan's three names** are retired", where the parallel passage in the threat model
+says *third*. And [mmu/hardware-spec.md](mmu/hardware-spec.md) line 1367 says
+"**three** documents said it was not", where its own body names two. None of
+these is load-bearing; all three are the arithmetic the registry's value guards
+exist for, in sentences no fact covers, written by the commits that were fixing
+the previous round of the same thing.
+
+**I. One dangling pointer.** [fgmt/dual-fgmt-proposal.md](fgmt/dual-fgmt-proposal.md)
+line 89, in the new §4.1 the prior-art sweep created, grounds a bullet on
+"[cache/l2-spec.md §6.1](cache/l2-spec.md)". §6.1 of that document is
+*Atomicity: CAS.L via L2-Line Lock → Motivation*; the MSI prior art it means is
+§3.
+
+### F2.4 The narrow inversion answer, measured
+
+C3 answered F's rank-3 gap per-rule: register the clause carrying a rule's
+polarity as its own fact, and `owner-has-fact` then requires it to stay there.
+Two rows exist, `aic2.hostowned.polarity` and `hyp.bootstrap.polarity`.
+
+**It works on the perturbation C3 ran.** I reproduced it: changing `A2-R1. Do
+NOT deliver` to `A2-R1. Deliver to the guest` fails, loudly and by name.
+
+**It does not survive the way this tree actually reverses a rule.** Every
+document here retires a claim by quoting it as history and stating the opposite
+beside it — it is the house style, and C3's own commits use it on every page. So
+I retired `A2-R1` in that style:
+
+I replaced the delivery branch with two comment lines quoting the pinned clause
+as something [`A2-R1`](aic/aic2-spec.md) "previously read" and calling it retired
+as over-strict, followed by the live `deliver via cpu_event_i_t to the running
+thread` statement the rule forbids.
+
+The pinned literal is still in the owner, so `owner-has-fact` is satisfied.
+`--strict --check-waivers` exits **0**, and the delivery rule now performs the
+cross-domain delivery `A2-R1` was created to forbid. The guard is defeated by the
+idiom the project uses for every retirement.
+
+**And the line it draws is an accident of authorship.** There are ~70 normative
+rule identifiers in `docs/` — the [FP](fpu/spec.md), [G](simd/gpu/simd-gpu-spec.md),
+[H](hypervisor/hardware-spec.md), [I](iommu/hardware-spec.md), [K](fpu/spec.md),
+[P](cache/l2-spec.md), [SQ](sq/spec.md), [S](simd/spec.md),
+[T](hypervisor/hardware-spec.md), [V](simd/spec.md), [W](mmu/hardware-spec.md)
+and [A2](aic/aic2-spec.md) rule families. Two have a polarity
+fact, and they are the two C3 wrote. **None of the four rules F named as the
+demonstrated inversion cases has one.** I inverted [`I-R5`](iommu/hardware-spec.md)
+— F's worst case, the one that inverted reads as the retired specification — in
+both places it is stated, the §3.10 rule text and §4.3's lookup pseudocode, and
+the gate exits **0**. The registry's stated justification for stopping at two —
+"two rules whose polarity is the whole of their content" — is a description of
+that [very rule](iommu/hardware-spec.md).
+
+**The honest reading.** The polarity fact is worth keeping; it is cheap and it
+catches deletion. It is not an answer to inversion, and the registry should say
+so in those words rather than as a limit on "rules someone remembered to
+register". Either the polarity of every rule that carries one is registered — and
+the pattern is anchored so that a demotion to history does not satisfy it — or
+the gap is named as rank 3 still open. What is not defensible is a two-row
+sample presented as a design.
+
+### F2.5 The new checks, checked against real historical instances
+
+The project's bar is that a check must be demonstrated against a real historical
+instance, not a fixture. I re-ran two of them myself rather than trusting the
+suite.
+
+- **`enumeration-row-count` catches.** Deleting row 5 — BMID `0xFF`, the
+  permanent bypass — from [iommu/hardware-spec.md §3.10](iommu/hardware-spec.md),
+  which is C2d's own disclosed pass on the row C2d called the reason the
+  enumeration exists:
+  `FAIL [enumeration-row-count] iommu.bypass.paths: … states 7 and its `# | Path`
+  table has 6 row(s).`
+- **`site-absence-claim` catches.** Restoring [aic2-spec.md
+  §5.5](aic/aic2-spec.md)'s retired sentence, taken verbatim from `8f1832d^`:
+  `FAIL [site-absence-claim] docs/aic/aic2-spec.md:567: restates the wording
+  aic2.hostowned.masked retired ('masked at the AIC2 level') …`
+
+Neither is vacuous. Both trees were restored; the gate is green.
+
+**A new disclosed failure, not in the register: `site-absence-claim` is
+blind across documents.** The claim is anchored on a (document, wording) pair. I
+reasserted `aic2.hostowned.masked`'s retired wording — the same sentence,
+verbatim from `8f1832d^` — in [hypervisor/design-spec.md §4.3](hypervisor/design-spec.md)
+instead of in `aic2-spec.md`, and the gate exits **0**. **F §3.2 was precisely
+the cross-document class** — "stale statements one task retired and another still
+asserts" — so the check written in answer to F closes the same-document half of
+what F found. That belongs in `## Absence claims`'s disclosure table.
+
+**And the registry has drifted inside itself.**
+[fact-ownership.md](fact-ownership.md) line 605 says "the three rows in that
+table" and line 626 says "Three sites are registered". `## Absence claims` has
+**nine**; C3's `13ccc46` added six and left the prose. That is the
+counted-enumeration drift `enumeration-row-count` exists for, in the document
+that defines `enumeration-row-count`, uncovered because no fact registers the
+absence-claim count.
+
+### F2.6 The bar audit
+
+**Seven items, seven `NOT MET`, and that is still correct.** I re-verified the
+four categorisations put to F:
+
+- **L4's transmitters ship today.** `core/tlb_walk.vhd` is present at
+  `jcore-cpu@origin/master`, and the I→D speculative shadow fill has its own
+  install path (`shadow_wr`, `shadow_vpn`, `shadow_ptel`, `shadow_asid` in
+  `core/cpu.vhd`). Unchanged.
+- **L2's blocker is that the bus has no BMID field.** `cpu2j0_pkg.vhd`'s
+  `cpu_data_o_t` is `{en, a, rd, wr, we, d}`. Unchanged and still the largest
+  prerequisite in the programme.
+- **L5's second reason is fixed in the design**, and its status row says so
+  without claiming the item moved. Correct.
+- **L6's gap is evidential, and is now *partly* checked** rather than wholly
+  unchecked: the three closed sites carry absence claims, so a reopening in the
+  closing document fails. It is still unchecked against the cross-document
+  reassertion of §F2.5, and the count of open sites is still maintained by hand.
+
+**Where the audit is now wrong: L1's status row is stale.** C3 added a TSB
+victim-selector re-seed to gang-switch item 6, and
+[hypervisor/hardware-spec.md §4.7.1a](hypervisor/hardware-spec.md) says of it
+that "the scrub for this structure is a *re-seed*, it needs entropy, and hardware
+has none". L1's row still enumerates items 7, 8 and 9 as the additions and does
+not carry this. **C3's report that "no bar item moved" is true of the verdicts
+and its report that "none of the five was gated on one" is not**: the gang-switch
+list *is* L1's requirement, and the programme's own precedent is C1a's — "adding
+the scrub without adding it to *that list* would have left L1 unmet". L1 has
+acquired a list item that no hardware can perform and no document sources.
+
+### F2.7 What is buildable now
+
+F said "one and a half"; the post-F work said 0010 became a whole one. **0010
+decision 4 is now *done*, not dispatchable**, so the count is not one and a half,
+or one — it is **one, and it is not the one anybody was looking at**:
+
+1. **Part of C2b — the delayed speculative translation install.** Still the only
+   design-side item with shipping hardware to build against, and it is unchanged
+   by everything since F.
+2. **New, created by the merge:** `targets/asic/gf180_j4mmu` has no `jcore,cache`
+   node, so the J4 ASIC target — the methodology vehicle — still has no cache
+   maintenance. Either the device tree gains the node, or a document says the
+   ASIC target is no-DMA-coherency and 0010's "Done" is scoped to the FPGA
+   boards. This is small, real, and in front of the next implementer in the same
+   way the [`P-R8`](cache/l2-spec.md) collision was.
+3. **Documentation and checker work**, unchanged in kind from F §6 and now with a
+   specific list: §F2.3's six falsified kernel sites, §F2.3 B and C, §F2.4's
+   polarity decision, §F2.5's cross-document class and the registry's own
+   nine-vs-three drift, and F's rank 6.
+
+Everything else stands exactly as F left it: **six unscheduled hardware
+programmes and one unscheduled evidence infrastructure.** Nothing in 25 commits
+scheduled any of them, and nothing was expected to.
+
+### F2.8 Unowned obligations
+
+F's two are owned and I confirmed both rows in
+[security/threat-model.md §11](security/threat-model.md). C3's own filings landed
+and are actionable: guest `SR.IMASK` virtualization, and the three `aic2-spec.md`
+§5 descriptions C3's remit did not cover, each with a named destination. Two new
+ones are not filed anywhere:
+
+1. **Where the hypervisor's gang-switch entropy comes from.** §4.7.1 item 6
+   requires a re-seed at every ownership change; §4.7.1a says hardware has none
+   and makes it the hypervisor's write; no document names a source, and
+   [mmu/linux-spec.md](mmu/linux-spec.md)'s answer is a `late_initcall`, which is
+   boot, not a gang switch.
+2. **AIC2's dispatch-state input** — §F2.3 D. `A2-R1`'s predicate needs a signal
+   or a register that no section provides. §11's C3 row names three unarbitrated
+   injection mechanisms but not this.
+
+### F2.9 Gates
+
+| Gate | After Task F | After F2's session (`405c250`) |
+|---|---|---|
+| `python3 scripts/check-doc-facts.py --strict --check-waivers` | exit 0 | **exit 0** |
+| `python3 scripts/check-doc-facts.py --list-checks` | 22 named checks | **23** |
+| `python3 scripts/test-check-doc-facts.py` | 167 passed, 0 failed | **183 passed, 0 failed** |
+| `python3 scripts/test-check-doc-facts.py --mutate-sweep` | 35 killed, 0 survived | **48 killed, 0 survived, 0 with a moved target** |
+
+Registry, measured with the checker's own parser: **68** registered facts (F: 65),
+**14** with a value guard, **31** with a code binding, **6** with an enumeration,
+**9** absence claims, **28** waivers, **4** unresolved. **0** facts carry both a
+value guard and a code binding; **23** carry none of the three.
+
+### F2.10 What did not survive checking
+
+Every task in this programme has reversed at least one thing it was told. This
+one reverses six, and three of them are its own brief's.
+
+1. **"F reviewed `main` at `eb62a37`."** It did not; that SHA is on no branch but
+   `wave1/foundations` and is not an ancestor of F's commit. F's base was
+   `b76c545`.
+2. **"27 commits have landed since F."** Twenty-five.
+3. **"163 registry rows."** That is every table row in the `## Registry`
+   *section*, which contains the per-wave perturbation-disclosure tables as well
+   as the registry. There are **68** registered facts. F reversed the identical
+   conflation in its §8 item 3 — it was "151 rows" then — and the number came
+   straight back in the next brief, which is a small demonstration of the same
+   thing this programme is about.
+4. **"C3 answered the inversion gap narrowly."** It answered a narrower thing
+   than that: not "rules someone remembered to register" but "the two rules C3
+   itself wrote", and the answer does not hold against a demotion to history.
+   §F2.4.
+5. **"L5's is unbuilt mechanism, L2's blocker is the missing BMID field, L4's
+   transmitters ship, L6's gap is purely evidential."** All four still hold. The
+   framing's omission is **L1**, whose row went stale in the last nine commits.
+   §F2.6.
+6. **"C3's five items were not gated on a bar item."** Four of the five were not.
+   The TSBVSEED re-seed is an item on bar item L1's own normative list. §F2.6.
+
+**And the thing that is genuinely good, said plainly because a review that only
+finds fault is not a measurement.** The [`P-R8`](cache/l2-spec.md) ↔ 0010 resolution was correct, was
+carried into code, and the code is better than the specification asked for — the
+patch's own header reasons from the RTL's decode width, names the stride hazard
+in `sh2/probe.c` that it deliberately does not touch, and states the write-through
+property that licenses ignoring the region argument. C3's `A2-R1` found a real
+cross-domain delivery that six waves of review had read past, killed a
+vector-stride claim that had propagated into a decision in another document, and
+did both by reading the RTL rather than the specification. The two collisions F
+found are closed and were closed by deciding, not by annotating. **The failure
+mode that remains is the one F named and this review confirms from a second
+angle: the tree is excellent at recording what it decides and has no mechanism
+that notices when the world it described changes.** The kernel merge is the first
+time the world changed, and six documents went false in one commit with the gate
+green.
+
+---
+
+## Part II — Task F, 2026-09-09 — the original review, unaltered
+
+*What follows is Task F's report as it was written, plus the note the post-F task
+added to it. Where F2 disagrees, F2 says so above; nothing below has been edited
+to match.*
 
 > **What happened next, 2026-09-10 — read this before acting on anything below.**
 > A follow-up task acted on this review's blocking findings, and several
