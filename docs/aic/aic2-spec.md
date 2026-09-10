@@ -489,15 +489,28 @@ The "fast path" exists so that, when a guest's I/O device interrupts while the g
 > and inverts the branch it feeds. This rule **removes a delivery**; it adds no register, no
 > wire and no state, which is why it owes no prior art of its own beyond §5.8's.
 >
-> **`IRL = 15` is load-bearing and closes a second hole.** The internal vector is raised above
-> every `SR.IMASK` value, so a guest cannot suppress it. Without that, `A2-R1` would merely
-> move the problem: delivery is gated on `PRIO[winner] > SR.IMASK` against the **physical**
-> `SR.IMASK` (§3.4), which a running guest writes, so a guest that raises `IMASK` and spins
-> would hold off the host's own interrupts for its whole quantum. No section of this spec or
-> of [../hypervisor/hardware-spec.md](../hypervisor/hardware-spec.md) states whether guest
-> writes to `SR.IMASK` are trapped, shadowed, or applied to hardware; `A2-R1` makes the answer
-> stop mattering for host-owned sources, and it still matters for everything else — filed in
-> [../security/threat-model.md §11](../security/threat-model.md).
+> **The internal vector must be unmaskable, and `IRL = 15` does not make it so.** Without
+> unmaskability `A2-R1` would merely move the problem: delivery is gated on
+> `PRIO[winner] > SR.IMASK` against the **physical** `SR.IMASK` (§3.4), which a running guest
+> writes, so a guest that raises `IMASK` and spins would hold off the host's own interrupts
+> for its whole quantum. §5.2 says the slow path raises "a hyperprivileged interrupt on this
+> physical CPU at `IRL=15`", and **that spelling is not sufficient**: SH-4 accepts an
+> interrupt when its level is *greater than* `IMASK`, so level 15 against `IMASK = 15` is
+> masked, and `PRIO` is three bits wide (§3.1) and cannot express 15 in the first place.
+>
+> **The mechanism the shipping core already has is a different signal, and `A2-R1` requires
+> it.** `cpu2j0_pkg.vhd`'s `cpu_event_i_t` carries a `msk` bit beside `vec` and `lvl`, and
+> `decode/decode_core.vhm` gates acceptance on `( ibit < event_i.lvl or event_i.msk = '1' )` —
+> so `msk = '1'` bypasses the `IMASK` comparison outright. **A T2 AIC2 MUST assert `msk` on
+> the internal delivery-pending vector.** Reading "`IRL=15`" as the unmaskability mechanism is
+> the error this paragraph exists to prevent, and it is the same error as the one `A2-R1`
+> itself fixes: a property asserted at a place that cannot express it.
+>
+> No section of this spec or of
+> [../hypervisor/hardware-spec.md](../hypervisor/hardware-spec.md) states whether guest writes
+> to `SR.IMASK` are trapped, shadowed, or applied to hardware; `A2-R1` plus `msk` makes the
+> answer stop mattering for host-owned sources, and it still matters for everything else —
+> filed in [../security/threat-model.md §11](../security/threat-model.md).
 >
 > **What `A2-R1` costs the host.** A host-owned interrupt taken while a guest is dispatched is
 > now serviced one HS entry later than before, instead of being serviced in the wrong domain.
@@ -826,7 +839,7 @@ A SoC integration claiming conformance to a tier MUST satisfy all of the followi
 - (T2-6) Hyperprivileged-only register protection per [hypervisor/hardware-spec.md §3.4](../hypervisor/hardware-spec.md).
 - (T2-7) `jcore_vintc` ABI parity with the bare-metal AIC2 host register file per §5.6.
 - (T2-8) `AIC2_CAPS.HAS_VIRT = 1` on the bare-metal view; `HAS_VIRT = 0` on the `jcore_vintc` view per §8.3.
-- (T2-9) [`A2-R1`](#52-delivery-rules): no host-owned source is delivered to a TC hosting a dispatched guest vCPU (`SR.HPRIV = 0`); it raises the always-to-HS internal vector at `IRL = 15` instead, with `PEND[s]` left set. **This is the item a T2 implementation is most likely to omit**, because omitting it produces a machine that works — host interrupts are serviced, guest interrupts are serviced — and differs only in *which domain* a host-owned interrupt lands in while a guest runs. The negative test is the conformance point: with `HEDR[15] = 1` on the dispatched vCPU, assert a host-owned source and require the trap at `VBR_HYP`, not at the guest's `VBR`.
+- (T2-9) [`A2-R1`](#52-delivery-rules): no host-owned source is delivered to a TC hosting a dispatched guest vCPU (`SR.HPRIV = 0`); it raises the always-to-HS internal vector instead — with `cpu_event_i_t.msk` asserted, since `IRL = 15` alone is maskable by a guest at `IMASK = 15` — and leaves `PEND[s]` set. **This is the item a T2 implementation is most likely to omit**, because omitting it produces a machine that works — host interrupts are serviced, guest interrupts are serviced — and differs only in *which domain* a host-owned interrupt lands in while a guest runs. The negative test is the conformance point: with `HEDR[15] = 1` on the dispatched vCPU, assert a host-owned source and require the trap at `VBR_HYP`, not at the guest's `VBR`.
 
 ---
 
