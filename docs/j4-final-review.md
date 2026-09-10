@@ -114,7 +114,7 @@ writing. That is rare and it is the reason this review could be written at all.
 
 ### 2.1 What the checker actually guards
 
-`scripts/check-doc-facts.py` runs 22 named checks. Five bear on registered facts:
+`scripts/check-doc-facts.py` runs 22 named checks. *(23 as of 2026-09-10 — `site-absence-claim`, rank 5 below, implemented rather than recommended. Six bear on registered facts; the table's counts of guarded facts are unchanged, because an absence claim is keyed on a document and a retired wording rather than on a fact.)* Five bear on registered facts:
 
 | Check | What it guarantees | What it cannot see |
 |---|---|---|
