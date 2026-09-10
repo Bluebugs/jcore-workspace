@@ -576,9 +576,9 @@ Four, and the fourth is the one a hypervisor author would not think to look for.
    4+2+2 on an eight-way L2. An illegal write leaves the previous mask standing and sets
    `WAYMASK_REJECT` in `L2_STATUS`, so **a hypervisor that does not read that bit back will run
    with the previous tenant's mask and no error**. Read it back.
-2. **Assign the reservation and the quantum with the mask.** `P-R3`'s per-domain MSHR reservation
-   and `P-R5`'s `L2DRRQ` quantum are hyperprivileged, exactly like `L2WAYMASK`, and are part of the
-   same act of admitting a tenant. Setting the mask alone leaves two of the five mechanisms inert.
+2. **Assign the reservation and the quantum with the mask.** [`P-R3`](../cache/l2-spec.md)'s
+   per-domain MSHR reservation and [`P-R5`](../cache/l2-spec.md)'s `L2DRRQ` quantum are
+   hyperprivileged, exactly like `L2WAYMASK`, and are part of the same act of admitting a tenant. Setting the mask alone leaves two of the five mechanisms inert.
 3. **`PDID` is the carrier here too.** The domain tag the L2 consults is the same `PDID` that
    [hardware-spec.md §2.8](hardware-spec.md) carries to the predictors, per
    [cache/l2-spec.md §16.1](../cache/l2-spec.md). One identifier, three consumers — predictors,
