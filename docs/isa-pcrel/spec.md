@@ -171,6 +171,17 @@ counter), like `movi20` (isa-density §2; [hardware-impl.md](hardware-impl.md) �
   `0000`–`1001` (the disp12 integer loads/stores plus the `fmov.s`/`fmov.d` FP
   loads/stores at minors `0011`/`0111`); `lea` (isa-density) takes `1010`;
   **this instruction takes `1011`** (verified unallocated everywhere, §6).
+  **`1011` is also `bsr label` when decoded at top level, and that was never asked.**
+  *(Wave-3 **C3**, 2026-09-10.)* §6's sweep answers "is this minor claimed inside the two-word
+  group", which is the collision question. The other question — what these sixteen bits mean to a
+  decoder that arrives at `word0 + 2` from a branch, which on a 16-bit fixed-width ISA is a legal
+  place to arrive — has an answer in `jcore-cpu@origin/master:docs/insns.json`:
+  `1011dddddddddddd` is `bsr`, a relative call that writes `PR` and has a delay slot. Of the six
+  free minors in the group, this and `lea`'s `1010` (`bra`) are the two worst; `1110`
+  (`mov #imm,Rn`, the whole minor) is inert. The table, the reasoning and the decision's owner are
+  in [../isa-density/spec.md §3.4](../isa-density/spec.md); the security class is accepted at
+  [../security/threat-model.md §10](../security/threat-model.md) item 18. **Filed, not changed** —
+  moving it needs the sweep re-run, and it is free only while neither instruction is in RTL.
 - Because the base is **PC (implicit)**, the word0 base field `mmmm` is dead —
   it is **reclaimed as the high nibble `DDDD` of a 16-bit displacement**. The
   full displacement is `disp16 = (DDDD << 12) | word1[11:0]`, sign-extended.

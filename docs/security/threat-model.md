@@ -1807,6 +1807,40 @@ close one is scope expansion, not compliance.
     is one trap per character, which makes an early-boot console the cheapest way for a guest to
     generate hypercalls at the maximum rate the machine allows; that is a *measurement* target for
     D0, not a defect, and it is named so nobody rediscovers it as one.
+18. **[accepted] Code-reuse gadgets at the interior word of a two-word instruction.**
+    *(Added by C3, 2026-09-10. This is the "embedded-immediate gadget acknowledgement" of
+    [j4-remediation-plan.md §C3](../j4-remediation-plan.md), and the acknowledgement is the
+    deliverable.)* J-Core is 16-bit fixed-width and **every even address in `.text` is a legal
+    instruction boundary**, so an indirect branch whose target an attacker influences can enter at
+    `word0 + 2` of any two-word instruction and the decoder will oblige. Verified against
+    `jcore-cpu@origin/master:docs/insns.json`: `movi20`/`movi20s` word1 is sixteen unconstrained
+    bits — **any SH instruction at all** — and `lea @(disp,Rm),Rn` word1 is `1010dddddddddddd`
+    = `bra label`, `lea @(disp,PC),Rn` word1 is `1011dddddddddddd` = `bsr label`, both of which
+    have delay slots, and `bsr` writes `PR`.
+    **Accepted, for four reasons in descending order of how hard they are to argue with.**
+    *(i)* **The primitive is inherited, not introduced.** Stock SH puts literal pools in `.text`
+    and reaches them with `mov.w`/`mov.l @(disp,PC),Rn` ([bi-endian-spec.md §5.3](../bi-endian-spec.md)),
+    so fully attacker-chosen halfwords sit at stable even addresses in executable pages on shipping
+    J2 today. The two-word forms change gadget *density*, not the class.
+    *(ii)* **The observer and the victim are the same tenant.** The adversary of §1 is a guest
+    kernel; a code-reuse attack on this primitive is mounted by a guest's user process against its
+    own guest kernel. That is where **L1** puts them, and it is the same position items 7, 12 and
+    13 take.
+    *(iii)* **Closing it needs indirect-branch target restriction** — landing pads, an ABI change
+    and a toolchain change across three repositories — for a class the bar does not name. Pre-2006
+    prior art for the mechanism exists (Abadi, Budiu, Erlingsson & Ligatti, *Control-Flow
+    Integrity*, CCS 2005), **which this document has not verified at source** and does not need to,
+    because nothing here adopts it.
+    *(iv)* **W^X is the precondition, not the mitigation.** [mmu/design-spec.md §6.1](../mmu/design-spec.md)'s
+    independent `W` and `X` bits are what make code reuse the attack of choice rather than
+    shellcode; having them is why this entry exists.
+    **One lever is free today and is filed rather than pulled.** The density and PC-relative
+    instructions are unbuilt, and `lea`'s two word1 minors were chosen for encoding-space reasons
+    with no reader ever asking what they decode as on their own. Of the six free minors in that
+    group, `1010` and `1011` are the two worst available, and `1110` is inert. Moving them is a
+    zero-cost change now and a compatibility break later; the decision belongs to the specs that
+    own the encodings ([isa-density/spec.md §3.4](../isa-density/spec.md),
+    [isa-pcrel/spec.md §3.1](../isa-pcrel/spec.md)), which is where C3 filed it.
 
 ---
 
