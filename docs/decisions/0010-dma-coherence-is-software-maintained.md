@@ -116,16 +116,24 @@ wire away, on a different block".
   so the direction "device wrote, CPU is about to read" has no callback at all,
   independently of the no-op above.
 
-One further hazard, recorded without an assertion about its outcome because the
-outcome depends on hardware behaviour not established here: the J4 include path adds
-`cpu-jcore` (which contains only `mmu_context.h`) ahead of `cpu-sh2`, so
-`<cpu/cache.h>` resolves to `cpu-sh2/cpu/cache.h` and the J4 inherits
-`SH_CCR = 0xffffffec` — an SH-2 register address, where the J-Core CCR is a
-DT-discovered MMIO base (`j2_ccr_base`). `cpu_cache_init()` reads `SH_CCR` to decide
-whether to dispatch at all. Whichever way that read goes, the destination is either
-the `skip` label or `sh2_cache_init()`, which is declared `__weak` in
-`arch/sh/include/asm/cacheflush.h:110` and defined only in `cache-sh2.c`, which this
-build does not compile. Neither branch is a cache-maintenance implementation.
+One further hazard, recorded here **with its outcome, corrected 2026-09-09 by Wave-3
+C2e**: the J4 include path adds `cpu-jcore` (which contains only `mmu_context.h`)
+ahead of `cpu-sh2`, so `<cpu/cache.h>` resolves to `cpu-sh2/cpu/cache.h`.
+`cpu_cache_init()` reads `SH_CCR` to decide whether to dispatch at all, and the
+destination is either the `skip` label or `sh2_cache_init()`, which is declared
+`__weak` in `arch/sh/include/asm/cacheflush.h:110` and defined only in
+`cache-sh2.c`, which this build does not compile. Neither branch is a
+cache-maintenance implementation, which is this paragraph's point and is unchanged.
+
+*What is corrected is the premise and the hedge.* This paragraph read "the J4
+inherits `SH_CCR = 0xffffffec` — an SH-2 register address" and then declined to say
+which branch is taken, "because the outcome depends on hardware behaviour not
+established here". **The J4 inherits no `SH_CCR` at all**: that define sits inside
+`#if defined(CONFIG_CPU_SUBTYPE_SH7619)` in `arch/sh/include/cpu-sh2/cpu/cache.h`,
+and `arch/sh/configs/jcore_defconfig` does not set that symbol. So there is no MMIO
+read and no hardware behaviour to depend on — the `#ifdef SH_CCR` guard simply
+leaves `cache_disabled` at zero, `skip` is **never** taken, and `sh2_cache_init()`
+is always the destination. The hedge was hiding a `#if` behind a hardware question.
 
 **Why none of this has bitten.** There is no DMA master. `jcore-soc:components/dma/`
 holds a `README` reading *"Stub implementation of CoreSemi DMA engine"*, a

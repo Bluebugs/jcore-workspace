@@ -116,6 +116,9 @@ are the substitute for a check that cannot be written cleanly — see
 | `iommu.deny.rules` | IOMMU default-deny rules `I-R1`–`I-R10`; reset polarity `I-R1`, `GLOBAL` removal `I-R5` | [iommu/hardware-spec.md §3.10](iommu/hardware-spec.md) | `\bI-R(?:10\|[1-9])a?\b` |
 | `iommu.bypass.paths` | Paths reaching memory with no IOTLB permission check: **7** | [iommu/hardware-spec.md §3.10](iommu/hardware-spec.md) | `\*\*7\*\* bypass paths` |
 | `cache.dma.cacheops` | J4 Linux build compiles **no** cache-operations file; `cacheops-` keys on `CPU_J2` | [decisions/0010](decisions/0010-dma-coherence-is-software-maintained.md) | `` `cacheops-` selector keys on `` |
+| `cache.l2.isolation.rules` | Cache-isolation rules beyond ways: `P-R1`–`P-R8` | [cache/l2-spec.md §16.2](cache/l2-spec.md) | `\bP-R[1-8]\b` |
+| `cache.l2.residuals` | Residual channels §16.2 leaves: **10** — 4 closed, 2 mitigated, 4 accepted | [cache/l2-spec.md §16.3](cache/l2-spec.md) | `\*\*10\*\* residual channels` |
+| `soc.cachectrl.base` | Shipping cache-control MMIO block: `0xabcd00c0`, **outside P4** | [cache/l2-spec.md §16.2](cache/l2-spec.md) | `0xabcd00c0` |
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
@@ -483,6 +486,7 @@ formatting.
 | `biendian.ifetch.select` | `` `instr_o\.a\((\d+)\)` — an address bit `` | `jcore-soc:targets/data_bus_pkg.vhd` | `if instr_o\.a\((\d+)\) = '0' then` | `eq` |
 | `mmu.walk.spec` | `` `shadow_wr <= (\w+) and walk_side_i` `` | `jcore-cpu:core/cpu.vhd` | `shadow_wr\s*<=\s*(\w+) and walk_side_i;` | `eq-text` |
 | `cache.dma.cacheops` | `` `cacheops-` selector keys on `(CPU_\w+)` `` | `linux:arch/sh/mm/Makefile` | `cacheops-\$\(CONFIG_(CPU_J2)\)` | `eq-text` |
+| `soc.cachectrl.base` | `` `base-addr: 0x([0-9a-f]+)` `` | `jcore-soc:targets/boards/turtle_1v0/design.yaml` | `- class: cache_ctrl\n    base-addr: 0x([0-9a-f]+)` | `eq-hex` |
 
 Notes on what is deliberately **not** here, so the gaps are visible rather than
 inferred from silence:
@@ -736,6 +740,7 @@ Two escapes, and they are different things:
 | `mmu.walk.transmitters` | `\*\*(\d+)\*\* transmitters` | `\*\*(\d+)\*\* transmitters` |
 | `hyp.microreset.classes` | `\*\*(\d+)\*\* structure classes` | `\*\*(\d+)\*\* structure classes` |
 | `iommu.bypass.paths` | `\*\*(\d+)\*\* bypass paths` | `\*\*(\d+)\*\* bypass paths` |
+| `cache.l2.residuals` | `\*\*(\d+)\*\* residual channels` | `\*\*(\d+)\*\* residual channels` |
 
 ## Image layouts
 

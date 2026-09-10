@@ -15,7 +15,8 @@
 ## Changelog
 
 - **v0.4** (2026-09-09, Wave-3 **C2e**): Added §16.2 (`P-R1`–`P-R8`), §16.3 (what partitioning does
-  not close — three closed, two mitigated, four accepted, two of them found by this task), §16.4
+  not close — **10** residual channels classified: four closed, two mitigated, four accepted, two
+  of them found by this task), §16.4
   (`P-E1`–`P-E5`) and §22.1b. **Narrowed §16.1's "Why this closes the channel" to the occupancy
   channel** and deleted the justification for unrestricted hits, which was wrong in two ways.
   Corrected §16.1's sizing sentence, which licensed a way split `P-R1` does not allow. `movca.l` no
@@ -1063,7 +1064,7 @@ It is written as a rule because the shipping SoC violates it. `jcore-cpu@origin/
 core 0's `ic0_inv`/`dc0_inv` (bits 8 and 9) and whose word at offset `0x4` carries **core 1's**
 `ic1_inv`/`dc1_inv` in the same bit positions — plus `int1`, an IPI, at bit 28 of the same word.
 So one write invalidates the *other* core's L1-I and L1-D wholesale and interrupts it. On
-`jcore-soc@upstream/HEAD` that block is instantiated by
+`jcore-soc@origin/master` that block is instantiated by
 `targets/boards/turtle_1v0/design.yaml` at `base-addr: 0xabcd00c0` — **not in P4**. Its protection
 today is therefore a stage-2 page-mapping policy and not a privilege level, and under
 [security/threat-model.md §8](../security/threat-model.md) **L1**, where a core is a tenant, a
@@ -1078,6 +1079,9 @@ The point of this table is that **an accepted channel with a stated reason is a 
 outcome and an undocumented one is a defect**. `closed` means the mechanism removes the
 dependence; `mitigated` means it bounds it; `accepted` means this design does not intend to close
 it at launch and says why.
+
+§16.2 leaves **10** residual channels, classified below: four **closed**, two **mitigated**, four
+**accepted**.
 
 | # | Channel | Status | Mechanism, or the reason for accepting it |
 |---|---|---|---|
@@ -1100,7 +1104,7 @@ standing beside it.
 ### 16.4 Experiments this section owes `[T1/T2]` *(C2e, 2026-09-09)*
 
 Each has a kill criterion, and each is written so that it can fail. **None of them can be run
-today**: there is no L2 in `jcore-cpu@origin/master` or `jcore-soc@upstream/HEAD` — every
+today**: there is no L2 in `jcore-cpu@origin/master` or `jcore-soc@origin/master` — every
 case-insensitive `l2` match in either tree is a textio variable, an FPGA ball name, a TLB comment
 or prose — so these are specified and unbuilt, exactly like §22.1a's tests.
 
