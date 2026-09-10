@@ -70,6 +70,9 @@ CHECKS = {
     "context-image-sums": ("a save-image table that does not sum to its stated "
                            "total, or a registered image fact with no table",
                            "B0c"),
+    "enumeration-row-count": ("a counted enumeration whose table has stopped "
+                              "having that many rows, or a registered "
+                              "enumeration with no table", "B0c"),
     "one-encoding-database": ("a second encoding database, or the canonical one "
                               "missing", "0003"),
     "ci-provisions-submodules": ("a submodule the doc-vs-code checks read that "
@@ -97,6 +100,15 @@ DECISION_DOC = {
 }
 
 VALUE_CELL_MAX = 100
+
+# The Registry `Constant` cell states its value in bold -- `**520 bytes**`,
+# `**10**`, `**256,850**` -- and puts the explanation outside the bold, which is
+# what `registry-value-is-short` is for. Only the bolded part is the fact's own
+# statement of itself. `cache.l2.residuals` reads
+# "Residual channels §16.2 leaves: **10** -- 4 closed, 2 mitigated, 4 accepted";
+# reading the whole cell makes 4 and 2 statements of that fact, which they are
+# not, and licenses them tree-wide. See `check_no_stale_value`.
+REGISTRY_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 
 # How many distinct values a `## Value guards` canonical pattern may find in
 # its owner. Two is the normal case (a J32 and a J64 form). More than a few
@@ -923,29 +935,76 @@ def _excused(lines, index, m):
                for n in _match_lines(index, m.start(), m.end()))
 
 
+def licensed_values(body, guard):
+    """The values a guard's canonical pattern finds in `body`, retraction lines
+    excluded.
+
+    One implementation, because two checks need it and a copy of a safety
+    property has exactly the failure mode a copy of a fact does -- the argument
+    `load_fact_table`'s docstring makes, applied again. `check_no_stale_value`
+    uses it to build the licensing set; `check_enumeration_rows` uses it to
+    learn how many rows a table must have. Both must apply the retraction
+    exemption, and a second copy of it would rot separately."""
+    lines = body.split("\n")
+    index = _spans(body)
+    return sorted(set(m.group(1).strip()
+                      for m in guard.canonical.finditer(body)
+                      if not _excused(lines, index, m)))
+
+
 def check_no_stale_value(cfg, report, facts, guards, waivers):
     """No document may state a value for a registered fact other than the one
     its owner states. Wave-1 task B0c."""
     if not guards:
         return
     owners = {f.id: f for f in facts}
-    # Every number written in any Registry `Constant` cell. This is a second,
-    # independently maintained statement of the same values -- weaker than a
-    # per-fact comparison would be, since any row's number counts, but strong
-    # enough for the case it exists to catch: a retired value like 272 or 132
-    # appears in no cell at all, because the row was corrected when the fact
-    # was. The weakness is stated rather than hidden.
-    registry_values = set()
+    # The numbers the Registry states for the facts THIS DOCUMENT owns. This is
+    # a second, independently maintained statement of the same values, and the
+    # scoping is the whole of its strength.
+    #
+    # **It used to be one global pool over every `Constant` cell in the file,
+    # and that made it inoperative for exactly the facts it mattered most for.**
+    # Task F measured it: the pooled set contained every integer from 0 to 10,
+    # because 65 rows between them state all of those somewhere. Every Wave-3
+    # security count is in that range -- 4 transmitters, 4 microreset classes,
+    # 6 GPU producers, 7 IOMMU bypass paths, 10 residual channels, 10
+    # gang-switch items, 0 open `undefined` sites -- so the "written into both
+    # before it licenses anything" defence the registry claims did not exist for
+    # any of them. Two disclosed escapes follow directly:
+    #
+    #   - a `Constant` cell edited to disagree with its own owner passes,
+    #     because the owner's real value is still licensed by somebody else's
+    #     cell. `docs/fact-ownership.md` records this in six consecutive waves
+    #     (C1c, C2a, C2b, C2c, C2d, C2e), each time as "the cell is prose no
+    #     check reads" and each time deferring the fix to a checker change.
+    #     The cell IS read -- it was read into the pool -- which is why the
+    #     symptom looked like the cell being unread.
+    #   - a count stated TWICE inside its own owner, once current and once
+    #     stale, licenses both. C2e hit this and recorded it as the honest
+    #     headline of its run.
+    #
+    # Scoped by owning DOCUMENT and not by fact, because a fact legitimately has
+    # a J32 and a J64 form carried as two rows of the same owner
+    # (`simd.context.j32` = 520, `simd.context.j64` = 1036, both owned by
+    # `simd/spec.md §2.5`), and the canonical pattern licenses both from the one
+    # row. Per-fact scoping would fail that pair on a correct tree. Residual,
+    # stated rather than implied: two facts owned by the same document still
+    # license each other's values.
+    owner_values = {}
     for f in facts:
-        # `\d[\d,]*` and not `\d+`: a Constant cell reading "**256,850** gate
-        # equivalents" is ONE value, and splitting it into "256" and "850" left
-        # every thousands-separated fact unguardable -- the licensing set could
-        # never contain the string a scan pattern captures, so such a row would
-        # fail as `stray` however correct it was. Both forms are added, so a
-        # document writing 256850 unseparated still matches.
-        for raw in re.findall(r"\d[\d,]*", f.value):
-            registry_values.add(raw)
-            registry_values.add(raw.replace(",", ""))
+        vals = set()
+        # Bold spans only, and `\d[\d,]*` and not `\d+`: a cell reading
+        # "**256,850** gate equivalents" is ONE value, and splitting it into
+        # "256" and "850" left every thousands-separated fact unguardable --
+        # the licensing set could never contain the string a scan pattern
+        # captures, so such a row would fail as `stray` however correct it was.
+        # Both forms are added, so a document writing 256850 unseparated still
+        # matches.
+        for bold in REGISTRY_BOLD_RE.findall(f.value):
+            for raw in re.findall(r"\d[\d,]*", bold):
+                vals.add(raw)
+                vals.add(raw.replace(",", ""))
+        owner_values.setdefault(f.owner, set()).update(vals)
     corpus = {}
     for p in cfg.markdown_files():
         # The decision records quote retired values on purpose -- 0001's whole
@@ -981,12 +1040,7 @@ def check_no_stale_value(cfg, report, facts, guards, waivers):
         # hole rather than confining it. A line that is retiring a value is by
         # definition not stating it as current, so it must not be a source of
         # licence either.
-        owner_lines = body.split("\n")
-        owner_index = _spans(body)
-        licensed = sorted(set(
-            m.group(1).strip()
-            for m in g.canonical.finditer(body)
-            if not _excused(owner_lines, owner_index, m)))
+        licensed = licensed_values(body, g)
         if not licensed:
             report.fail("no-stale-value", g.id,
                         "canonical pattern %s matches nothing in the owner %s; "
@@ -1002,14 +1056,18 @@ def check_no_stale_value(cfg, report, facts, guards, waivers):
         # cells state it too, and they are maintained by a different edit.
         # Requiring the two to agree means a bare stale value has to be written
         # into BOTH before it licenses anything.
-        stray = [v for v in licensed if v not in registry_values]
+        allowed = owner_values.get(fact.owner, set())
+        stray = [v for v in licensed if v not in allowed]
         if stray:
             report.fail("no-stale-value", g.id,
-                        "the owner %s states %s for this fact, which appears "
-                        "in no Registry `Constant` cell. Either the owner has "
-                        "a stale value that would otherwise license itself "
-                        "tree-wide, or the Registry has not been updated."
-                        % (cfg.rel(fact.owner), "/".join(stray)))
+                        "the owner %s states %s for this fact, which is in no "
+                        "bolded Registry `Constant` cell for a fact that "
+                        "document owns (it states %s). Either the owner has a "
+                        "stale or duplicated value that would otherwise "
+                        "license itself tree-wide, or the Registry has not "
+                        "been updated."
+                        % (cfg.rel(fact.owner), "/".join(stray),
+                           "/".join(sorted(allowed)) or "nothing"))
             continue
         if len(licensed) > VALUE_GUARD_MAX_LICENSED:
             report.fail("no-stale-value", g.id,
@@ -1052,6 +1110,124 @@ def check_no_stale_value(cfg, report, facts, guards, waivers):
         if not hits:
             report.note("no-stale-value: %s licenses %s, no divergent "
                         "restatement" % (g.id, "/".join(licensed)))
+
+
+# --------------------------------- Task F: counted enumerations keep counting
+
+
+def load_enumerations(cfg, report, facts):
+    """Parse `## Enumerations`: facts that count the rows of a named table."""
+    rows = load_fact_table(
+        cfg, report, "enumeration-row-count", "## Enumerations", 3, facts,
+        "a security enumeration could be shortened by a row with its count "
+        "left standing, which is how a closed list becomes an open one")
+    if rows is None:
+        return None
+    return [(fid, cells[1], cells[2]) for fid, cells in rows]
+
+
+def check_enumeration_rows(cfg, report, facts, guards, enums):
+    """A fact that states how many things there are must agree with the table
+    that lists them.
+
+    THE HOLE THIS CLOSES, and it is the one gap in `docs/fact-ownership.md`'s
+    disclosures that four separate waves recorded as passing. Every Wave-3
+    security design states a count in prose above a table that enumerates the
+    things counted, and every one of them perturbed "delete a row from the
+    table, leave the count alone" and reported **passes**:
+
+      - C2b, a transmitter row of `mmu/hardware-spec.md` §5.0a;
+      - C2c, a structure-class row of `hypervisor/hardware-spec.md` §4.7.1a --
+        and it matters more there, because §4.7.1a constraint 2 says the scrub
+        is complete *over its scope*, so deleting a row silently narrows what
+        "complete" means;
+      - C2d, a bypass-path row of `iommu/hardware-spec.md` §3.10 -- and the row
+        the perturbation actually deleted was **path 5, BMID `0xFF`**, the
+        permanent bypass that is the whole reason the enumeration exists;
+      - C2e, a residual-channel row of `cache/l2-spec.md` §16.3 -- and §16.3
+        *is* the honesty list, so deleting a row is exactly how an accepted
+        channel becomes an undocumented one.
+
+    Each disclosure gives the same reason: "the value guard compares numbers
+    between documents; it does not count rows. `context-image-sums` is the only
+    row-counting check in this file and it applies to `Offset | Bytes | Content`
+    layouts, which this is not." This check is that sentence answered -- the
+    same shape as `context-image-sums`, driven by a registry table so a fact
+    cannot be satisfied by somebody else's list, and located by COLUMN HEADER
+    rather than by section heading for `find_tables_by_header`'s reason.
+
+    It also closes, without being aimed at it, the two silent positions C1b
+    disclosed for `hyp.gangswitch.items`: that fact's guard is anchored on the
+    LAST row of its table, so inserting a row before the anchor without
+    renumbering, or appending after it, both passed. A row count sees either.
+
+    **What it does not do.** It counts rows; it does not read them. A row
+    REPLACED by a different row keeps the count and passes, and so does a row
+    whose content is inverted -- which is the standing limit of every check in
+    this file and is not narrowed here."""
+    if enums is None:
+        return
+    owners = {f.id: f for f in facts or []}
+    by_id = {g.id: g for g in guards or []}
+    for fid, h1, h2 in enums:
+        fact = owners.get(fid)
+        if fact is None:
+            continue           # load_fact_table has already failed on this
+        guard = by_id.get(fid)
+        if guard is None:
+            # The same cross-table dependency `## Image layouts` has, and it is
+            # stated as a failure for the same reason: with no guard there is
+            # no canonical count, and a row count compared against a number
+            # hardcoded here would drift from the fact the moment it changed.
+            report.fail("enumeration-row-count", fid,
+                        "no `## Value guards` row, so the count its table must "
+                        "match comes from nowhere. Every enumeration needs one.")
+            continue
+        try:
+            body = read(fact.owner)
+        except (OSError, UnicodeDecodeError):
+            report.fail("enumeration-row-count", fid,
+                        "owning document %s is missing or unreadable"
+                        % cfg.rel(fact.owner))
+            continue
+        licensed = licensed_values(body, guard)
+        if len(licensed) != 1:
+            # Zero: `no-stale-value` reports the cause. More than one: a fact
+            # with a J32 and a J64 form is legitimate for a SIZE and meaningless
+            # for a row count, so it is a registry error rather than a doc one.
+            report.fail("enumeration-row-count", fid,
+                        "the owner %s licenses %d values (%s); an enumeration "
+                        "must state exactly one count."
+                        % (cfg.rel(fact.owner), len(licensed),
+                           ", ".join(licensed) or "none"))
+            continue
+        want = int(licensed[0].replace(",", ""))
+        headers = (unbacktick(h1), unbacktick(h2))
+        found = find_tables_by_header(body, headers)
+        if len(found) != 1:
+            # Zero is the `simd/spec.md` failure `## Image layouts` was built
+            # for -- a registered fact asserted to be covered by a table that
+            # is not there. More than one is worse than either: the check would
+            # silently pick the first, so which list it was guarding would
+            # depend on document order.
+            report.fail("enumeration-row-count", fid,
+                        "%s has %d tables headed `%s | %s`; exactly 1 is "
+                        "required. %s"
+                        % (cfg.rel(fact.owner), len(found), headers[0],
+                           headers[1],
+                           "The enumeration this fact counts is not there."
+                           if not found else
+                           "Which list the count guards would depend on "
+                           "document order."))
+            continue
+        rows = found[0][1]
+        if len(rows) != want:
+            report.fail("enumeration-row-count", fid,
+                        "%s states %d and its `%s | %s` table has %d row(s). "
+                        "A count left standing over a shortened list is how a "
+                        "closed enumeration becomes an open one."
+                        % (cfg.rel(fact.owner), want, headers[0], headers[1],
+                           len(rows)))
 
 
 # ------------------------------------------ B0c / 0003: the encoding database
@@ -2320,12 +2496,14 @@ def main():
         bindings = load_bindings(cfg, report, facts)
         guards = load_value_guards(cfg, report, facts)
         layouts = load_image_layouts(cfg, report, facts)
+        enums = load_enumerations(cfg, report, facts)
         if facts and bindings:
             check_code_bindings(cfg, report, repos, facts, bindings)
         if facts and guards:
             check_no_stale_value(cfg, report, facts, guards, waivers)
         check_p4_offsets(cfg, report, repos)
         check_context_image_sums(cfg, report, facts, guards, layouts)
+        check_enumeration_rows(cfg, report, facts, guards, enums)
         check_one_encoding_database(cfg, report, repos)
         # Not a comparison against code: a comparison between the registry and
         # the workflow that runs this script in CI. Deliberately NOT gated on

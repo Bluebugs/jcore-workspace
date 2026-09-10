@@ -1,73 +1,188 @@
 {
-  "_comment": [
-    "Mutations for `test-check-doc-facts.py --mutate-sweep`. Each entry deletes",
-    "or inverts ONE guard in check-doc-facts.py; the suite must go red for each.",
-    "A mutant that survives is a check nothing asserts.",
-    "",
-    "`old` must occur EXACTLY ONCE in the checker. A target that has moved is a",
-    "failure, not a skip: otherwise the sweep quietly shrinks as the code",
-    "changes and reports a clean run over fewer and fewer guards."
-  ],
-  "mutations": [
-    {"name": "resolved: ambiguity arm dropped",
-     "old": "    if seen > 1:", "new": "    if False:"},
-    {"name": "resolved: absent treated as merged",
-     "old": "    if seen == 1:", "new": "    if seen >= 0:"},
-    {"name": "resolved: always skip on absence",
-     "old": "    if shallow is not False:\n        report.skip(\"resolved-is-merged\",",
-     "new": "    if True:\n        report.skip(\"resolved-is-merged\","},
-    {"name": "resolved: never skip on absence",
-     "old": "    if shallow is not False:\n        report.skip(\"resolved-is-merged\",",
-     "new": "    if False:\n        report.skip(\"resolved-is-merged\","},
-    {"name": "resolved: unknown completeness treated as complete",
-     "old": "    if shallow is not False:\n        report.skip(\"resolved-is-merged\",",
-     "new": "    if shallow is True:\n        report.skip(\"resolved-is-merged\","},
-    {"name": "pending: 'IS on the branch' arm dropped",
-     "old": "        if subjects.get(subject, 0) >= 1:", "new": "        if False:"},
-    {"name": "pending: shallow mirror dropped",
-     "old": "        shallow = repos.is_shallow(repo_name)\n        if shallow is not False:",
-     "new": "        shallow = repos.is_shallow(repo_name)\n        if False:"},
-    {"name": "subject search unscoped (whole branch)",
-     "old": "                    rev = \"origin/%s..origin/%s\" % (base, branch)",
-     "new": "                    pass"},
-    {"name": "missing upstream base falls back to whole branch",
-     "old": "                        self._subjects[key] = None\n                        return None",
-     "new": "                        base = None"},
-    {"name": "graft/replace-ref detection dropped",
-     "old": "            if refs.strip():\n                result = True",
-     "new": "            if False:\n                result = True"},
-    {"name": "registry value scan reverts to \\d+, splitting thousands separators", "old": "        for raw in re.findall(r\"\\d[\\d,]*\", f.value):", "new": "        for raw in re.findall(r\"\\d+\", f.value):"},
-    {"name": "M1 registry cross-check dropped",
-     "old": "        stray = [v for v in licensed if v not in registry_values]",
-     "new": "        stray = []"},
-    {"name": "git_env stops stripping GIT_DIR and friends",
-     "old": "    env = {k: v for k, v in os.environ.items() if k not in GIT_ENV_OVERRIDES}",
-     "new": "    env = dict(os.environ)"},
-    {"name": "subject walk reverts to splitlines()",
-     "old": "l.strip() for l in log.split(\"\\n\") if l.strip())",
-     "new": "l.strip() for l in log.splitlines() if l.strip())"},
-    {"name": "git output decoded strictly",
-     "old": "                             errors=\"replace\")", "new": "                             )"},
-    {"name": "registry-value-is-short dropped",
-     "old": "        if len(fact.value) > VALUE_CELL_MAX:", "new": "        if False:"},
-    {"name": "strict-skip annotation dropped",
-     "old": "            if self.ANNOTATE:\n                print(\"::error title=%s::(skipped, --strict) %s\"",
-     "new": "            if False:\n                print(\"::error title=%s::(skipped, --strict) %s\""},
-    {"name": "wording: quote escape swallows every line",
-     "old": "            if any(q in low for q in UNMEASURED_QUOTE_PHRASES):",
-     "new": "            if True:"},
-    {"name": "wording: half-phrase arm dropped",
-     "old": "                if len(half.findall(line)) > canonical:",
-     "new": "                if False:"},
-    {"name": "wording: retired-marking arm dropped",
-     "old": "            if RETIRED_MARKING_RE.search(line):",
-     "new": "            if False:"},
-    {"name": "ci-provisions: clone arm dropped", "old": "        if repo not in cloned:", "new": "        if False:"},
-    {"name": "ci-provisions: fetch arm dropped", "old": "        if repo not in fetched:", "new": "        if False:"},
-    {"name": "ci-provisions: wrong-branch arm dropped", "old": "        elif branch not in fetched[repo]:", "new": "        elif False:"},
-    {"name": "ci-provisions: shallow-guard arm dropped", "old": "        if repo not in shallow_checked:", "new": "        if False:"},
-    {"name": "ci-provisions: a moved provisioning site reads as an empty one", "old": "        if not found:\n            missing_site = True", "new": "        if False:\n            missing_site = True"},
-    {"name": "ci-provisions: unreadable workflow returns instead of skipping", "old": "        report.skip(\"ci-provisions-submodules\",", "new": "        return\n        report.skip(\"ci-provisions-submodules\","},
-    {"name": "ci-provisions: shell line continuations no longer folded", "old": "    text = re.sub(r\"\\\\\\n\\s*\", \" \", body)", "new": "    text = body"}
-  ]
+ "_comment": [
+  "Mutations for `test-check-doc-facts.py --mutate-sweep`. Each entry deletes",
+  "or inverts ONE guard in check-doc-facts.py; the suite must go red for each.",
+  "A mutant that survives is a check nothing asserts.",
+  "",
+  "`old` must occur EXACTLY ONCE in the checker. A target that has moved is a",
+  "failure, not a skip: otherwise the sweep quietly shrinks as the code",
+  "changes and reports a clean run over fewer and fewer guards."
+ ],
+ "mutations": [
+  {
+   "name": "resolved: ambiguity arm dropped",
+   "old": "    if seen > 1:",
+   "new": "    if False:"
+  },
+  {
+   "name": "resolved: absent treated as merged",
+   "old": "    if seen == 1:",
+   "new": "    if seen >= 0:"
+  },
+  {
+   "name": "resolved: always skip on absence",
+   "old": "    if shallow is not False:\n        report.skip(\"resolved-is-merged\",",
+   "new": "    if True:\n        report.skip(\"resolved-is-merged\","
+  },
+  {
+   "name": "resolved: never skip on absence",
+   "old": "    if shallow is not False:\n        report.skip(\"resolved-is-merged\",",
+   "new": "    if False:\n        report.skip(\"resolved-is-merged\","
+  },
+  {
+   "name": "resolved: unknown completeness treated as complete",
+   "old": "    if shallow is not False:\n        report.skip(\"resolved-is-merged\",",
+   "new": "    if shallow is True:\n        report.skip(\"resolved-is-merged\","
+  },
+  {
+   "name": "pending: 'IS on the branch' arm dropped",
+   "old": "        if subjects.get(subject, 0) >= 1:",
+   "new": "        if False:"
+  },
+  {
+   "name": "pending: shallow mirror dropped",
+   "old": "        shallow = repos.is_shallow(repo_name)\n        if shallow is not False:",
+   "new": "        shallow = repos.is_shallow(repo_name)\n        if False:"
+  },
+  {
+   "name": "subject search unscoped (whole branch)",
+   "old": "                    rev = \"origin/%s..origin/%s\" % (base, branch)",
+   "new": "                    pass"
+  },
+  {
+   "name": "missing upstream base falls back to whole branch",
+   "old": "                        self._subjects[key] = None\n                        return None",
+   "new": "                        base = None"
+  },
+  {
+   "name": "graft/replace-ref detection dropped",
+   "old": "            if refs.strip():\n                result = True",
+   "new": "            if False:\n                result = True"
+  },
+  {
+   "name": "registry value scan reverts to \\d+, splitting thousands separators",
+   "old": "            for raw in re.findall(r\"\\d[\\d,]*\", bold):",
+   "new": "            for raw in re.findall(r\"\\d+\", bold):"
+  },
+  {
+   "name": "owner cross-check dropped (was M1 registry cross-check)",
+   "old": "        stray = [v for v in licensed if v not in allowed]",
+   "new": "        stray = []"
+  },
+  {
+   "name": "git_env stops stripping GIT_DIR and friends",
+   "old": "    env = {k: v for k, v in os.environ.items() if k not in GIT_ENV_OVERRIDES}",
+   "new": "    env = dict(os.environ)"
+  },
+  {
+   "name": "subject walk reverts to splitlines()",
+   "old": "l.strip() for l in log.split(\"\\n\") if l.strip())",
+   "new": "l.strip() for l in log.splitlines() if l.strip())"
+  },
+  {
+   "name": "git output decoded strictly",
+   "old": "                             errors=\"replace\")",
+   "new": "                             )"
+  },
+  {
+   "name": "registry-value-is-short dropped",
+   "old": "        if len(fact.value) > VALUE_CELL_MAX:",
+   "new": "        if False:"
+  },
+  {
+   "name": "strict-skip annotation dropped",
+   "old": "            if self.ANNOTATE:\n                print(\"::error title=%s::(skipped, --strict) %s\"",
+   "new": "            if False:\n                print(\"::error title=%s::(skipped, --strict) %s\""
+  },
+  {
+   "name": "wording: quote escape swallows every line",
+   "old": "            if any(q in low for q in UNMEASURED_QUOTE_PHRASES):",
+   "new": "            if True:"
+  },
+  {
+   "name": "wording: half-phrase arm dropped",
+   "old": "                if len(half.findall(line)) > canonical:",
+   "new": "                if False:"
+  },
+  {
+   "name": "wording: retired-marking arm dropped",
+   "old": "            if RETIRED_MARKING_RE.search(line):",
+   "new": "            if False:"
+  },
+  {
+   "name": "ci-provisions: clone arm dropped",
+   "old": "        if repo not in cloned:",
+   "new": "        if False:"
+  },
+  {
+   "name": "ci-provisions: fetch arm dropped",
+   "old": "        if repo not in fetched:",
+   "new": "        if False:"
+  },
+  {
+   "name": "ci-provisions: wrong-branch arm dropped",
+   "old": "        elif branch not in fetched[repo]:",
+   "new": "        elif False:"
+  },
+  {
+   "name": "ci-provisions: shallow-guard arm dropped",
+   "old": "        if repo not in shallow_checked:",
+   "new": "        if False:"
+  },
+  {
+   "name": "ci-provisions: a moved provisioning site reads as an empty one",
+   "old": "        if not found:\n            missing_site = True",
+   "new": "        if False:\n            missing_site = True"
+  },
+  {
+   "name": "ci-provisions: unreadable workflow returns instead of skipping",
+   "old": "        report.skip(\"ci-provisions-submodules\",",
+   "new": "        return\n        report.skip(\"ci-provisions-submodules\","
+  },
+  {
+   "name": "ci-provisions: shell line continuations no longer folded",
+   "old": "    text = re.sub(r\"\\\\\\n\\s*\", \" \", body)",
+   "new": "    text = body"
+  },
+  {
+   "name": "no-stale-value: licensing pooled across all owners again",
+   "old": "        allowed = owner_values.get(fact.owner, set())",
+   "new": "        allowed = set().union(set(), *owner_values.values())"
+  },
+  {
+   "name": "no-stale-value: whole Constant cell licenses, not just the bold",
+   "old": "        for bold in REGISTRY_BOLD_RE.findall(f.value):",
+   "new": "        for bold in [f.value]:"
+  },
+  {
+   "name": "enumeration: row-count comparison dropped",
+   "old": "        if len(rows) != want:",
+   "new": "        if False:"
+  },
+  {
+   "name": "enumeration: ambiguous-table arm dropped (>=1 accepted)",
+   "old": "        if len(found) != 1:",
+   "new": "        if len(found) < 1:"
+  },
+  {
+   "name": "enumeration: missing-table arm dropped",
+   "old": "        if len(found) != 1:",
+   "new": "        if False:"
+  },
+  {
+   "name": "enumeration: two-counts arm dropped",
+   "old": "        if len(licensed) != 1:",
+   "new": "        if False:"
+  },
+  {
+   "name": "enumeration: missing value guard treated as fine",
+   "old": "        if guard is None:",
+   "new": "        if guard is None and False:"
+  },
+  {
+   "name": "enumeration: the check never runs",
+   "old": "        check_enumeration_rows(cfg, report, facts, guards, enums)",
+   "new": "        pass"
+  }
+ ]
 }
