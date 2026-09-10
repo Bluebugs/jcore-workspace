@@ -320,17 +320,55 @@ either assignment.
 > something else on the architecture it was built for — the forbidden third
 > case, arriving through the fast path.
 
-**Interrupt vectoring.** [aic/aic2-spec.md §3.4](aic/aic2-spec.md) delivers at
-`VBR + 0x600 + vector_number * 0x20`. SH-4 has one interrupt entry point at
-`VBR + 0x600` and discriminates with `INTEVT` — Linux's SH exception table
-still labels it exactly that way (`arch/sh/kernel/cpu/sh3/entry.S`, "0x600:
-Interrupt / NMI vector"). The per-vector stride is a J-Core convention.
+**Interrupt vectoring — this paragraph was wrong, and it was the leg Decision
+B2-3 stood on.** *(Corrected by C3, 2026-09-10.)* It previously read: *"[aic/aic2-spec.md §3.4]
+delivers at `VBR + 0x600 + vector_number * 0x20`. SH-4 has one interrupt entry point at
+`VBR + 0x600` and discriminates with `INTEVT` … The per-vector stride is a J-Core convention."*
+The first sentence quoted [aic/aic2-spec.md §3.4](aic/aic2-spec.md) accurately; **§3.4 was
+itself wrong**, and the last sentence promoted one document's error into a property of the
+machine. There is no stride and there never was one. `jcore-cpu@origin/master`'s
+`decode/gen-go/spec/sh4/exceptions.toml` gives the `Interrupt` entry as
+`operation = "SPC<-PC; SSR<-SR; MD/RB/BL; IMASK; INTEVT<-vec; PC<-VBR+0x600"` with a vector
+slot of `xbus = "VBR"`, `ybus = "1536"`, `arith = "ADD"` — a flat add of `0x600`, with the
+8-bit event vector going to `INTEVT` and never to the PC. **J-Core does exactly what SH-4
+does here**, which is what the second sentence said SH-4 does, so the two sentences described
+the same behaviour and the paragraph called it a divergence anyway.
 
 > **Decision B2-3. AIC2 is the host's interrupt controller and is never the
 > guest's.** A guest's interrupt controller is emulated. AIC2's direct
 > guest-injection path ([aic/aic2-spec.md §5](aic/aic2-spec.md)) is a
 > paravirtual facility for a J-Core-aware guest only; a stock SH-4 guest must be
 > entered by the hypervisor at the SH-4 entry point with an SH-4 `INTEVT`.
+>
+> **The decision stands; its interrupt-vectoring leg does not, and is replaced.**
+> *(C3, 2026-09-10.)* The retired argument was "a stock SH-4 guest entered at a strided
+> vector lands somewhere its own handler table does not describe". A stock guest entered on
+> this machine's interrupt path lands at `VBR + 0x600`, which is precisely where its table
+> says to land. Three legs carry the decision without reference to the vector, and they are
+> stronger than the one they replace because none of them is a property of one number:
+>
+> 1. **A guest cannot reach the physical controller.** AIC2's MMIO lives in P4
+>    (`0xFF020000`–`0xFF02FFFF`, [soc/p4-mmio-map.md §3](soc/p4-mmio-map.md)) and a guest
+>    access to P4 raises the emulated-MMIO trap **wholesale, with no address in P4 exempt**
+>    ([hypervisor/hardware-spec.md §4.4.3](hypervisor/hardware-spec.md)). This is a
+>    fail-closed property of the address space, not of the interrupt model, so it does not
+>    move when the interrupt model does.
+> 2. **The guest-facing routing state is hyperprivileged-only.** `GUEST_OWNED`,
+>    `GVCPU_TARGET`, `VINJ_SEND` and `HVDP[*][*]` are HS-only and read as zero from a guest
+>    ([aic/aic2-spec.md §5.1](aic/aic2-spec.md)), so even a J-Core-aware guest programs a
+>    shadow and never the controller.
+> 3. **One source has one owner.** [aic/aic2-spec.md §5.7](aic/aic2-spec.md) gives each
+>    source either the host or exactly one guest vCPU; a device two guests share is
+>    host-owned and the host demultiplexes. A controller a guest cannot partition is not
+>    that guest's controller.
+>
+> **What the correction does change** is Decision B2-2's *scope*, and in the safe direction.
+> B2-2 says translate rather than delegate for a stock guest. For **interrupts** the offset
+> now agrees, so the residual divergence is `INTEVT`'s *value* rather than the handler's
+> address — and that value is separately unresolved against the shipping RTL; see the
+> `Interrupt INTEVT value` row in [fact-ownership.md](fact-ownership.md)'s `Unresolved` list.
+> B2-2's rule is unchanged: an unresolved cause vocabulary is exactly the case where
+> translation, not delegation, is the safe default.
 
 ### 3.5 Not supported
 
