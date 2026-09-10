@@ -118,7 +118,7 @@ are the substitute for a check that cannot be written cleanly — see
 | `hyp.tenancy.rules` | Tenancy-check rules `T-R1`–`T-R5`; the refusal is `T-R2` | [hypervisor/hardware-spec.md §4.7.2](hypervisor/hardware-spec.md) | `\bT-R[1-5]\b` |
 | `iommu.deny.rules` | IOMMU default-deny rules `I-R1`–`I-R10`; reset polarity `I-R1`, `GLOBAL` removal `I-R5` | [iommu/hardware-spec.md §3.10](iommu/hardware-spec.md) | `\bI-R(?:10\|[1-9])a?\b` |
 | `iommu.bypass.paths` | Paths reaching memory with no IOTLB permission check: **7** | [iommu/hardware-spec.md §3.10](iommu/hardware-spec.md) | `\*\*7\*\* bypass paths` |
-| `cache.dma.cacheops` | The sole J-Core `cacheops-` arm keys on `CPU_J2`; the J4 compiles **no** cache-ops file | [decisions/0010](decisions/0010-dma-coherence-is-software-maintained.md) | `` `cacheops-` selector keys on `` |
+| `cache.dma.cacheops` | The J4's `cacheops-` arm compiles `cache-jcore.o` (decision 4, landed `linux`#16) | [decisions/0010](decisions/0010-dma-coherence-is-software-maintained.md) | `` `cacheops-` selector keys on `` |
 | `cache.l2.isolation.rules` | Cache-isolation rules beyond ways: `P-R1`–`P-R8` | [cache/l2-spec.md §16.2](cache/l2-spec.md) | `\bP-R[1-8]\b` |
 | `cache.l2.residuals` | Residual channels §16.2 leaves: **10** — 4 closed, 2 mitigated, 4 accepted | [cache/l2-spec.md §16.3](cache/l2-spec.md) | `\*\*10\*\* residual channels` |
 | `soc.cachectrl.base` | Shipping cache-control MMIO block: `0xabcd00c0`, **outside P4** | [cache/l2-spec.md §16.2](cache/l2-spec.md) | `0xabcd00c0` |
@@ -733,7 +733,7 @@ formatting.
 | `biendian.dside.bytelane` | `` onto `we = "([01]+)"` — bit 3 `` | `jcore-cpu:core/datapath.vhm` | `when "00" =>\s+r\.we := "([01]+)"` | `eq-text` |
 | `biendian.ifetch.select` | `` `instr_o\.a\((\d+)\)` — an address bit `` | `jcore-soc:targets/data_bus_pkg.vhd` | `if instr_o\.a\((\d+)\) = '0' then` | `eq` |
 | `mmu.walk.spec` | `` `shadow_wr <= (\w+) and walk_side_i` `` | `jcore-cpu:core/cpu.vhd` | `shadow_wr\s*<=\s*(\w+) and walk_side_i;` | `eq-text` |
-| `cache.dma.cacheops` | `` `cacheops-` selector keys on `(CPU_\w+)` `` | `linux:arch/sh/mm/Makefile` | `cacheops-\$\(CONFIG_(CPU_J\w*)\)` | `eq-text` |
+| `cache.dma.cacheops` | `` the J4's arm compiles `(cache-\w+)\.o` `` | `linux:arch/sh/mm/Makefile` | `cacheops-\$\(CONFIG_CPU_JCORE\)\s*:=\s*(cache-\w+)\.o` | `eq-text` |
 | `soc.cachectrl.base` | `` `base-addr: 0x([0-9a-f]+)` `` | `jcore-soc:targets/boards/turtle_1v0/design.yaml` | `- class: cache_ctrl\n    base-addr: 0x([0-9a-f]+)` | `eq-hex` |
 
 Notes on what is deliberately **not** here, so the gaps are visible rather than
