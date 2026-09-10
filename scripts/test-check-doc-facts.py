@@ -112,6 +112,11 @@ def backport_root(src, dst):
 # mutate THIS rather than a copy of it that drifts when the pattern changes.
 VG_CANON = r"(\d+)[-\s]byte\s+SIMD\s+(?:[\w/-]+\s+)*image"
 
+# The fixture's counted-enumeration guard. `enumeration-row-count` reads the
+# count through this, so the row count is compared against the FACT rather than
+# against a number written into the checker.
+VE_CANON = r"\*\*(\d+)\*\* isolation rules"
+
 REGISTRY = """# Fact ownership registry
 
 ## Registry
@@ -119,6 +124,7 @@ REGISTRY = """# Fact ownership registry
 | ID | Constant | Owner | Pattern |
 |---|---|---|---|
 | `simd.context` | SIMD context image: **520 bytes** | [simd.md](simd.md) | `\\b520[- ]byte` |
+| `simd.rules` | SIMD isolation rules: **3** | [simd.md](simd.md) | `\\*\\*3\\*\\* isolation rules` |
 
 ## Code bindings
 
@@ -131,6 +137,13 @@ REGISTRY = """# Fact ownership registry
 | Fact ID | Canonical (in owner) | Scan (everywhere) |
 |---|---|---|
 | `simd.context` | `{VG}` | `{VG}` |
+| `simd.rules` | `{VE}` | `{VE}` |
+
+## Enumerations
+
+| Fact ID | Column 1 | Column 2 |
+|---|---|---|
+| `simd.rules` | `#` | `Rule` |
 
 ## Image layouts
 
@@ -148,7 +161,7 @@ REGISTRY = """# Fact ownership registry
 
 | Fact ID | File | Why |
 |---|---|---|
-""".replace("{VG}", VG_CANON)
+""".replace("{VG}", VG_CANON).replace("{VE}", VE_CANON)
 
 GLOSSARY = """# Glossary
 
@@ -168,6 +181,14 @@ The 520-byte SIMD image is the architectural size.
 | 0x200  | 4     | P0            |
 | 0x204  | 4     | VCSR          |
 | 0x208  | —     | end (520 bytes) |
+
+There are **3** isolation rules:
+
+| # | Rule | Why |
+|---|---|---|
+| 1 | R1 | because |
+| 2 | R2 | because |
+| 3 | R3 | because |
 """
 
 # The P4 map and the RTL decode the `p4-offsets-match-rtl` check compares. Kept
@@ -754,7 +775,9 @@ def _(tmp):
 def _(tmp):
     build(tmp, registry=REGISTRY.replace(
         "| `simd.context` | SIMD context image: **520 bytes** | "
-        "[simd.md](simd.md) | `\\b520[- ]byte` |\n", ""))
+        "[simd.md](simd.md) | `\\b520[- ]byte` |\n", "").replace(
+        "| `simd.rules` | SIMD isolation rules: **3** | "
+        "[simd.md](simd.md) | `\\*\\*3\\*\\* isolation rules` |\n", ""))
 
 
 @case("row missing a cell fails, is not skipped", True,
@@ -1140,9 +1163,9 @@ SEP_REGISTRY = (REGISTRY
                 .replace("\n## Code bindings",
                          "| `ooo.gates` | Core: **256,850** gates |"
                          " [simd.md](simd.md) | `256,850` |\n\n## Code bindings")
-                .replace("\n## Image layouts",
+                .replace("\n## Enumerations",
                          "| `ooo.gates` | `([\\d,]+) gates` |"
-                         " `([\\d,]+) gates` |\n\n## Image layouts"))
+                         " `([\\d,]+) gates` |\n\n## Enumerations"))
 SEP_SIMD = SIMD + "\nThe core is 256,850 gates.\n"
 
 
@@ -1480,7 +1503,7 @@ def _(tmp):
 
 @case("a BARE stale value in the owner does not license itself", True,
       expect_check="no-stale-value",
-      expect_text="appears in no Registry `Constant` cell")
+      expect_text="is in no bolded Registry `Constant` cell")
 def _(tmp):
     # M1 narrowed but not eliminated: the retraction rule only removes values
     # on retraction lines. A bare one -- no exempt phrase, so nothing skips it
@@ -1504,11 +1527,102 @@ def _(tmp):
     # working as intended: a value the owner states and the Registry does not
     # is exactly the bare-stale-value shape, and this case is the proof it does
     # not reject the legitimate J64 form once both agree.
+    #
+    # **1036 is bolded.** Task F narrowed the licensing set to the BOLDED part
+    # of a `Constant` cell, because the unbolded tail is explanation -- the real
+    # `cache.l2.residuals` cell reads "**10** -- 4 closed, 2 mitigated, 4
+    # accepted", and reading the tail made 4 and 2 statements of that fact.
     build(tmp, registry=REGISTRY.replace(
               "SIMD context image: **520 bytes**",
-              "SIMD context image: **520 bytes**, 1036 on J64"),
+              "SIMD context image: **520 bytes**, **1036** on J64"),
           simd=SIMD + "\nOn J64 this is a 1036-byte SIMD image.\n",
           extra={"hyp.md": "# H\n\nships the 1036-byte SIMD image.\n"})
+
+
+@case("a sibling fact of the SAME owner licenses the J64 form", False)
+def _(tmp):
+    # The real tree's shape, and the reason the licensing set is scoped by
+    # owning DOCUMENT rather than per fact: `simd.context.j32` (520) and
+    # `simd.context.j64` (1036) are two rows of one owner, and the canonical
+    # pattern licenses both from either row. Per-fact scoping would fail this
+    # correct tree, so the case exists to hold the scope open exactly this far.
+    build(tmp, registry=REGISTRY.replace(
+              "| `simd.context` | SIMD context image: **520 bytes** "
+              "| [simd.md](simd.md) | `\\b520[- ]byte` |",
+              "| `simd.context` | SIMD context image: **520 bytes** "
+              "| [simd.md](simd.md) | `\\b520[- ]byte` |\n"
+              "| `simd.context.j64` | SIMD context image, J64: **1036 bytes** "
+              "| [simd.md](simd.md) | `\\b1036[- ]byte` |"),
+          simd=SIMD + "\nOn J64 this is a 1036-byte SIMD image.\n")
+
+
+@case("a fact of a DIFFERENT owner does not license the value", True,
+      expect_check="no-stale-value",
+      expect_text="is in no bolded Registry `Constant` cell")
+def _(tmp):
+    # **The six-wave `Constant` cell escape, reproduced.** `docs/fact-ownership.md`
+    # records this in C1c, C2a, C2b, C2c, C2d and C2e -- a `Constant` cell edited
+    # to disagree with its own owner, passing every time, each disclosure calling
+    # the cell "prose no check reads". The cell WAS read; it was read into a
+    # single global pool over every row in the file, so the owner's real value
+    # was still licensed by somebody else's cell. Task F measured the pool: it
+    # held every integer from 0 to 10, which is every Wave-3 security count.
+    #
+    # Here `simd.context`'s cell is edited to 272 while `simd.md` still says 520,
+    # and a SECOND fact owned by a different document states 520. Under the
+    # global pool 520 was licensed and this passed. Scoped to the owner it does
+    # not: `simd.md` owns nothing that states 520 any more.
+    build(tmp, registry=REGISTRY.replace(
+              "| `simd.context` | SIMD context image: **520 bytes** "
+              "| [simd.md](simd.md) | `\\b520[- ]byte` |",
+              "| `simd.context` | SIMD context image: **272 bytes** "
+              "| [simd.md](simd.md) | `\\b520[- ]byte` |\n"
+              "| `other.thing` | Unrelated budget: **520** entries "
+              "| [hyp.md](hyp.md) | `\\b520 entries` |"),
+          extra={"hyp.md": "# H\n\nThe budget is 520 entries.\n"})
+
+
+@case("a count stated TWICE in its own owner does not license the second", True,
+      expect_check="no-stale-value",
+      expect_text="is in no bolded Registry `Constant` cell")
+def _(tmp):
+    # **C2e's false green, reproduced.** `docs/fact-ownership.md` calls it the
+    # honest headline of that run: the owner's residual count was perturbed
+    # 10 -&gt; 8 and PASSED on the first attempt, because the changelog restated
+    # the count and the pooled licensing set held both digits. "A count stated
+    # twice inside its own owner has no guard." The workaround was to reword the
+    # owner so it states the count once -- a documentation fix for a checker
+    # hole, which leaves every other doubly-stated count unguarded.
+    #
+    # Here `simd.md` states 520 (current, in the layout heading and prose) and
+    # 272 (bare, no retraction phrase), and a second fact of a DIFFERENT owner
+    # states 272 in its cell. Under the global pool 272 was licensed and the
+    # restatement in hyp.md passed with it.
+    build(tmp, registry=REGISTRY.replace(
+              "| `simd.context` | SIMD context image: **520 bytes** "
+              "| [simd.md](simd.md) | `\\b520[- ]byte` |",
+              "| `simd.context` | SIMD context image: **520 bytes** "
+              "| [simd.md](simd.md) | `\\b520[- ]byte` |\n"
+              "| `other.thing` | Unrelated budget: **272** entries "
+              "| [hyp.md](hyp.md) | `\\b272 entries` |"),
+          simd=SIMD + "\nThe 272-byte SIMD image is what Tier 1 shipped.\n",
+          extra={"hyp.md": "# H\n\nThe budget is 272 entries.\n"})
+
+
+@case("an UNBOLDED number in a Constant cell licenses nothing", True,
+      expect_check="no-stale-value",
+      expect_text="is in no bolded Registry `Constant` cell")
+def _(tmp):
+    # The bold scoping, asserted on its own. `registry-value-is-short` caps the
+    # cell at 100 chars precisely so the tail is explanation rather than a
+    # second statement of the fact; the licensing set has to agree with that
+    # reading or the tail's incidental numbers become licensed values. The real
+    # instance: `cache.l2.residuals` reads "**10** -- 4 closed, 2 mitigated,
+    # 4 accepted", so an unscoped read licenses 4 and 2 for that fact.
+    build(tmp, registry=REGISTRY.replace(
+              "SIMD context image: **520 bytes**",
+              "SIMD context image: **520 bytes**, was 272"),
+          simd=SIMD + "\nThe 272-byte SIMD image is what Tier 1 shipped.\n")
 
 
 @case("a missing '## Value guards' section fails closed", True,
@@ -1519,8 +1633,9 @@ def _(tmp):
 
 @case("an empty Value guards table fails", True, expect_check="value-guards")
 def _(tmp):
-    build(tmp, registry=re.sub(r"\| `simd\.context` \| `\(.*image` \|.*\n",
-                               "", REGISTRY))
+    build(tmp, registry=re.sub(
+        r"\| `simd\.(context` \| `\(.*image|rules` \| `.*isolation rules)` \|.*\n",
+        "", REGISTRY))
 
 
 @case("a value guard naming an unknown fact fails", True,
@@ -1559,6 +1674,120 @@ def _(tmp):
 def _(tmp):
     # A guard that accepts everything is worse than no guard: it reports OK.
     build(tmp, registry=REGISTRY.replace(VG_CANON, r"(\d+)", 1))
+
+
+# --------------------------------------- Task F: enumeration-row-count
+#
+# The class these close: a counted enumeration whose table is edited while the
+# count above it is left alone. `docs/fact-ownership.md` records this passing in
+# four consecutive waves -- C2b's transmitter row, C2c's structure-class row,
+# C2d's bypass path 5 (BMID `0xFF`, the permanent bypass), C2e's residual-channel
+# row -- plus C1b's two silent positions for `hyp.gangswitch.items`, where a row
+# inserted before the anchor without renumbering, or appended after it, were both
+# invisible. All six are the shape of the first two cases below.
+
+
+@case("a row DELETED with the count left standing fails", True,
+      expect_check="enumeration-row-count",
+      expect_text="states 3 and its `# | Rule` table has 2 row(s)")
+def _(tmp):
+    build(tmp, simd=SIMD.replace("| 2 | R2 | because |\n", ""))
+
+
+@case("a row ADDED with the count left standing fails", True,
+      expect_check="enumeration-row-count",
+      expect_text="states 3 and its `# | Rule` table has 4 row(s)")
+def _(tmp):
+    # C1b's two silent positions in one case. The anchored value guard could
+    # only see an insertion that displaced the LAST row and was renumbered;
+    # a row count sees an insertion anywhere.
+    build(tmp, simd=SIMD.replace("| 3 | R3 | because |",
+                                 "| 3 | R3 | because |\n| 4 | R4 | because |"))
+
+
+@case("the count is read from the FACT, not hardcoded", False)
+def _(tmp):
+    # Owner, table and Registry cell all move together to 4: the check must
+    # follow the fact. A hardcoded expectation would fail this.
+    build(tmp,
+          registry=REGISTRY.replace("SIMD isolation rules: **3**",
+                                    "SIMD isolation rules: **4**")
+                           .replace(r"`\*\*3\*\* isolation rules`",
+                                    r"`\*\*4\*\* isolation rules`"),
+          simd=SIMD.replace("There are **3** isolation rules:",
+                            "There are **4** isolation rules:")
+                   .replace("| 3 | R3 | because |",
+                            "| 3 | R3 | because |\n| 4 | R4 | because |"))
+
+
+@case("an enumeration whose owner has NO such table fails", True,
+      expect_check="enumeration-row-count",
+      expect_text="has 0 tables headed")
+def _(tmp):
+    # The `## Image layouts` failure, on the other table: a registered fact
+    # asserted to be covered by a list that is not there. Only the HEADER is
+    # renamed, so the rows are still present and the count still correct --
+    # which is what makes it a fail-open shape rather than an obvious edit.
+    build(tmp, simd=SIMD.replace("| # | Rule | Why |", "| # | Item | Why |"))
+
+
+@case("an enumeration with TWO matching tables fails as ambiguous", True,
+      expect_check="enumeration-row-count",
+      expect_text="has 2 tables headed")
+def _(tmp):
+    # Worse than no table: the check would silently guard whichever came first,
+    # so which list the count protects would depend on document order. The
+    # second table here has the RIGHT number of rows, so a check taking the
+    # first match would report OK and be guarding the wrong list.
+    build(tmp, simd=SIMD + "\n| # | Rule | Why |\n|---|---|---|\n"
+                           "| 1 | other | list |\n| 2 | other | list |\n"
+                           "| 3 | other | list |\n")
+
+
+@case("an enumeration with no value guard fails", True,
+      expect_check="enumeration-row-count",
+      expect_text="no `## Value guards` row")
+def _(tmp):
+    # The cross-table dependency, asserted. With no guard there is no canonical
+    # count and the row count would be compared against nothing.
+    build(tmp, registry=REGISTRY.replace(
+        "| `simd.rules` | `" + VE_CANON + "` | `" + VE_CANON + "` |\n", ""))
+
+
+@case("an enumeration whose owner states TWO counts fails", True,
+      expect_check="enumeration-row-count",
+      expect_text="licenses 2 values")
+def _(tmp):
+    # A size fact legitimately has a J32 and a J64 form; a row count cannot.
+    # Both values are in the Constant cell, so `no-stale-value` is satisfied and
+    # this check is the only one that can speak.
+    build(tmp,
+          registry=REGISTRY.replace("SIMD isolation rules: **3**",
+                                    "SIMD isolation rules: **3**, **4** on J64"),
+          simd=SIMD + "\nOn J64 there are **4** isolation rules:\n")
+
+
+@case("a missing '## Enumerations' section fails closed", True,
+      expect_check="enumeration-row-count")
+def _(tmp):
+    # Fails CLOSED, like every other registry table: a heading someone renames
+    # must not silently switch the check off.
+    build(tmp, registry=REGISTRY.replace("## Enumerations", "## Notes"))
+
+
+@case("an empty Enumerations table fails", True,
+      expect_check="enumeration-row-count")
+def _(tmp):
+    build(tmp, registry=REGISTRY.replace("| `simd.rules` | `#` | `Rule` |\n", ""))
+
+
+@case("an enumeration naming an unknown fact fails", True,
+      expect_check="enumeration-row-count",
+      expect_text="not in the Registry table")
+def _(tmp):
+    # An orphaned row is how a rename quietly switches a check off.
+    build(tmp, registry=REGISTRY.replace("| `simd.rules` | `#` | `Rule` |",
+                                         "| `simd.absent` | `#` | `Rule` |"))
 
 
 # ------------------------------------------ B0c: image layouts, per FACT
@@ -2351,6 +2580,20 @@ def main():
                 # its own -- which is how a "6 of 11" figure got reported when
                 # the honest number was 1.
                 only_check = status_ok and expect_fail and not right_check
+                # The SAME reasoning, applied to the other two assertions,
+                # because it was written for `expect_check` alone and they
+                # inherited the bug it was written about. Task F ran the suite
+                # against the previous checker as a control: thirteen new cases
+                # were reported as "exit status and check agreed; wanted
+                # message ...", and `expect_text` was credited with eleven
+                # catches -- when the control checker had in fact exited 0 on
+                # every one of them and exit status had made the catch alone.
+                # That is the "6 of 11 when the honest number was 1" failure
+                # above, recurring on the neighbouring assertion. An attribution
+                # that is wrong in the direction of flattering the newest
+                # assertion is worse than no attribution.
+                only_text = status_ok and not right_text
+                only_clean = status_ok and clean is False
                 ok = ((not crashed) and (not argparse_error)
                       and status_ok and (right_check or not expect_fail)
                       and right_text and clean)
@@ -2366,9 +2609,9 @@ def main():
                         caught_by["argparse guard"] += 1
                     elif only_check:
                         caught_by["expect_check"] += 1
-                    elif not right_text:
+                    elif only_text:
                         caught_by["expect_text"] += 1
-                    elif not clean:
+                    elif only_clean:
                         caught_by["reject_text"] += 1
                     else:
                         caught_by["exit status"] += 1
@@ -2379,10 +2622,10 @@ def main():
                     why = "  [argparse rejected a flag -- not a check]"
                 elif only_check:
                     why = "  [exit status agreed; WRONG CHECK fired, wanted %s]" % want
-                elif not right_text:
+                elif only_text:
                     why = ("  [exit status and check agreed; wanted message %r]"
                            % want_text)
-                elif not clean:
+                elif only_clean:
                     why = "  [output contained %r, which must not appear]" % banned
                 elif expect_fail and not status_ok:
                     why = "  [exited 0; expected a failure]"

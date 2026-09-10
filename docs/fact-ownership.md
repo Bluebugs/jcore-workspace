@@ -23,12 +23,15 @@ what fails it, and which record defines it.
 | `## Code bindings` | doc value vs the same value in code | `doc-matches-code`, and `code-bindings` for a malformed or orphaned row |
 | `## Value guards` | no document may state a retired value | `no-stale-value`, and `value-guards` for a malformed or orphaned row |
 | `## Image layouts` | which facts must have a field table | `context-image-sums` |
+| `## Enumerations` | which facts count the rows of a table | `enumeration-row-count` |
 | `## Waivers` | enumerated, shrinking exemptions | `check-waivers` |
 
-**One cross-table dependency, stated because it is otherwise invisible:** an
-`## Image layouts` row needs a `## Value guards` row for the same fact — the
+**Two cross-table dependencies, stated because they are otherwise invisible.**
+An `## Image layouts` row needs a `## Value guards` row for the same fact — the
 guard is where the expected total comes from, since nothing restates it. A
-layout row without a guard fails rather than passing.
+layout row without a guard fails rather than passing. An `## Enumerations` row
+needs one for the same reason: the guard is where the expected *row count* comes
+from, and a count hardcoded in the checker would drift from the fact.
 
 > **Scope, stated so this file is not mistaken for something it is not.** This
 > registry records which *document* owns a fact. It does not certify that the
@@ -455,6 +458,90 @@ document states a different one. `cache.l1d.write` has neither; see
 why, which is that the T0 property is the *absence* of a dirty bit and T1/T2 has
 no RTL at all.
 
+**Task F — the whole-implementation review — audited the six waves of
+disclosures above as a set, and closed two of the gaps they record.** The other
+task in this programme perturbed its own facts; this one perturbed the
+*machinery*, and its finding is that two of the escapes disclosed above were not
+the intrinsic limits they were each recorded as being.
+
+**1. The `Constant` cell was never unread; it was read into a pool wide enough to
+license anything.** Six consecutive waves — C1c, C2a, C2b, C2c, C2d, C2e —
+recorded a `Constant` cell edited to contradict its own owner and passing, each
+time explaining it as "the cell is prose no check reads" and deferring the fix to
+a checker change nobody had scope for. The cell **was** read: `check_no_stale_value`
+built its second-opinion licensing set by scanning every `Constant` cell in this
+file into one global pool. Task F measured that pool on the real tree: **48
+values, including every integer from 0 to 10.** Every Wave-3 security count is in
+that range — 4 transmitters, 4 microreset classes, 6 GPU producers, 7 IOMMU
+bypass paths, 10 residual channels, 10 gang-switch items, 0 open `undefined`
+sites — so the guarantee the `## Value guards` preamble claims, that "a stale
+value now has to be written into both before it licenses anything", **held for no
+Wave-3 security fact at all.** It held for `272` and `132`, the three-digit sizes
+it was built for, and the disclosure generalised from those.
+
+The set is now scoped to the **bolded** values in the `Constant` cells of facts
+owned by **the same document**, which takes it from 48 values to between one and
+seven per fact. Bold, because `registry-value-is-short` caps the cell at 100
+characters precisely so the tail is explanation — `cache.l2.residuals` reads
+"**10** — 4 closed, 2 mitigated, 4 accepted", and reading the tail made 4 and 2
+statements of that fact. By owning document rather than by fact, because
+`simd.context.j32` and `simd.context.j64` are two rows of one owner and the
+canonical pattern licenses both from either; per-fact scoping fails a correct
+tree. **The residual is stated rather than implied: two facts owned by the same
+document still license each other's values.**
+
+This closes five of the six disclosed `Constant`-cell instances — every one whose
+fact carries a value guard. C1c's `simd.fp.ownership` is a **name** fact and is
+not closed, and cannot be: a name fact carries no value, so there is nothing to
+compare the cell against. It also closes the escape C2e called the honest
+headline of its run — *"a count stated twice inside its own owner has no
+guard"* — which was the same pooling seen from the other side, and which C2e
+worked around by rewording the owner rather than by fixing the check.
+
+**2. Four waves recorded "delete a row, leave the count" as passing. It now
+fails.** `## Enumerations` above is that check. It is `context-image-sums`'s shape
+applied to counted lists instead of byte layouts, and it was demonstrated against
+every historical instance rather than argued for: each of the six registered
+enumerations had one row deleted against a committed tree, with a non-empty
+`git diff` asserted first (C2b's rule), and all six failed.
+
+| Perturbation | Result |
+|---|---|
+| transmitter 3 (**ITLB entry**) deleted from `mmu/hardware-spec.md` §5.0a, count left at 4 | **caught**, `enumeration-row-count`. Disclosed as passing by C2b |
+| microreset class 2 (**replacement-policy state**) deleted, count left at 4 | **caught**. Disclosed as passing by C2c, where §4.7.1a constraint 2 says the scrub is complete *over its scope* |
+| bypass path 5 (**BMID `0xFF`**, the permanent bypass) deleted from `iommu/hardware-spec.md` §3.10, count left at 7 | **caught**. Disclosed as passing by C2d, on the row it called "the whole reason the enumeration exists" |
+| residual channel 9 (**inclusion recall**) deleted from `cache/l2-spec.md` §16.3, count left at 10 | **caught**. Disclosed as passing by C2e, on the section that *is* the honesty list |
+| GPU producer **P5** (tile write-out burst) deleted, count left at 6 | **caught**. Disclosed as passing by C2a, which called it the row "that matters" |
+| a gang-switch item deleted, count left at 10 | **caught** |
+| a row **inserted before** the `hyp.gangswitch.items` anchor **without renumbering** | **caught.** C1b disclosed this as one of two positions its re-anchoring could not see; C2c confirmed both were still silent |
+| a row **appended after** the anchor | **caught.** The second of C1b's two |
+| the count, the table and the `Constant` cell all moved together to a new value | **passes**, as it must — a fixture asserts this, because a check comparing against a number hardcoded in the checker would pass every perturbation above and drift from the fact |
+| only the table's column **header** renamed, rows and count intact | **caught**, as *no table headed that*. This is the `## Image layouts` failure — a registered fact asserted to be covered by a list that is not there — on the other table |
+| a **second** table with the same header added, with the right row count | **caught as ambiguous.** A check taking the first match would have reported OK while guarding the wrong list, so which list the count protects would depend on document order |
+
+**What Task F did not close, and did not attempt.** The inversion rows
+(`W-R1`, `T-R2`, `I-R5`, `P-R2`(b)) and the narrowing rows (`G-R1`, `W-R1`,
+`T-R1`, `I-R1`, `P-R3`) are unchanged and are a genuine residual, not a deferral:
+no syntactic check distinguishes *"MUST scrub"* from *"need not scrub"* without
+firing on correct prose, and a check that fires on correct prose is switched off
+within a month. The two contradiction rows (`P-R7` against `security.l6.undefined`)
+are also unchanged; the check that would relate them is the grep-level `undefined`
+guard `sq/spec.md` §6.5 filed with **B0c**, and B0c closed on 2026-08-25, so that
+obligation currently has no owner. **`enumeration-row-count` counts rows; it does
+not read them.** A row *replaced* by a different row keeps the count and passes.
+
+**The honest summary, and it is a correction rather than an addition.** Five of
+the six escapes recorded above were filed as properties of what a name fact or a
+value fact can do. Two of them were not: they were properties of how this
+checker happened to be written, they were closable in a few dozen lines, and they
+survived six waves because each task disclosed its own instance faithfully and no
+task read the other five. **A disclosure register is not a defect tracker.** The
+lesson worth carrying is not about the checker: it is that per-task honesty
+produced a set of forty accurate observations from which nobody had drawn the
+conclusion, and drawing it took reading them together and measuring the code they
+described rather than trusting the description.
+
+
 ## Code bindings
 
 The Registry above says which *document* owns a constant. This table says where
@@ -811,6 +898,48 @@ Two escapes, and they are different things:
 | `hyp.microreset.classes` | `\*\*(\d+)\*\* structure classes` | `\*\*(\d+)\*\* structure classes` |
 | `iommu.bypass.paths` | `\*\*(\d+)\*\* bypass paths` | `\*\*(\d+)\*\* bypass paths` |
 | `cache.l2.residuals` | `\*\*(\d+)\*\* residual channels` | `\*\*(\d+)\*\* residual channels` |
+
+## Enumerations
+
+Facts that state **how many things there are** above a table that lists them.
+`enumeration-row-count` requires the owner to carry exactly one table with the
+named first two column headers, and that table to have exactly as many rows as
+the fact's `## Value guards` canonical pattern finds in the owner.
+
+**Why this table exists.** Four waves perturbed *"delete a row from the owner's
+table, leave the count at N"* and four waves recorded **passes** — C2b on a
+transmitter row, C2c on a structure-class row, C2d on **bypass path 5, BMID
+`0xFF`**, C2e on a residual-channel row. Each disclosure gave the same reason and
+the same fix: the value guard compares numbers *between documents* and does not
+count rows, and `context-image-sums` — the only row-counting check here — applies
+to `Offset | Bytes | Content` layouts, which none of these are. Every one of
+those enumerations is load-bearing for a security claim in the way a byte layout
+is not: §4.7.1a says its scrub is complete *over its scope*, §16.3 *is* the
+honesty list, and §3.10's enumeration is the argument that the bypass paths are
+all of them. A shortened list under an unchanged count is exactly how a closed
+enumeration becomes an open one.
+
+Located by **column header**, not by section heading, for
+`find_tables_by_header`'s reason: renumbering or rewording a heading is an
+ordinary edit and must not move a check, while changing what the columns mean is
+the event a check should notice. Exactly one matching table is required — zero is
+the `simd/spec.md` failure `## Image layouts` was built for, and two or more is
+worse, because the check would silently guard whichever came first in the file.
+
+**What it does not buy.** It counts rows; it does not read them. A row *replaced*
+by a different row keeps the count and passes, and so does a row whose content is
+inverted. That is the standing limit of every check in this file (see the
+`W-R1`/`T-R2`/`I-R5`/`P-R2` inversion rows below) and this check does not narrow
+it.
+
+| Fact ID | Column 1 | Column 2 |
+|---|---|---|
+| `hyp.gangswitch.items` | `#` | `Action` |
+| `gpu.protect.producers` | `#` | `Producer` |
+| `mmu.walk.transmitters` | `#` | `Transmitter` |
+| `hyp.microreset.classes` | `#` | `Class` |
+| `iommu.bypass.paths` | `#` | `Path` |
+| `cache.l2.residuals` | `#` | `Channel` |
 
 ## Image layouts
 
