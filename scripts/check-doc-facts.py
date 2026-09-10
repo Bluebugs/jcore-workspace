@@ -73,6 +73,9 @@ CHECKS = {
     "enumeration-row-count": ("a counted enumeration whose table has stopped "
                               "having that many rows, or a registered "
                               "enumeration with no table", "B0c"),
+    "site-absence-claim": ("a wording a document retired reasserted as current "
+                           "text, or an absence claim whose pattern no longer "
+                           "matches anything", "B0c"),
     "one-encoding-database": ("a second encoding database, or the canonical one "
                               "missing", "0003"),
     "ci-provisions-submodules": ("a submodule the doc-vs-code checks read that "
@@ -1228,6 +1231,181 @@ def check_enumeration_rows(cfg, report, facts, guards, enums):
                         "closed enumeration becomes an open one."
                         % (cfg.rel(fact.owner), want, headers[0], headers[1],
                            len(rows)))
+
+
+# ---------------------------------- Post-F: site-anchored absence claims
+
+# The FOURTH separately-written copy of the retraction-phrase list, and the
+# comment above `STALE_VALUE_PHRASES` says to decide about the others on
+# purpose rather than to share one constant. Decided: this list is NOT the
+# other three and must not become them. The other three exempt a line from a
+# *value* comparison, where a wrong exemption hides a wrong number. This one
+# exempts a line from an *absence* claim, where a wrong exemption hides a
+# reintroduced rule -- so it is scoped to phrasings whose subject can only be
+# the quoted wording itself. "withdrawn" earns its place here and would be
+# far too wide in the other three, where it would exempt any line mentioning a
+# withdrawal from every value comparison on it.
+ABSENCE_RETRACTION_PHRASES = [
+    "previously read", "previously said", "formerly read", "used to read",
+    "previously carried", "withdrawn", "superseded",
+]
+ABSENCE_RETRACTION_EXEMPT = re.compile("|".join(ABSENCE_RETRACTION_PHRASES),
+                                       re.IGNORECASE)
+
+# How far above a match a retraction marker may sit. Two, because the tree's
+# own idiom puts the marker on the introducing line and the retired wording in
+# the block quotation under it -- `fpu/spec.md` §7.7 has one blank line
+# between them. Not more than two: a window wide enough to reach the previous
+# paragraph would exempt a reintroduced rule that merely follows a retraction
+# of something else, which is the whole failure this check exists to catch.
+ABSENCE_LOOKBACK = 2
+
+
+def load_absence_claims(cfg, report):
+    """Parse `## Absence claims`: retired wordings that must not come back.
+
+    NOT keyed by fact ID, and that is deliberate. `load_fact_table` requires
+    the first cell to name a Registry fact, because a count or a size IS a
+    fact. A closed *site* is not: the registered fact in this neighbourhood is
+    `security.l6.undefined`, whose value is the number of sites still open,
+    and a per-site row keyed on it could not be one row per site. So this table
+    carries its own guards rather than borrowing that one's."""
+    try:
+        body = read(cfg.registry)
+    except (OSError, UnicodeDecodeError):
+        return None            # load_registry has already failed on this
+    rows = parse_table(body, "## Absence claims")
+    if rows is None:
+        report.fail("site-absence-claim", cfg.rel(cfg.registry),
+                    "no '## Absence claims' heading followed by a table; a "
+                    "site recorded as closed could reassert its retired "
+                    "wording with nothing to notice. This is a failure, not a "
+                    "skip.")
+        return None
+    if not rows:
+        report.fail("site-absence-claim", cfg.rel(cfg.registry),
+                    "'## Absence claims' table has no rows; every closed site "
+                    "would be unguarded.")
+        return None
+    out, seen = [], set()
+    for cells in rows:
+        if len(cells) < 3:
+            report.fail("site-absence-claim", cfg.rel(cfg.registry),
+                        "malformed row (%d cells, need 3): %s"
+                        % (len(cells), " | ".join(cells)[:80]))
+            continue
+        site = unbacktick(cells[0])
+        if not site:
+            report.fail("site-absence-claim", cfg.rel(cfg.registry),
+                        "row with an empty site name")
+            continue
+        if site in seen:
+            # Two rows for one site is how a claim gets quietly replaced by a
+            # weaker one: both run, the weak one passes, and the reader sees a
+            # guarded site.
+            report.fail("site-absence-claim", site,
+                        "a second row names this site. One site, one claim.")
+            continue
+        seen.add(site)
+        targets = links_on(cells[1], cfg.registry)
+        if not targets:
+            bare = unbacktick(cells[1])
+            if bare:
+                targets = [os.path.normpath(os.path.join(cfg.docs, bare))]
+        if not targets:
+            report.fail("site-absence-claim", site,
+                        "names no document. A claim with no document to scan "
+                        "guards nothing.")
+            continue
+        pattern = unbacktick(cells[2])
+        if not pattern:
+            report.fail("site-absence-claim", site, "has an empty pattern")
+            continue
+        try:
+            rx = re.compile(pattern, re.IGNORECASE)
+        except re.error as exc:
+            report.fail("site-absence-claim", site,
+                        "uncompilable pattern %r: %s" % (pattern, exc))
+            continue
+        out.append((site, targets[0], pattern, rx))
+    return out
+
+
+def check_absence_claims(cfg, report, claims):
+    """A wording a document retired must appear in it ONLY as history.
+
+    THE HOLE THIS CLOSES. `security/threat-model.md` **L6** states a count of
+    open "undefined" sites and the specs state the closures, and until this
+    check nothing related the two. Wave-3 C2e demonstrated the consequence:
+    invert `cache/l2-spec.md` `P-R7` -- restore the "undefined" remainder for a
+    tenant-visible `movca.l` line -- and the count still reads zero, so both
+    are licensed at once and the count is an assertion by whoever last edited
+    it. `sq/spec.md` §6.5 filed the guard with Wave-1 task **B0c**, which had
+    closed six weeks before the filing; C1b and C2e each declined it in turn;
+    Task F ranked it 5 and recommended rather than implemented it, because
+    choosing each site's canonical wording is the owning specs' call.
+
+    WHY THIS SHAPE AND NOT A SCAN FOR "undefined". Because that fires on
+    correct prose, and this project's own bar is that a check which fires on
+    correct prose is switched off within a month. The word is legitimate all
+    over these documents -- undefined *encodings*, undefined *operations*, and
+    the SH-4 manual's own "undefined" that `sq/spec.md` §7 narrows rather than
+    contradicts. What is NOT legitimate is the specific retired sentence
+    reappearing as current text. So the claim is anchored on the retired
+    wording itself, which is purely syntactic, and the exemption is the tree's
+    existing convention for recording history.
+
+    TWO ARMS, and the second is the one that keeps this from becoming
+    decorative:
+
+      1. A match on a line that is not a retraction line FAILS. That is the
+         reintroduction.
+      2. NO match at all FAILS. If the retired wording has been deleted from
+         the document entirely, the pattern has stopped being able to notice
+         its return, and the row would pass forever while guarding nothing.
+         `no-stale-value` fails the same way, for the same reason, when its
+         canonical pattern matches nothing in the owner.
+
+    WHAT IT DOES NOT DO, stated rather than implied. It catches the retired
+    wording coming back. It does not catch the same rule reintroduced in
+    DIFFERENT words -- that is Task F's rank-3 inversion, which no syntactic
+    check separates from correct prose, and nothing here narrows it."""
+    if claims is None:
+        return
+    for site, path, pattern, rx in claims:
+        try:
+            body = read(path)
+        except (OSError, UnicodeDecodeError):
+            report.fail("site-absence-claim", site,
+                        "document %s is missing or unreadable; the claim "
+                        "cannot be checked" % cfg.rel(path))
+            continue
+        lines = body.split("\n")
+        index = _spans(body)
+        hits = 0
+        for m in rx.finditer(body):
+            hits += 1
+            spanned = _match_lines(index, m.start(), m.end())
+            first = spanned[0]
+            window = list(range(max(1, first - ABSENCE_LOOKBACK), first)) + spanned
+            if any(ABSENCE_RETRACTION_EXEMPT.search(lines[n - 1])
+                   for n in window):
+                report.note("site-absence-claim: %s quoted as history at "
+                            "%s:%d" % (site, cfg.rel(path), first))
+                continue
+            report.fail("site-absence-claim", "%s:%d" % (cfg.rel(path), first),
+                        "restates the wording %s retired (%r) with no "
+                        "retraction marker on it or the %d line(s) above. A "
+                        "site recorded as closed has reasserted itself, and "
+                        "the count of open sites would not move."
+                        % (site, pattern, ABSENCE_LOOKBACK))
+        if not hits:
+            report.fail("site-absence-claim", site,
+                        "pattern %r matches nothing in %s. The retired "
+                        "wording is not there even as history, so this row "
+                        "cannot notice it coming back -- it would pass "
+                        "forever while guarding nothing."
+                        % (pattern, cfg.rel(path)))
 
 
 # ------------------------------------------ B0c / 0003: the encoding database
@@ -2497,6 +2675,7 @@ def main():
         guards = load_value_guards(cfg, report, facts)
         layouts = load_image_layouts(cfg, report, facts)
         enums = load_enumerations(cfg, report, facts)
+        claims = load_absence_claims(cfg, report)
         if facts and bindings:
             check_code_bindings(cfg, report, repos, facts, bindings)
         if facts and guards:
@@ -2504,6 +2683,10 @@ def main():
         check_p4_offsets(cfg, report, repos)
         check_context_image_sums(cfg, report, facts, guards, layouts)
         check_enumeration_rows(cfg, report, facts, guards, enums)
+        # Not gated on `facts`: an absence claim names a document and a
+        # retired wording, not a registry fact, so a broken Registry
+        # table must not take it down with it.
+        check_absence_claims(cfg, report, claims)
         check_one_encoding_database(cfg, report, repos)
         # Not a comparison against code: a comparison between the registry and
         # the workflow that runs this script in CI. Deliberately NOT gated on

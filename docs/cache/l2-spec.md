@@ -1105,7 +1105,7 @@ enough.** Three parts, and the third is the one that changes another decision:
   Flush+Reload does not apply" is false here, and §16.3 marks the resulting channel **accepted**
   rather than closed.
 
-**`P-R7` — `movca.l` allocates a fully defined line.** §17.5's table said the line is allocated in
+**`P-R7` — `movca.l` allocates a fully defined line.** §17.5's table previously read that the line is allocated in
 `M` "with only the written word defined and the remainder undefined until written". It is now: the
 line is allocated in `M` with `R0`'s word at its offset and **every other byte zero**. The word
 "undefined" is withdrawn.

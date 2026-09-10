@@ -183,6 +183,71 @@
    "name": "enumeration: the check never runs",
    "old": "        check_enumeration_rows(cfg, report, facts, guards, enums)",
    "new": "        pass"
+  },
+  {
+   "name": "absence: missing heading treated as no claims",
+   "old": "    if rows is None:\n        report.fail(\"site-absence-claim\", cfg.rel(cfg.registry),\n                    \"no '## Absence claims' heading",
+   "new": "    if False:\n        report.fail(\"site-absence-claim\", cfg.rel(cfg.registry),\n                    \"no '## Absence claims' heading"
+  },
+  {
+   "name": "absence: empty table accepted",
+   "old": "    if not rows:\n        report.fail(\"site-absence-claim\", cfg.rel(cfg.registry),\n                    \"'## Absence claims' table has no rows",
+   "new": "    if False:\n        report.fail(\"site-absence-claim\", cfg.rel(cfg.registry),\n                    \"'## Absence claims' table has no rows"
+  },
+  {
+   "name": "absence: short row accepted",
+   "old": "        if len(cells) < 3:\n            report.fail(\"site-absence-claim\", cfg.rel(cfg.registry),\n                        \"malformed row",
+   "new": "        if False:\n            report.fail(\"site-absence-claim\", cfg.rel(cfg.registry),\n                        \"malformed row"
+  },
+  {
+   "name": "absence: empty site name accepted",
+   "old": "        if not site:\n            report.fail(\"site-absence-claim\", cfg.rel(cfg.registry),\n                        \"row with an empty site name\")",
+   "new": "        if False:\n            report.fail(\"site-absence-claim\", cfg.rel(cfg.registry),\n                        \"row with an empty site name\")"
+  },
+  {
+   "name": "absence: duplicate site accepted",
+   "old": "        if site in seen:",
+   "new": "        if False:"
+  },
+  {
+   "name": "absence: row with no document accepted",
+   "old": "        if not targets:\n            report.fail(\"site-absence-claim\", site,\n                        \"names no document.",
+   "new": "        if False:\n            report.fail(\"site-absence-claim\", site,\n                        \"names no document."
+  },
+  {
+   "name": "absence: empty pattern accepted",
+   "old": "        if not pattern:\n            report.fail(\"site-absence-claim\", site, \"has an empty pattern\")",
+   "new": "        if False:\n            report.fail(\"site-absence-claim\", site, \"has an empty pattern\")"
+  },
+  {
+   "name": "absence: uncompilable pattern swallowed",
+   "old": "            report.fail(\"site-absence-claim\", site,\n                        \"uncompilable pattern %r: %s\" % (pattern, exc))\n            continue",
+   "new": "            report.note(\"site-absence-claim: %r %s\" % (pattern, exc))\n            continue"
+  },
+  {
+   "name": "absence: unreadable document swallowed",
+   "old": "            report.fail(\"site-absence-claim\", site,\n                        \"document %s is missing or unreadable;",
+   "new": "            report.note(\"site-absence-claim %s: \" + \"document %s is missing or unreadable;"
+  },
+  {
+   "name": "absence: every match treated as history",
+   "old": "            if any(ABSENCE_RETRACTION_EXEMPT.search(lines[n - 1])\n                   for n in window):",
+   "new": "            if True:"
+  },
+  {
+   "name": "absence: no match treated as clean",
+   "old": "        if not hits:\n            report.fail(\"site-absence-claim\", site,",
+   "new": "        if False:\n            report.fail(\"site-absence-claim\", site,"
+  },
+  {
+   "name": "absence: lookback window widened by one",
+   "old": "ABSENCE_LOOKBACK = 2",
+   "new": "ABSENCE_LOOKBACK = 3"
+  },
+  {
+   "name": "absence: the matched lines dropped from the window",
+   "old": "            window = list(range(max(1, first - ABSENCE_LOOKBACK), first)) + spanned",
+   "new": "            window = list(range(max(1, first - ABSENCE_LOOKBACK), first))"
   }
  ]
 }

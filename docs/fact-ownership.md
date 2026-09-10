@@ -941,6 +941,52 @@ it.
 | `iommu.bypass.paths` | `#` | `Path` |
 | `cache.l2.residuals` | `#` | `Channel` |
 
+## Absence claims
+
+Wordings a document **retired**, which must appear in it only as history.
+`site-absence-claim` reads this table.
+
+**Why this table exists, and why it took four waves to get one.**
+[security/threat-model.md §8](security/threat-model.md) **L6** states a *count*
+of open "undefined" sites and the specs state the *closures*, and nothing
+related the two. Wave-3 **C2e** demonstrated the consequence and disclosed it
+below: invert [cache/l2-spec.md](cache/l2-spec.md) `P-R7` — restore the
+"undefined" remainder for a tenant-visible `movca.l` line — and
+`security.l6.undefined` still reads **0**, so a specification saying "undefined"
+and a count saying no such site exists are licensed simultaneously. C2e's second
+row is the same fix's other half: revert §17.5's instruction-table row and leave
+`P-R7` standing. Both passed. [sq/spec.md §6.5](sq/spec.md) filed the guard with
+Wave-1 task **B0c**, which had closed on 2026-08-25 — six weeks before the
+filing — so the obligation was filed against a destination that could not act;
+C1b and C2e each declined it in turn, and Task F ranked it 5, recommended it and
+did not implement it, because choosing each site's canonical wording is the
+owning specs' call and not a reviewer's. **This table is those specs making that
+call.** The owner of a row is the document named in it.
+
+**Why the pattern is the retired wording and not the word "undefined".** A scan
+for "undefined" fires on correct prose — undefined *encodings*, undefined
+*operations*, and the SH-4 manual's own "undefined" that
+[sq/spec.md §7](sq/spec.md) narrows rather than contradicts — and this project's
+bar is that a check which fires on correct prose is switched off within a month.
+The retired *sentence* coming back is syntactic, and the exemption is the tree's
+existing convention for recording history: a retraction marker on the matching
+line or within two lines above it.
+
+**A row that matches nothing FAILS.** If the retired wording is deleted from the
+document altogether, the pattern can no longer notice its return and the row
+would pass forever while guarding nothing. `no-stale-value` fails the same way
+when its canonical pattern matches nothing in the owner, for the same reason.
+
+**What this does not close.** The retired *rule* reintroduced in different
+words. That is Task F's rank-3 inversion; no syntactic check separates it from
+correct prose, F declined to recommend one, and nothing here narrows it.
+
+| Site | Document | Retired wording |
+|---|---|---|
+| `l6.sq.readback` | [sq/spec.md §4](sq/spec.md) | `(?:\*\*)?undefined(?:\*\*)? content` |
+| `l6.fpu.restore` | [fpu/spec.md §7.3](fpu/spec.md) | `FR/XF/FPUL = undefined` |
+| `l6.l2.movca` | [cache/l2-spec.md §17.5](cache/l2-spec.md) | `remainder undefined until written` |
+
 ## Image layouts
 
 Facts whose owning spec must carry a `Offset | Bytes | Content` field table.
