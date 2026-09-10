@@ -53,6 +53,8 @@ Practical rules:
 
 This policy exists because J-Core's value proposition depends on patent freedom. The SH-1/2/3/4 patents expired before this project began. Anything we add must be similarly unencumbered.
 
+**Scope: what the rule binds.** It binds every mechanism in the **CPU and SoC intellectual property** — the ISA, the microarchitecture, the RTL, and anything specified here that will be implemented in hardware or in the software contract that hardware exposes. It does **not** bind the development, hosting, test and tooling stack: compilers, simulators, synthesis and place-and-route tools, CI, operating-system components the project consumes rather than designs, hosting and service infrastructure, and the workstation software anybody uses to write any of it. Those are used, not shipped as this project's IP, and the rationale above — freedom to operate on what J-Core distributes — does not reach them. *(Added post-F, 2026-09-10. Every audit of this policy so far has re-raised the same question, because the service plan and this glossary name a hosting and tooling stack that is entirely post-2006 and entirely ungrounded, and nothing said it was out of scope. One sentence closes it permanently; a reader who thinks a particular item straddles the line should treat "will this be in the RTL or in the architected software contract?" as the test.)*
+
 ### 2.1 How prior art is matched
 
 Two rules, learned from screening the transient-execution mitigations in [ooo/j32ooo-spec.md §20](ooo/j32ooo-spec.md) and [ooo/j32lt-spec.md §16](ooo/j32lt-spec.md). Both cut in directions the bare pre-2006 test gets wrong.

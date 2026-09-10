@@ -779,7 +779,7 @@ project has that generic designs don't:
 
 | Security item (Track C) | Efficiency risk | Minimize-loss answer (first pass — measure to confirm) |
 |---|---|---|
-| Speculation: delay-on-miss + frontend coverage (C2) | lost MLP / stalls | Bare DoM (no filter cache, **no value prediction**); FGMT overlap + ~2–6-cycle in-order shadow → target ~1%, likely net-positive energy. Frontend: predictor-updates-at-commit + 2–3-bit tenant-tagged BTB + degenerate-STT taint. Gang-scheduling removes the cross-tenant FGMT channel. |
+| Speculation: delay-on-miss + frontend coverage (C2) | lost MLP / stalls | Bare DoM (no filter cache, **no value prediction**); FGMT overlap + ~2–6-cycle in-order shadow → target ~1%, likely net-positive energy. Frontend: predictor-updates-at-commit + a domain-tagged BTB (`DOM`, [ooo/j32ooo-spec.md §3.2](ooo/j32ooo-spec.md)) + the load-forwarding restriction of [§9.4](ooo/j32ooo-spec.md) rule 3. Gang-scheduling removes the cross-tenant FGMT channel. *(The last two read "2–3-bit tenant-tagged BTB + degenerate-STT taint"; both names are retired — [§20.7](ooo/j32ooo-spec.md) rejection 3.)* |
 | Eager FP/SIMD switch + scrub (C1) | ~520 B V-file + FPU per switch | Eager+scrub **only at cross-tenant boundary**, dirty-bit lazy within tenant; 2-bit init/clean/dirty per block skips untouched state; movmu-style bulk save + per-register zero bit + background scrub → <0.9% @40 MHz. |
 | Cache isolation beyond ways (C2) | partition perf loss | DAWG-semantics ways (hit+fill masks + partitioned replacement metadata) ≤2%; hypervisor UCP epochs *beat* free sharing; per-thread MSHR reservation ≈0 on in-order. |
 | Core=single-tenant + flush on realloc (C2) | gang-switch flush (~15k cyc cold) | Tenant-tagged predictors (nothing to flush) + a multi-cycle **microreset** of the untagged transient state, specified by Wave-3 C2c as [hypervisor/hardware-spec.md §4.7.1a](hypervisor/hardware-spec.md) and grounded pre-2006 there; **write-through L1 means there is no dirty write-back to flush** — a structural advantage, keep it. Cost: unknown at this stage — needs measurement (§4.7.3, T-E2). |
@@ -923,8 +923,15 @@ prior," and it materially de-risks the ECP5 fit and the ASIC energy story.
 - **So:** keep delay-on-miss, **stop claiming completeness**, and add frontend
   coverage (no secret-dependent speculative I-fetch/BTB/ITLB updates past
   unresolved branches). Cheapest comprehensive options for a small core: MuonTrap
-  (flush-on-switch filter cache, ~4%) or STT (8.5–14.5%, the cheapest scheme with
-  a *formal* non-interference proof).
+  (flush-on-switch filter cache, 2020) or STT (MICRO 2019, the cheapest scheme
+  with a *formal* non-interference proof). **Both are post-2006 and are named
+  here as evidence about the option space, which
+  [glossary.md §2](glossary.md) permits; neither is adopted and neither can be
+  prior art.** *(The "~4%" and "8.5–14.5%" figures were removed post-F,
+  2026-09-10: they are other cores' measurements for mechanisms this project
+  rejected, so they are neither this project's numbers nor about this project's
+  mechanism —
+  [decisions/0005](decisions/0005-unmeasured-figures-are-removed.md).)*
 
 ### E.5 — Multi-tenant thread sharing  *(the scheduler-only model is accepted only as a coarse rule)*
 
@@ -1010,12 +1017,38 @@ software regulation recovers.
 - In-order is not automatically safe — the A53 fills a line ~2 instructions into
   the shadow (SiSCloak) — but the shadow is ~2–6 cycles, so gating fills costs
   almost nothing. **Cheap frontend coverage:** predictor/BTB/RAS update **only at
-  commit** (wrong-path trains nothing); **2–3-bit tenant-tagged BTB/PHT** (ARM
-  CSV2 partial-context — zero flush, zero warm-up, beats full-flush 26–37%);
-  **degenerate-STT taint** (1 bit/register — a shadow-load result can't feed a
-  missing address, redirect fetch, resolve a branch, or train a predictor);
-  delayed speculative TLB/PTW fills. ProSpeCT shows the taint unit fits a small
-  FPGA core (+17% LUT, +2% critical path).
+  commit** (wrong-path trains nothing); a **domain-tagged BTB/PHT**, which is
+  [ooo/j32ooo-spec.md §3.2](ooo/j32ooo-spec.md)'s `DOM` and is grounded there to
+  sun4v (2005), MIPS R4000 (1991) and SH-4 (1998); a **load-forwarding
+  restriction** so a shadow-load result cannot form an address, redirect fetch,
+  resolve a branch or train a predictor, which is
+  [ooo/j32ooo-spec.md §9.4](ooo/j32ooo-spec.md) rule 3; and delayed speculative
+  TLB/PTW fills.
+
+  *(Three names and three numbers were removed from this bullet post-F,
+  2026-09-10, and the removals are not cosmetic.* **"ARM CSV2 partial-context —
+  zero flush, zero warm-up, beats full-flush 26–37%"** *is wrong twice. Arm's*
+  Cache Speculation Side-channels *whitepaper — read at source, v2.0 May 2018,
+  v2.4 October 2018, v2.5 June 2020 — defines CSV2 as a field of
+  `ID_AA64PFR0_EL1` **added to the Armv8.5-A architecture** that reports whether a
+  CPU carries a hardware mitigation for Spectre variant 2. It is a capability
+  bit, not a partial-context tagging scheme, and it is post-cutoff. **No figure
+  of 26% or 37% appears in any of the three versions**, and no other source for
+  it was found; under
+  [decisions/0005](decisions/0005-unmeasured-figures-are-removed.md) an
+  unmeasured, unsourced figure is removed rather than annotated. This is the same
+  shape as the four* `fence.t` *numbers C2c could not reproduce.*
+  **"degenerate-STT taint"** *is a 2019 name — Yu et al., MICRO-52, verified —
+  and worse, the register-taint structure it names is claimed in force by AMD
+  US10956157B1 (priority 2018). The owning specs never adopted it and say so;
+  the plan was the only place still recommending it by that name. See
+  [ooo/j32ooo-spec.md §20.7](ooo/j32ooo-spec.md) rejection 3 for the full
+  treatment, the pre-2006 structure (IA-64's NaT bit, 2000) and why the rule
+  written instead is not that structure.* **ProSpeCT's "+17% LUT, +2% critical
+  path"** *measured a different core's taint unit for a mechanism this project
+  rejected, so it is neither this project's number nor about this project's
+  mechanism; it survives only as a literature row in
+  [security/threat-model.md §9](security/threat-model.md).)*
 - **Tenant switch:** a **microreset** of the on-core state that has no other
   control — [hypervisor/hardware-spec.md §4.7.1a](hypervisor/hardware-spec.md),
   item 9 of the gang-switch list.
@@ -1066,12 +1099,33 @@ software regulation recovers.
 **Cache isolation beyond ways — metadata bits, not cycles:**
 - **DAWG** (isolate hits + misses + replacement metadata) is ≤2% at half-cache,
   ~0 elsewhere — the marginal cost over the CAT-style ways you'd build anyway is
-  metadata bits. **Dynamic sizing (UCP)** *beats* free sharing (+11% weighted
-  speedup, <2 kB monitor); hypervisor-driven at quantized epochs so the adaptation
-  channel is negligible. **MSHRs:** per-thread static reservation ≈ 0 on an
-  in-order core (SecSMT). **Bandwidth:** MemGuard-style software miss-budget
-  throttling eliminated >50% interference; a 2-tenant TDM arbiter closes it in
-  hardware. **Randomized caches** only degrade conflict (not occupancy) channels
+  metadata bits. **DAWG is MICRO 2018 and is cited as evidence only**; the
+  mechanism [cache/l2-spec.md §16.1](cache/l2-spec.md) specifies is column
+  caching (Chiou et al., MIT, 1999/2000; US6370622, expired), and §16.1 records
+  that it is a different structure. **Utility-driven dynamic sizing**,
+  hypervisor-driven at quantized epochs so the adaptation channel is negligible:
+  the mechanism is Suh, Devadas and Rudolph — a per-client marginal-utility
+  estimate driving repartitioning at intervals, **HPCA-8 (2002)** and *Dynamic
+  Partitioning of Shared Cache Memory*, **J. Supercomputing 28(1), 2004**, with
+  the analytical model at **ICS 2001**. *(This bullet named "UCP" and gave its
+  figures. UCP is Qureshi and Patt, MICRO-39, **December 2006** — on the wrong
+  side of [glossary.md §2](glossary.md)'s "2006 itself is the cutoff", and it sat
+  two lines below the entry C2c had already re-grounded for the same reason. The
+  re-grounding is UCP's own: it says dynamic partitioning of a shared cache "was
+  first investigated by Suh et al." and cites exactly those two papers. Name
+  retired and figures removed post-F, 2026-09-10; the scope of the "+11%" is
+  corrected in [security/threat-model.md §9](security/threat-model.md).)*
+  **MSHRs:** per-thread static reservation ≈ 0 on an in-order core (SecSMT, 2022 —
+  evidence, not prior art; the mechanism is [`P-R3`](cache/l2-spec.md), grounded
+  to Kirk 1989 and Stone/Turek/Wolf 1992 in [cache/l2-spec.md §16.1](cache/l2-spec.md)).
+  **Bandwidth:** a per-domain periodic budget with the unused remainder carried
+  forward, which is **Deficit Round Robin** — Shreedhar and Varghese, **ACM
+  SIGCOMM 1995**, read at source — and is what [`P-R5`](cache/l2-spec.md)
+  specifies; a 2-tenant TDM arbiter closes it in hardware. *(This read
+  "MemGuard-style software miss-budget throttling eliminated >50% interference".
+  MemGuard is Yun et al., **RTAS 2013**, post-cutoff, and the figure is not in the
+  paper — see [security/threat-model.md §9](security/threat-model.md). Name and
+  figure removed post-F, 2026-09-10.)* **Randomized caches** only degrade conflict (not occupancy) channels
   and cost ASIC energy — partitioning is the right tool for an isolation
   *guarantee*. **Software levers (pay in memory, not cycles):** per-tenant-only
   KSM; privileged/audited `ocbi`/`ocbp` (removes the cheapest Flush+Reload

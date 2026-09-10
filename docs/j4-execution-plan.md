@@ -264,7 +264,12 @@ specified**, for the design points [decisions/0009](decisions/0009-in-order-fgmt
 paused: [ooo/j32ooo-spec.md §3.2](ooo/j32ooo-spec.md) already trains every predictor structure at
 commit only from a domain captured at rename, already tags the BTB with the full domain field —
 which is *wider* than the 2–3-bit ARM-CSV2 shape §E.10 recommends, not narrower — and §9.4 rule 3
-is already the degenerate taint. C2b added no clause to any of them. The fourth mechanism,
+is already what the plan's fourth name pointed at. **Two of the plan's three names are retired
+post-F, 2026-09-10**, and this paragraph keeps them only to say what the plan said: "2–3-bit
+ARM-CSV2" misdescribes a capability bit added to Armv8.5-A, and "degenerate-STT taint" names
+2019 work whose register-taint structure is claimed in force by AMD US10956157B1 — see
+[ooo/j32ooo-spec.md §20.7](ooo/j32ooo-spec.md) rejection 3, which also gives the pre-2006
+structure and says why §9.4 rule 3 is not it. C2b added no clause to any of them. The fourth mechanism,
 **delayed speculative TLB/PTW fill**, is the entire live workstream, and
 [mmu/hardware-spec.md §5.0a](mmu/hardware-spec.md) is where it lands. A wave that had worked the
 list in order would have produced a defence for a paused path and left the shipping arm exactly
