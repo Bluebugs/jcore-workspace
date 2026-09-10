@@ -685,6 +685,17 @@ proposal) and every item below is gated on meeting it.
   MSHR / bank-FIFO / bandwidth / pLRU channels; decide whether user-mode
   `ocbi/ocbp/pref` (a Flush+Reload primitive across the partition) needs
   privilege gating or is accepted.
+  ***Done 2026-09-09 by Wave-3 C2e, and the last clause was asked about the wrong
+  object.*** The scoping is [cache/l2-spec.md §16.1](cache/l2-spec.md)'s "What this
+  closes — the occupancy channel, and only that"; the residual list is
+  [§16.3](cache/l2-spec.md), ten channels each marked closed, mitigated or accepted,
+  with two entries this bullet does not name — cross-domain MSHR *coalescing* and the
+  inclusion recall of a shared line. **`ocbi`/`ocbp`/`pref` are not a Flush+Reload
+  primitive across the L2 partition**: per [cache/l2-spec.md §17.5](cache/l2-spec.md)'s
+  own table none of `ocbi`/`ocbp`/`ocbwb` evicts from the L2, and the two that reach it
+  — `pref` and `movca.l` — reach it by allocating, which §16.1 already confines. They
+  stay user-mode. What is ungated is a **register outside P4** at `0xabcd00c0`, rule `P-R8` of [cache/l2-spec.md §16.2](cache/l2-spec.md),
+  which can invalidate the other core's caches.
 
 ### C3. Lower-severity tracked items
 
@@ -1084,7 +1095,14 @@ Anything less leaves a *documented, demonstrated* cross-tenant channel open:
   names residual channels rather than claiming Spectre is closed. *(E.4)*
 - **A5 — Cache isolation beyond ways:** per-tenant replacement metadata + MSHRs,
   bandwidth QoS, no cross-tenant page sharing, no unprivileged cross-tenant flush.
-  *(E.8)*
+  *(E.8)* — *specified 2026-09-09 by C2e as [cache/l2-spec.md §16.2](cache/l2-spec.md)
+  [`P-R1`–`P-R8`](cache/l2-spec.md), and **not met**: there is no L2 to test. Two
+  clauses are narrower than written — bandwidth QoS is a measured **bound**, and "no
+  unprivileged cross-tenant flush" turns out to be about a register rather than the
+  instructions this list had in mind. "No cross-tenant page sharing" is **not**
+  achievable by the KSM decision alone, because the hypervisor's own shared read-only
+  mappings are shared by construction; see [security/threat-model.md §10](security/threat-model.md)
+  item 14.*
 - **A6 — Scrub on ownership change** for SQ buffers and FP/SIMD register files;
   no "undefined = previous tenant's data" anywhere. *(review §2)*
 

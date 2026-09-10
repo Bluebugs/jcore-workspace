@@ -114,7 +114,7 @@ minimize-loss step is settled.
 | C2b | Speculation: delay-on-miss + frontend coverage (commit-time predictor updates, tenant-tagged BTB, degenerate-STT taint, delayed spec TLB/PTW). **Design DONE 2026-09-09** — [mmu/hardware-spec.md §5.0a](mmu/hardware-spec.md) W-R1–W-R5, [ooo/j32ooo-spec.md §8.2a, §11.1a](ooo/j32ooo-spec.md), [ooo/j32lt-spec.md §7.4a, §7.5a](ooo/j32lt-spec.md), [security/threat-model.md §7.2, §7.3, §8 L4, §10](security/threat-model.md). **Three of the four named mechanisms target structures no repository contains and were already specified; the implementation half is dispatchable in part, and it is the first Wave-3 row of which that is true** — see below. | docs → jcore-cpu | Opus | Opus |
 | C2c | FGMT single-tenant-core + microreset on realloc. **Design DONE 2026-09-09** — [hypervisor/hardware-spec.md §2.10, §2.11, §4.7.1a, §4.7.2, §4.7.3](hypervisor/hardware-spec.md), [security/threat-model.md §8 L1](security/threat-model.md). **The row's mechanism name is post-2006 and had to be replaced, its figures were nobody's, and the implementation half is not dispatchable in any repo** — see below. | docs → jcore-cpu | Opus | *blocked on FGMT and a hypervisor existing* |
 | C2d | IOMMU default-deny + per-device block + no global-match IOTLB + coherent-DMA owner. **Design DONE 2026-09-09** — [iommu/hardware-spec.md §3.10](iommu/hardware-spec.md) `I-R1`–`I-R10` and §10.1 `I-E0`–`I-E6`, [iommu/security-review.md](iommu/security-review.md) (commissioned by this task; it did not exist), [decisions/0010](decisions/0010-dma-coherence-is-software-maintained.md), [security/threat-model.md §7.7a, §8 L2](security/threat-model.md). **The per-device block state already existed on both sides of the interface, the coherent-DMA entry is wrong about every noun, and the implementation half is not dispatchable in any of the three repos** — see below. | docs → jcore-cpu + jcore-soc + linux | Opus | *blocked on a BMID-carrying bus and a DMA master existing* |
-| C2e | Cache isolation beyond ways (DAWG-semantics metadata + MSHR reservation + bandwidth QoS + per-tenant KSM + privileged flush ops). | docs → jcore-cpu + linux | Opus | Opus |
+| C2e | Cache isolation beyond ways (DAWG-semantics metadata + MSHR reservation + bandwidth QoS + per-tenant KSM + privileged flush ops). **Design DONE 2026-09-09** — [cache/l2-spec.md §16.2](cache/l2-spec.md) [`P-R1`–`P-R8`](cache/l2-spec.md), §16.3, §16.4 `P-E1`–`P-E5`, §22.1b, [hypervisor/design-spec.md §6.2](hypervisor/design-spec.md), [security/threat-model.md §7.6a, §8 L5, §8 L6](security/threat-model.md). **The named mechanism has no pre-2006 grounding and was re-derived rather than adopted, one of the five was asked about the wrong object, one was already discharged by a section that existed, and the implementation half is not dispatchable in either repo** — see below. | docs → jcore-cpu + linux | Opus | *blocked on an L2 existing* |
 
 **C1a's implementation step reverses this table, and the reversal is recorded rather than
 absorbed.** This plan schedules every C-item as design-then-implement in the same wave. C1a cannot
@@ -521,6 +521,68 @@ unbuilt*, and with a second status that must be recorded rather than skipped:
 for a configuration with a tenant-influenced DMA master, and there is no DMA master at
 all, so the item's **blocker** condition is `N/A` today. `N/A`-as-blocker is not `MET`.
 Nothing in Wave 3 has moved a bar item to `MET`, and this row does not either.
+
+**C2e reverses this row twice, and closes the last of L6's three `undefined` sites without
+moving L6.** Wave 3's last item, and the pattern of the wave holds to the end.
+
+*First, `DAWG` is post-2006 and there is no pre-2006 grounding for it anywhere in the tree.* That
+is C2c's `fence.t` problem, and it took C2c's treatment: the name is not used for any mechanism in
+[cache/l2-spec.md](cache/l2-spec.md), the rules were re-derived, and each was grounded at source.
+The grounding turned out to be better than expected. **MIT CSAIL Memo 430** (Chiou, Jain, Devadas
+& Rudolph, November 1999; published as DAC 2000) contains the metadata rule verbatim — *"not
+update the LRU state of a cache-line that is caching data not currently mapped to the column it
+resides in"* — reached for a repartitioning reason rather than a security one, which is
+[glossary.md §2.1](glossary.md) rule 1's case exactly. **US6370622** (Chiou & Ang, MIT, filed
+1998-11-20, *Expired — Fee Related*) supplies the per-column allocation mask and per-region
+replacement policy but **not** per-partition replacement *state*, which is stated as the boundary
+rather than glossed. **IACR ePrint 2005/280** (D. Page, submitted 2005-08-25) supplies partitioning
+for a *security* purpose pre-2006, and supplies the privilege argument for cache-management
+instructions in its own words. What J-Core specifies is not DAWG's mechanism either: DAWG
+replicates metadata per domain and isolates hits; [`P-R2`](cache/l2-spec.md) keeps one tree,
+confines updates within it, and keeps hits unrestricted. A search for a patent tied to DAWG found none — a search result,
+not an opinion.
+
+*Second, the row's fifth mechanism is asked about the wrong object, and the object that is wrong
+is one the row does not mention.* "Privileged flush ops" reads on
+[j4-remediation-plan.md §C2](j4-remediation-plan.md)'s "user-mode `ocbi`/`ocbp`/`pref` — a
+Flush+Reload primitive across the partition". [cache/l2-spec.md §17.5](cache/l2-spec.md)'s own
+table says of `ocbi` that "the L2 copy, if any, is unaffected", and `ocbp` and `ocbwb` touch only
+the issuing core's copy and its directory bit: **none of the three evicts from the L2**, so none
+is a flush primitive against an L2 way partition. `pref` and `movca.l` do reach the L2, by
+*allocating*, and allocation was already confined by §16.1 — so that half was **already
+discharged** by a section written a month earlier, which is C2d's lesson repeating. The decision
+is that the three stay user-mode. What *is* ungated is a register: `cache/icache_modereg.vhm`
+decodes core 1's whole-cache invalidate bits and an IPI to core 1 in one word, and
+`jcore-soc@origin/master` places it at `0xabcd00c0` ([cache/l2-spec.md §16.2](cache/l2-spec.md)), **outside P4**, so its protection is a
+stage-2 mapping policy rather than a privilege level. That is shipping RTL, not a paused spec.
+
+*Third, four of the ten residual channels are `accepted`, and two of the four were on no list.*
+The row asks for mechanisms; the [j4-remediation-plan.md §C2](j4-remediation-plan.md) worklist
+asks, correctly, for the opposite — that a claim be **narrowed**. [cache/l2-spec.md §16.3](cache/l2-spec.md)
+does both, and the two new entries are cross-domain **MSHR coalescing** on a shared line (it
+survives per-domain reservation, because it is about sharing an entry rather than occupying one)
+and the **inclusion recall** of a shared line (a shared line lives in one way, so one domain's
+allocation pressure evicts it and the *other* domain's L1-D copy is recalled). Both were found by
+asking C2c's question — which shared structures have no per-domain control at all — of a
+different structure.
+
+**The implementation half is not dispatchable in either repo, and this is the fourth Wave-3 row of
+which that is true.** There is no L2: every case-insensitive `l2` match in
+`jcore-cpu@origin/master` or `jcore-soc@origin/master` is a textio variable in a `dcache_tb`, an
+FPGA ball name `"L2"` in a `pad_ring.vhd`, a TLB comment, or prose — and
+`jcore-cpu/docs/architecture/cpu-variants.md` says so itself, "Future — not yet implemented". The
+`linux` half is thinner than the row implies: "per-tenant KSM" is not a thing to build, because
+KSM merges across every opted-in `mm` system-wide with the NUMA node as its only partitioning
+axis, so the deliverable is a **policy** — KSM off in the host — plus the clause that says turning
+it off does not remove cross-tenant shared memory.
+
+**Neither L5 nor L6 moves.** L5 is `NOT MET` with all five mechanisms specified and none built;
+two of the five are narrower than the row's wording, and [`P-R5`](cache/l2-spec.md) is a measured *bound* rather than
+a closure. L6 goes from one open `undefined` site to **zero** and stays `NOT MET`, because its
+evidence bar is a residue test per site demonstrated **red before the fix** and there is no store
+queue, no FPU, no SIMD unit, no GPU and no L2 to run one on. Zero open sites completes the
+*specification* half of L6 and nothing else. **Nothing in Wave 3 has moved a bar item to `MET`,
+and this row, which is Wave 3's last, does not either.**
 
 ### Final
 
