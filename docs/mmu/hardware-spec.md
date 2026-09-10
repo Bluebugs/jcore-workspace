@@ -1364,9 +1364,33 @@ This subsection applies when the implementation pairs this MMU with an extension
 
 **The unifying rule.** When an instruction-fetch TLB miss (or any synchronous instruction-fetch fault) is taken while the CPU is partway through fetching a multi-word unit, the CPU **must save the PC of the unit's *first* word into SPC**, never the address of an interior word. The miss handler is then MMU-generic exactly as today; `LDTLB.RN` + `RTE` returns to the unit's start and the whole unit re-executes (re-fetching all its words) against the now-mapped page. This is correct and idempotent because a multi-word unit commits no architectural state until it retires, so re-execution from the start reproduces it exactly. Returning to an interior word would instead resume *inside* an instruction — interpreting immediate data or a governed SIMD instruction as a fresh opcode — which is silent corruption, not a fault. (Prior art: Intel 386, 1985, validating page-split instructions against the instruction's start address.)
 
+> **An interior word is a *valid* opcode, and three documents said it was not.**
+> *(Corrected by Wave-3 **C3**, 2026-09-10.)* This section and
+> [../isa-density/spec.md §4.5](../isa-density/spec.md) both described word1 as
+> "not a valid opcode" and its execution as "garbage". On a 16-bit fixed-width ISA
+> where every even address is a legal instruction boundary, that cannot be true:
+> word1 is sixteen bits at an aligned address, and the decoder has no notion of
+> "interior". Checked against `jcore-cpu@origin/master:docs/insns.json`, the word1
+> patterns decode at top level as follows — `movi20`/`movi20s` word1 is
+> `iiiiiiiiiiiiiiii`, sixteen unconstrained bits, i.e. **any SH instruction at
+> all**; `lea @(disp,Rm),Rn` word1 is `1010dddddddddddd`, which is `bra label`;
+> `lea @(disp,PC),Rn` word1 is `1011dddddddddddd`, which is `bsr label`; and
+> disp12-`mov.l` word1 is `0110dddddddddddd`, a `mov`-family register op.
+>
+> **The restart rule above is unaffected and stays exactly as written** — the
+> reason to report word0's PC is that a multi-word unit commits nothing until it
+> retires, which is an atomicity argument and does not rest on what word1
+> decodes as. What changes is that the rule closes the *accidental* path only. It
+> is a fetch-restart rule inside the multi-word sequencer; it cannot distinguish a
+> PC of `word0 + 2` that arrived from a mis-restarted `RTE` from one that arrived
+> from a `jmp @Rn`, and nothing in the design tries to. The deliberate path is
+> acknowledged and accepted at
+> [../security/threat-model.md §10](../security/threat-model.md) item 18.
+
+
 **SIMD block.** A SIMD block is a run of consecutive halfwords — a prefix plus up to four governed instructions (≤ 10 bytes), or a `VLNS`+`VEXT`/`VINS` pair (4 bytes). The prefix establishes a *decode-stage shadow latch* (`SIMD_VAL`, lane width, block length) that is **not** architectural state and is cleared on every exception entry ([../simd/spec.md §6.5](../simd/spec.md)). The first-word PC the rule requires is the **prefix PC**; returning to a governed instruction with the shadow latch cleared would decode it as a plain scalar SH op.
 
-**Two-word density instructions.** `movi20`/`movi20s`/`lea`/disp12-`mov.l` fetch word1 after word0. The first-word PC the rule requires is **word0's PC**; word1 is immediate / displacement data, not a valid opcode, so returning to it is garbage. The in-order requirement (keep the architectural PC at word0 while the fetch pointer advances to word1) is detailed in [../isa-density/hardware-impl.md §4.2](../isa-density/hardware-impl.md). Note `movmu`/`movml` are *single-word* instructions and so do not engage this rule, but they are multi-*data*-access and have their own restart contract ([../isa-density/spec.md §5](../isa-density/spec.md)).
+**Two-word density instructions.** `movi20`/`movi20s`/`lea`/disp12-`mov.l` fetch word1 after word0. The first-word PC the rule requires is **word0's PC**; word1 is immediate / displacement data, so returning to it executes something other than the instruction that was interrupted. *(This clause previously read "word1 is immediate / displacement data, **not a valid opcode**, so returning to it is garbage", and the middle third of that was false — see the correction under the unifying rule above. The restart requirement is unchanged, because it never depended on the claim.)* The in-order requirement (keep the architectural PC at word0 while the fetch pointer advances to word1) is detailed in [../isa-density/hardware-impl.md §4.2](../isa-density/hardware-impl.md). Note `movmu`/`movml` are *single-word* instructions and so do not engage this rule, but they are multi-*data*-access and have their own restart contract ([../isa-density/spec.md §5](../isa-density/spec.md)).
 
 **SIMD blocks (in-order J32 + TLB): prefix-time block-fetch validation.** A SIMD block's governed instructions are decoded in the cycles *after* the prefix, so by the time a governed fetch faults the prefix has retired and its decode shadow latch is gone — late detection cannot easily recover the prefix PC. The clean fix is to validate the whole block up front. The block length is known at prefix decode, so the last halfword address `end = prefix_PC + 2·N` is known immediately. If `end` falls in a different page than the prefix (a single page-number comparison; false for the overwhelming majority of blocks at a 16 KB page), the front end issues a fetch-translation probe of `end`'s page during the prefix's otherwise-idle MA slot, before any governed instruction issues. A miss on that probe enters the `VBR + 0x400` vector normally with SPC = prefix PC — the existing miss sequence of §5 needs no change, because the prefix *is* the faulting instruction at that point. After the probe resolves, all governed fetches in the block are guaranteed to translate. The `VLNS`+`VEXT`/`VINS` pair is validated by probing `prefix_PC + 2`. Out-of-order implementations (J32-OOO) get the same prefix-PC reporting for free from their ROB atomic-commit group and need no explicit probe.
 

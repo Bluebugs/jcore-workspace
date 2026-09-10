@@ -420,6 +420,37 @@ void LEA (int d, int m, int n)   # disp = sign_extend_12(d), unscaled (bytes)
   Verified collision-free against SH-2, SH-2A, SH-4/SH-4A, and the J32 decoder
   (`jcore-cpu/docs/insns.json` sweep; see §6).
 
+
+> **What word1 decodes as on its own, and why that is a live encoding question.**
+> *(Wave-3 **C3**, 2026-09-10.)* [encoding-sweep.md §4](../encoding-sweep.md) verified that these
+> word1 minors are unclaimed **inside the two-word group**, which is the right question for
+> collision-freedom and is not the only question. Decoded at *top level* — which is what happens
+> when a branch lands on `word0 + 2`, since every even address is a legal instruction boundary on
+> a 16-bit fixed-width ISA — `jcore-cpu@origin/master:docs/insns.json` gives:
+>
+> | word1 minor | Claimed by | Top-level meaning | Gadget value to an attacker |
+> |---|---|---|---|
+> | `1010` | `lea @(disp,Rm),Rn` | `1010dddddddddddd` = **`bra label`** | unconditional relative branch, **with a delay slot** |
+> | `1011` | `lea @(disp,PC),Rn` ([isa-pcrel/spec.md §3.1](../isa-pcrel/spec.md)) | `1011dddddddddddd` = **`bsr label`** | relative **call**; writes `PR`, with a delay slot — a JOP dispatch primitive |
+> | `0110` | SH-2A `mov.l @(disp12,Rm),Rn` | a `0110nnnnmmmmxxxx` `mov`-family op | register move / load; inherited from SH-2A, not ours to move |
+> | `1100` | free | `1100xxxxiiiiiiii` — includes `trapa #imm` | a syscall primitive |
+> | `1101` | free | `1101nnnndddddddd` = `mov.l @(disp,PC),Rn`, the whole minor | one PC-relative load; no control flow |
+> | `1110` | free | `1110nnnniiiiiiii` = `mov #imm,Rn`, the whole minor | **inert** — a register write, no memory access, no control flow |
+> | `1111` | free | the FP/SIMD plane | traps on a part with no FPU; otherwise an FP op |
+>
+> **`1010` and `1011` are the two worst choices available and were taken first.** `1110` is the
+> best: the entire minor is one instruction that writes a constant to a register. **This is filed,
+> not changed.** Moving a minor requires re-running `cpugen freespace` and re-checking
+> [encoding-sweep.md §4](../encoding-sweep.md), which C3 could not do from the documentation alone,
+> and it moves a claim two specs make. The point that must not be lost is the timing: **no
+> instruction in this document is committed to RTL** (§0's banner), so the change costs nothing
+> today and becomes a compatibility break the moment one is. The security class itself is accepted
+> — [../security/threat-model.md §10](../security/threat-model.md) item 18 — so this is an
+> opportunity, not a blocker.
+>
+> **Owner:** this document and [isa-pcrel/spec.md §3.1](../isa-pcrel/spec.md) jointly, before
+> either instruction reaches RTL.
+
 #### 3.4.1 Companion: GOT-slot load via existing SH-2A `mov.l @(disp12,Rm),Rn`
 
 The *other* half of the PIC idiom — loading a GOT slot (`Rn = *(r12 + slot)`,
@@ -582,8 +613,16 @@ the TLB / page-fault. Because word1 is the *interior* of one architectural
 instruction (not a separate instruction), the fault **must report word0's PC**,
 so that `RTE` re-executes the whole two-word instruction from the start (re-fetch
 both words) once the page is mapped. Reporting word1's address would return
-control into the middle of an instruction — word1 is immediate data, not a valid
-opcode — and decode it as garbage. This is the instruction-side analogue of the
+control into the middle of an instruction and decode word1 as a fresh opcode,
+which is not the instruction that was interrupted. *(This sentence previously read
+"word1 is immediate data, **not a valid opcode** — and decode it as garbage". It is
+not garbage and it is not invalid: word1 of `movi20` is sixteen unconstrained bits
+and therefore any SH instruction whatever, and word1 of `lea` is `1010dddddddddddd`,
+which `jcore-cpu@origin/master:docs/insns.json` decodes at top level as `bra label`.
+Corrected by Wave-3 **C3**, 2026-09-10; see [§3.4](#34-lea--load-effective-address-32-bit)
+and [../security/threat-model.md §10](../security/threat-model.md) item 18. The
+restart requirement is unchanged — it rests on the unit committing nothing until it
+retires, not on what word1 decodes as.)* This is the instruction-side analogue of the
 SIMD block-fetch hazard ([`../simd/spec.md`](../simd/spec.md) §6.5); the same
 "report the start-of-unit PC, restart atomically" rule applies, and it is the
 canonical x86-386 (1985) page-split-instruction behavior. The in-order
