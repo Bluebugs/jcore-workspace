@@ -300,7 +300,30 @@ else:
     jump to VBR_HYP + offset
 ```
 
-External interrupts always go to the hypervisor when virtualization is active (they're virtualized for the guest by the hypervisor's interrupt controller emulation).
+**External interrupts.** *(Corrected by C3, 2026-09-10.)* This paragraph previously read
+*"External interrupts always go to the hypervisor when virtualization is active (they're
+virtualized for the guest by the hypervisor's interrupt controller emulation)."* That is not
+what the machine does and not what any other document describes. `HEDR` bit 15 is
+**delegatable** ([hardware-spec.md §2.3.1](hardware-spec.md)), and
+[../aic/aic2-spec.md §5.5](../aic/aic2-spec.md) requires the hypervisor to **set** it at every
+vCPU dispatch, precisely so a guest-owned device's interrupt reaches the guest with no HS-mode
+intermediary. The sentence also named "the hypervisor's interrupt controller emulation" as the
+mechanism without binding it to a specification; the object it means is `jcore_vintc`
+([../aic/aic2-spec.md §5.6](../aic/aic2-spec.md), [linux-spec.md §3.2](linux-spec.md)).
+
+The actual rule, stated once and owned by the AIC2 spec:
+
+- **Which sources may reach a guest at all** is decided by AIC2's per-source `GUEST_OWNED`,
+  which is hyperprivileged-only ([../aic/aic2-spec.md §5.1](../aic/aic2-spec.md)).
+- **Whether a delivered interrupt lands in the guest or in HS mode** is decided by `HEDR`
+  bit 15, which is per-cause and per-vCPU, not per-source.
+- **The two are reconciled at AIC2, not here**, by
+  [`A2-R1`](../aic/aic2-spec.md): while a guest vCPU is dispatched on a TC, a host-owned source
+  is not delivered to that TC at all. Without `A2-R1` the delegation above is unsafe, because
+  the CPU applying `HEDR` cannot see `GUEST_OWNED`.
+
+**This document does not own the interrupt model** and must not restate it. Everything above
+is a pointer, deliberately; the previous sentence is the reason the pointer is needed.
 
 ### 4.4 Hypercall mechanism
 

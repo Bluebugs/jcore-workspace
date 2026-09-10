@@ -91,12 +91,14 @@ T2 is a strict superset of T1; T1 is a strict superset of T0. A given SoC instan
                                        |   IRL_vector (8 bits) ←  source number  |  |
                                        |   IRL_tc (T1, log2(n_tc) bits) ← TC_TGT  |  |
                                        |                                         |  |
-                                       |   (T2) delivery-mode FSM:               |  |
-                                       |        if !GUEST_OWNED[w]: deliver to    |  |
-                                       |                            host (HEDR=0)|  |
-                                       |        elif gvcpu running here & MD=1:  |  |
-                                       |                            deliver to vCPU |
-                                       |        else: raise HS-delivery-pending  |  |
+                                       |   (T2) delivery-mode FSM (§5.2):        |  |
+                                       |     if !GUEST_OWNED[w]:                 |  |
+                                       |        guest vCPU dispatched on target  |  |
+                                       |          TC ? -> HS-delivery-pending    |  |
+                                       |          else -> deliver to host        |  |
+                                       |     elif gvcpu running here & MD=1:     |  |
+                                       |          deliver to vCPU                |  |
+                                       |     else: raise HS-delivery-pending     |  |
                                        |                                         ↓  |
                                        |   ──────────────  cpu_event_i_t  ──────→ CPU
                                        |                                            |
@@ -198,17 +200,36 @@ winner = argmax over sources s of (PRIO[s] | (ENABLE[s] & PEND[s] & target_match
                                        (0 if disabled, else PRIO[s])
 ```
 
-If `PRIO[winner] > SR.IMASK` on the owning CPU (and the CPU is not in a delay-slot / BL-blocked window), AIC2 asserts `cpu_event_i_t.irq_level = PRIO[winner]` and `vector_number = winner`. The CPU's exception logic accepts and jumps to `VBR + 0x600 + vector_number * 0x20` (see [mmu/hardware-spec.md §5](../mmu/hardware-spec.md) for the vector conventions AIC2 follows).
+If `PRIO[winner] > SR.IMASK` on the owning CPU (and the CPU is not in a delay-slot / BL-blocked window), AIC2 asserts `cpu_event_i_t.irq_level = PRIO[winner]` and `vector_number = winner`. The CPU's exception logic accepts, latches `INTEVT` from the 8-bit vector, and jumps to a **single, flat** interrupt entry point — `VBR + 0x600` ([../hypervisor/hardware-spec.md §4.2](../hypervisor/hardware-spec.md) for the offset, [../priv-arch/design-spec.md §4.5](../priv-arch/design-spec.md) for the supervisor-mode table it belongs to). The vector number selects **which `INTEVT` value the handler reads**, not which address it enters.
 
-> **The per-vector stride is a J-Core convention, not the SH-4 one.** Stock SH-4 has a single
-> external-interrupt entry point and discriminates with `INTEVT`; the Linux SH exception table
-> still labels it that way (`arch/sh/kernel/cpu/sh3/entry.S`, "0x600: Interrupt / NMI vector").
-> This paragraph previously called the layout "the standard SH external-interrupt vector layout",
-> which overstates it. Nothing about the host changes — but it means **AIC2 is never a guest's
-> interrupt controller**: a stock SH-4 guest entered at a strided vector lands somewhere its own
-> handler table does not describe. A guest's controller is emulated, and AIC2's direct
-> guest-injection path (§5) is a paravirtual facility for a J-Core-aware guest only. See
-> [../sh4-guest-model.md §3.4](../sh4-guest-model.md), Decision B2-3.
+> **THERE IS NO PER-VECTOR STRIDE, and this paragraph previously said there was.**
+> *(C3, 2026-09-10.)* It previously read `VBR + 0x600 + vector_number * 0x20` and cited
+> [../mmu/hardware-spec.md §5](../mmu/hardware-spec.md) for "the vector conventions AIC2
+> follows". Both halves were wrong, and they were wrong in a way that no check could see,
+> because the cited authority is silent: [../mmu/hardware-spec.md §5](../mmu/hardware-spec.md)
+> assigns `VBR + 0x400` to TLB misses and `VBR + 0x100` to protection violations ([../mmu/hardware-spec.md §5](../mmu/hardware-spec.md)),
+> and **contains no `0x600` and no interrupt vector at
+> all**, so the citation pointed at a document that neither supported nor contradicted the claim.
+>
+> The shipping RTL settles it. `jcore-cpu@origin/master`'s
+> `decode/gen-go/spec/sh4/exceptions.toml` defines the `Interrupt` entry as
+> `operation = "SPC<-PC; SSR<-SR; MD/RB/BL; IMASK; INTEVT<-vec; PC<-VBR+0x600"`, and its
+> vector slot is literally `xbus = "VBR"`, `ybus = "1536"`, `arith = "ADD"`, `zbus = "PC"` —
+> a constant add of `0x600` with the 8-bit event vector going to `INTEVT` and nowhere near the
+> program counter. The file's own header says so in prose: *"a DIRECT fixed-vector jump
+> PC <- VBR+0x100 (general exceptions, [../mmu/hardware-spec.md §5](../mmu/hardware-spec.md))
+> or VBR+0x600 (interrupt) … Interrupt INTEVT = the d8
+> event vector"*. That is **stock SH-4 behaviour**, not a J-Core convention, and it agrees
+> with `arch/sh/kernel/cpu/sh3/entry.S`'s "0x600: Interrupt / NMI vector" rather than
+> departing from it.
+>
+> **What this costs.** [../sh4-guest-model.md §3.4](../sh4-guest-model.md)'s Decision **B2-3**
+> — "AIC2 is the host's interrupt controller and is never the guest's" — rested its interrupt
+> half on this stride: a stock SH-4 guest entered at a strided vector would land where its own
+> handler table does not describe. **That leg is void**; a stock guest entered on this machine's
+> interrupt path lands at exactly the offset its table describes. B2-3's *conclusion* survives on
+> three legs that do not depend on the vector at all, and they are re-derived at
+> [../sh4-guest-model.md §3.4](../sh4-guest-model.md).
 
 When the CPU accepts (drives `cpu_event_o_t.ack` for the AIC2-presented vector), AIC2 atomically:
 
@@ -411,9 +432,15 @@ For each source `s` whose `ENABLE[s] & PEND[s]` qualifies:
 
 ```
 if !GUEST_OWNED[s]:
-    -- Host-owned interrupt: T0/T1 path
-    deliver via cpu_event_i_t to the running thread on TARGET[s]/TC_TARGET[s].
-    HEDR is consulted by the CPU's trap logic per hypervisor/hardware-spec.md §4.
+    -- Host-owned interrupt.
+    if a guest vCPU is dispatched on TARGET[s]/TC_TARGET[s] (SR.HPRIV = 0):
+        -- A2-R1. Do NOT deliver. See below.
+        raise the always-to-HS internal vector (VINJ_VECTOR, §5.4) at IRL=15.
+        leave PEND[s] set; do NOT enter it in HVDP -- a host-owned source has
+        no (G, V) to file it under.
+    else:
+        -- T0/T1 path: the host is running here.
+        deliver via cpu_event_i_t to the running thread on TARGET[s]/TC_TARGET[s].
 else:
     let (G, V) = GVCPU_TARGET[s]
     if (G, V) is currently dispatched on this physical CPU's TC AND
@@ -436,6 +463,46 @@ else:
 ```
 
 The "fast path" exists so that, when a guest's I/O device interrupts while the guest is the dispatched vCPU on this physical CPU, the trap goes straight to the guest with no HS-mode intermediary. This matches the SPARC v9 sun4v "interrupt cookie" fast-path and the POWER5 "external interrupt delivered to G" path.
+
+> **`A2-R1` — while a guest vCPU is dispatched on a TC, AIC2 MUST NOT deliver a host-owned
+> source to that TC.** *(C3, 2026-09-10. Normative.)* This rule is new, and the branch it
+> governs previously read *"deliver via `cpu_event_i_t` to the running thread on
+> `TARGET[s]`/`TC_TARGET[s]`. HEDR is consulted by the CPU's trap logic"*, with no test for
+> what is running there.
+>
+> **Why the old text was a cross-domain delivery, not a wording problem.** `HEDR` is a
+> **per-cause** bitmap and interrupts have **one bit in it** — bit 15, `External IRL
+> interrupt`, delegatable ([../hypervisor/hardware-spec.md §2.3.1](../hypervisor/hardware-spec.md)).
+> §5.5 requires the hypervisor to set that bit at vCPU dispatch. So with a guest running and
+> `HEDR[15] = 1`, the old branch delivered a **host-owned device's interrupt into the guest's
+> `VBR`**: the host loses the interrupt, and the guest gains a timing-accurate signal of host
+> device activity it was never routed. Nothing in the machine could have caught it. AIC2's
+> routing decision is **per source**; the delegation control is **per cause**; and the CPU,
+> which is where the delegation is applied, cannot see `GUEST_OWNED[s]` — `cpu_event_i_t`
+> carries `irq_level`, `vector_number` and (T1) `tc_target`, and no ownership bit
+> ([§2.2](#22-signal-interfaces)). A rule stated at a place that cannot see the property it
+> depends on is not enforceable, so the fix has to move to the place that *can* see it, which
+> is AIC2 itself.
+>
+> **The predicate costs nothing new.** AIC2 already needs "is `(G, V)` dispatched on this TC,
+> with `SR.HPRIV = 0`" to evaluate the fast path two lines below. `A2-R1` reads the same input
+> and inverts the branch it feeds. This rule **removes a delivery**; it adds no register, no
+> wire and no state, which is why it owes no prior art of its own beyond §5.8's.
+>
+> **`IRL = 15` is load-bearing and closes a second hole.** The internal vector is raised above
+> every `SR.IMASK` value, so a guest cannot suppress it. Without that, `A2-R1` would merely
+> move the problem: delivery is gated on `PRIO[winner] > SR.IMASK` against the **physical**
+> `SR.IMASK` (§3.4), which a running guest writes, so a guest that raises `IMASK` and spins
+> would hold off the host's own interrupts for its whole quantum. No section of this spec or
+> of [../hypervisor/hardware-spec.md](../hypervisor/hardware-spec.md) states whether guest
+> writes to `SR.IMASK` are trapped, shadowed, or applied to hardware; `A2-R1` makes the answer
+> stop mattering for host-owned sources, and it still matters for everything else — filed in
+> [../security/threat-model.md §11](../security/threat-model.md).
+>
+> **What `A2-R1` costs the host.** A host-owned interrupt taken while a guest is dispatched is
+> now serviced one HS entry later than before, instead of being serviced in the wrong domain.
+> `PEND[s]` stays set, so the source is not lost and level-triggered sources need no special
+> case; the hypervisor undispatches or defers exactly as it does for §5.2's other slow path.
 
 ### 5.3 Virtual-interrupt injection MMIO
 
@@ -484,11 +551,32 @@ Per [hypervisor/hardware-spec.md §2.3](../hypervisor/hardware-spec.md), HEDR is
 
 The hypervisor's convention with AIC2 is:
 
-- **At vCPU dispatch**, the hypervisor sets `HEDR[external-interrupt] = 1` for that vCPU's HEDR shadow, telling the CPU "if an interrupt arrives while this vCPU is running, deliver it to the guest's VBR." AIC2's §5.2 fast path is what makes this safe — only guest-owned interrupts can fire while the guest is running, because host-owned sources have been masked at the AIC2 level for the duration of the vCPU's quantum.
+- **At vCPU dispatch**, the hypervisor sets `HEDR[external-interrupt] = 1` (bit 15, [../hypervisor/hardware-spec.md §2.3.1](../hypervisor/hardware-spec.md)) for that vCPU's HEDR shadow, telling the CPU "if an interrupt arrives while this vCPU is running, deliver it to the guest's VBR."
 - **At vCPU undispatch**, the hypervisor clears HEDR's external-interrupt bit, ensuring the next interrupt traps to HS so the hypervisor can decide what to do.
-- **Host-owned sources** never fire on a running guest vCPU because they never satisfy AIC2's `GUEST_OWNED[s]=1` predicate; they wait until the host is scheduled.
+- **What makes the dispatch-time delegation safe is [`A2-R1`](#52-delivery-rules), and only that.** With `HEDR[15] = 1` installed, *every* interrupt the CPU accepts goes to the guest — the CPU has no per-source knowledge and cannot have any. `A2-R1` is therefore not an optimisation of the fast path; it is the whole of the argument that the delegation is confined to the guest's own sources.
 
-This avoids the need for any IRL-level masking at vCPU switch — the AIC2's source-side ownership is the gate.
+> **This list previously gave three different reasons, and none of them worked.**
+> *(Rewritten by C3, 2026-09-10.)* The retired text said, in the same nine lines, that the
+> arrangement was safe *"because host-owned sources have been masked at the AIC2 level for the
+> duration of the vCPU's quantum"*; that *"host-owned sources never fire on a running guest vCPU
+> because they never satisfy AIC2's `GUEST_OWNED[s]=1` predicate"*; and that *"this avoids the
+> need for any IRL-level masking at vCPU switch — the AIC2's source-side ownership is the gate."*
+> Taking them in turn:
+>
+> - **The masking claim named an action no section performs.** §7.4's dispatch sequence writes
+>   `GUEST_OWNED[s]` and `GVCPU_TARGET[s]` and nothing else; no register in §3.2 or §5.1 masks a
+>   class of sources for a quantum. Read as a requirement rather than a fact it is also a bad
+>   one: it costs an `ENABLE[*]` rewrite over the whole source space on every dispatch, and it
+>   makes the host deaf to its own devices for the guest's entire quantum — which is the cost
+>   the fast path exists to avoid.
+> - **The `GUEST_OWNED` claim was a non-sequitur.** Failing `GUEST_OWNED[s] = 1` is precisely
+>   what selected the branch that delivered, so the predicate named as the reason nothing
+>   happens was the predicate that made it happen.
+> - **The third sentence contradicted the first.** "Masked at the AIC2 level for the duration of
+>   the quantum" *is* masking at vCPU switch; the two sentences are five lines apart.
+>
+> All three are gone. The single reason is `A2-R1`, it is stated as a rule with a number, and it
+> is stated at AIC2 — the only place in the machine that holds both halves of the condition.
 
 ### 5.6 `jcore_vintc` — the guest-visible model
 
@@ -736,6 +824,7 @@ A SoC integration claiming conformance to a tier MUST satisfy all of the followi
 - (T2-6) Hyperprivileged-only register protection per [hypervisor/hardware-spec.md §3.4](../hypervisor/hardware-spec.md).
 - (T2-7) `jcore_vintc` ABI parity with the bare-metal AIC2 host register file per §5.6.
 - (T2-8) `AIC2_CAPS.HAS_VIRT = 1` on the bare-metal view; `HAS_VIRT = 0` on the `jcore_vintc` view per §8.3.
+- (T2-9) [`A2-R1`](#52-delivery-rules): no host-owned source is delivered to a TC hosting a dispatched guest vCPU (`SR.HPRIV = 0`); it raises the always-to-HS internal vector at `IRL = 15` instead, with `PEND[s]` left set. **This is the item a T2 implementation is most likely to omit**, because omitting it produces a machine that works — host interrupts are serviced, guest interrupts are serviced — and differs only in *which domain* a host-owned interrupt lands in while a guest runs. The negative test is the conformance point: with `HEDR[15] = 1` on the dispatched vCPU, assert a host-owned source and require the trap at `VBR_HYP`, not at the guest's `VBR`.
 
 ---
 
