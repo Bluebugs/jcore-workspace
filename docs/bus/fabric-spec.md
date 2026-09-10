@@ -116,8 +116,8 @@ The baseline J-Core SoC exposes the following slave ports. Addresses are the P1/
 ### 3.2 Routing rules `[T0/T1/T2/T3]`
 
 - **All-to-all baseline.** Every master can address every slave by default. The fabric MUST NOT silently drop transactions whose target is reachable.
-- **DMA masters bypass the CPU MMU but go through the IOMMU.** A DMA master's request reaches the IOMMU's slave-side IOTLB-front interface; the IOMMU's master-side interface continues into the fabric with `PA` substituted for `IOVA` (or with `SLVERR` on miss, per [iommu/hardware-spec.md §2.2](../iommu/hardware-spec.md)).
-- **CPU cores never bypass the IOMMU.** CPU transactions carry already-translated PA (the CPU MMU runs first); they take a direct path to slaves and skip the IOMMU. The IOMMU does not see CPU traffic.
+- **DMA masters bypass the CPU MMU but go through the IOMMU.** A DMA master's request reaches the IOMMU's slave-side IOTLB-front interface; the IOMMU's master-side interface continues into the fabric with `PA` substituted for `IOVA`. **On a block — a miss, a permission failure, or any deny case — the transaction is *completed*, with read data all-zero and write data discarded, in the same number of cycles as a hit** ([iommu/hardware-spec.md §2.2](../iommu/hardware-spec.md) `I-R2`). *(Corrected post-F, 2026-09-09: this bullet read "or with `SLVERR` on miss". Wave-3 C2d retired that formulation — the J-Core data-bus response record is `{ d, ack }` with no error field at all, so "suppress the data phase" means never asserting `ack`, which stalls the master forever and, behind a fixed-priority mux, can wedge every master behind it. [iommu/security-review.md](../iommu/security-review.md) rates that reading critical-adjacent. This is the document an SoC integrator reads first, and it was the last live citation of the retired behaviour.)*
+- **CPU traffic does not traverse the IOMMU at all.** CPU transactions carry already-translated PA (the CPU MMU runs first); they take a direct path to slaves. *(This bullet was headed "CPU cores never bypass the IOMMU", which its own body contradicts and which inverts [iommu/hardware-spec.md §3.10](../iommu/hardware-spec.md)'s vocabulary: "bypass" there is a transaction reaching memory through the IOMMU with no permission check, and a CPU port never reaches the IOMMU to bypass it. Corrected post-F, 2026-09-09.)* `I-R1a` makes this **normative in the other direction**: the IOMMU translates non-CPU master ports only, BMIDs `0x01`–`0x0F` never appear at its slave interface, and **an integration that does route a CPU port through the IOMMU is non-conformant** — under `I-R1`'s deny-by-default reset such a part cannot complete its own boot fetch.
 - **Held-reset cores (§9).** The fabric MUST NOT deliver any transaction (data, snoop, interrupt vector fetch) to a CPU master port that is currently held in reset by the SMP-release register.
 - **Per-region restrictions** beyond the above are out of scope here. If a future SoC integration restricts e.g. DMA access to a sub-range of SDRAM, that restriction is captured in the P4 MMIO map and enforced by the IOMMU's per-BMID tables, not by fabric routing.
 
@@ -191,31 +191,59 @@ The 256-entry BMID space is partitioned by integration role. The policy is norma
 
 | BMID range        | Class                          | Notes                                                                     |
 | ----------------- | ------------------------------ | ------------------------------------------------------------------------- |
-| `0x00`            | Reserved (untagged / bypass)   | Boot DMA only; see §4.3.                                                  |
-| `0x01` – `0x0F`   | CPU cores                      | Core *N* → BMID `0x01 + N`. Up to 15 cores.                               |
+| `0x00`            | Reserved (untagged) — **never allocated, always blocked** | Not a bypass and not a boot-DMA window; see §4.3 and [`I-R6`](../iommu/hardware-spec.md). |
+| `0x01` – `0x0F`   | CPU cores                      | Core *N* → BMID `0x01 + N`. Up to 15 cores. These never reach the IOMMU ([`I-R1a`](../iommu/hardware-spec.md), §3.2). |
 | `0x10` – `0x1F`   | On-chip DMA engines            | Ethernet MAC, SD/eMMC, USB, audio DMA, etc.                               |
-| `0x20` – `0x7F`   | On-board peripherals (originating masters) | Reserved for board-integrated devices that originate bus traffic.   |
+| `0x20` – `0x2F`   | **GPU fabric master ports**    | One BMID per GPU master port ([simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md) `G-R10`). A GPU is **not** one master: separate ports for the command processor, the texture/sampler read path and the tile-buffer resolve path get separate BMIDs, so a shader-driven fetch and a scanout read are separable at the IOMMU. Per-*tenant* separation inside the GPU is `G-R1`–`G-R9`'s job and cannot be done here — see the note below. |
+| `0x30` – `0x7F`   | On-board peripherals (originating masters) | Reserved for board-integrated devices that originate bus traffic.   |
 | `0x80` – `0xEF`   | Guest-owned device pass-through | Hypervisor-assigned. See [iommu/design-spec.md §3.7](../iommu/design-spec.md). |
 | `0xF0` – `0xFE`   | Reserved for future expansion  | Do not allocate without updating this spec.                               |
-| `0xFF`            | Reserved (diagnostic / bypass) | See §4.3.                                                                 |
+| `0xFF`            | Reserved (diagnostic) — **never allocated, always blocked** | Not a bypass; see §4.3 and [`I-R6`](../iommu/hardware-spec.md). |
+
+> **The `0x00` and `0xFF` rows said "bypass" and `0x00` said "Boot DMA only".**
+> *(Corrected post-F, 2026-09-09.)* §4.3 above retired both of those readings on
+> 2026-09-09 — there is no pre-initialisation window and `0xFF` is not a permanent
+> bypass — but this table is the **normative** allocation policy, the one an
+> integrator's conflict-checking tool reads, and it still described a boot-DMA
+> bypass window three sections below the prose that removed it. §4.5's worked
+> example carried the same two strings and is corrected with it.
+
+> **The GPU range is new, 2026-09-09 (post-F), and it closes an obligation that
+> was filed against this document when this document contained no occurrence of
+> the word "GPU".** [simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md)
+> [`G-R10.2`](../simd/gpu/simd-gpu-spec.md) filed "assign the GPU a BMID" here; §4.4 had no GPU row, §4.5 had no
+> GPU line, and nothing in this file mentioned one, so the filing was invisible
+> from the only place that could act on it. **What allocating the range does not
+> do**, and [`G-R10`](../simd/gpu/simd-gpu-spec.md) is explicit about it: a BMID is a *port* identifier, held in
+> the fabric and unforgeable precisely because the master cannot influence it
+> (§4.1, §4.2), so it cannot distinguish two GPU **tenants** sharing one port.
+> That is why [`G-R1`–`G-R9`](../simd/gpu/simd-gpu-spec.md) exist as the inner boundary. **And the range is
+> allocated into a field that does not exist:** no master-to-slave record in
+> either repository carries a BMID at all, which is bar item **L2**'s blocker
+> ([security/threat-model.md §8](../security/threat-model.md)). This row moves the
+> obligation from *unowned* to *blocked on L2*, which is where every other BMID
+> row already is.
 
 ### 4.5 Worked example: dual-core J32-FM with 16 guests `[T1/T2]`
 
 ```
 BMID  Owner                              Class
 ----  ---------------------------------- ----------
-0x00  (untagged, IOMMU boot bypass)      reserved
+0x00  (untagged -- never assigned, blocked) reserved
 0x01  Core 0 (master port)               CPU
 0x02  Core 1 (master port)               CPU
 0x10  Ethernet MAC (TX+RX DMA)           on-chip DMA
 0x11  SD / eMMC controller DMA           on-chip DMA
 0x12  USB controller DMA                 on-chip DMA
+0x20  GPU command processor              GPU
+0x21  GPU texture / sampler read port    GPU
+0x22  GPU tile-buffer resolve port       GPU
 0x80  Guest 0  pass-through device       guest
 0x81  Guest 1  pass-through device       guest
 0x82  Guest 2  pass-through device       guest
 ...
 0x8F  Guest 15 pass-through device       guest
-0xFF  Diagnostic / scan-chain            reserved
+0xFF  Diagnostic (never assigned, blocked) reserved
 ```
 
 The hypervisor allocates `0x80`–`0x8F` to the 16 guests. The IOMMU's per-BMID page-table programming enforces isolation: guest *G*'s pass-through device can only DMA to memory the hypervisor has mapped for BMID `0x80 + G`. Cross-link: [iommu/design-spec.md §3.7 "No VMID field"](../iommu/design-spec.md) — guest isolation is via BMID partitioning, not via a separate VMID.
