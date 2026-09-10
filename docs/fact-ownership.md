@@ -527,7 +527,9 @@ firing on correct prose, and a check that fires on correct prose is switched off
 within a month. The two contradiction rows (`P-R7` against `security.l6.undefined`)
 are also unchanged; the check that would relate them is the grep-level `undefined`
 guard `sq/spec.md` §6.5 filed with **B0c**, and B0c closed on 2026-08-25, so that
-obligation currently has no owner. **`enumeration-row-count` counts rows; it does
+obligation currently has no owner. ***That last clause is superseded: the
+obligation has an owner and the two contradiction rows now fail — see the post-F
+section below.*** **`enumeration-row-count` counts rows; it does
 not read them.** A row *replaced* by a different row keeps the count and passes.
 
 **The honest summary, and it is a correction rather than an addition.** Five of
@@ -540,6 +542,45 @@ lesson worth carrying is not about the checker: it is that per-task honesty
 produced a set of forty accurate observations from which nobody had drawn the
 conclusion, and drawing it took reading them together and measuring the code they
 described rather than trusting the description.
+
+### Post-F, 2026-09-10 — `site-absence-claim`, and what it caught
+
+**Task F's rank 5 is closed, and the two contradiction rows above now fail.** The
+`## Absence claims` table and `site-absence-claim` are the answer to *"two
+registered facts contradicting each other, with nothing relating them"*. F
+recommended rather than implemented because the per-site wording is the owning
+specs' call; the three rows in that table are those specs making it.
+
+Every row was perturbed against a **committed** tree with a non-empty `git diff`
+asserted first, per C2b's rule, and each perturbation is a *historical* instance
+rather than an invented one. All five were caught by the same check — none by
+exit status alone and none by a neighbouring check — and that is stated because
+the previous version of the test harness credited catches to the wrong assertion
+and Task F had to correct it.
+
+| Perturbation | Result |
+|---|---|
+| **C2e's second disclosure**: §17.5's `movca.l` table row reverted to *"the remainder undefined until written"*, `P-R7` left standing | **caught**, `site-absence-claim`, at the reverted line. This is the sentence a reader of the instruction table actually reads, and C2e recorded it as passing |
+| **C2e's first disclosure, from the other side**: the retired wording deleted from the document altogether, so nothing is left to match | **caught**, by the second arm — *"the retired wording is not there even as history, so this row cannot notice it coming back"*. Without that arm, inverting the rule **and** deleting its history would pass, and deleting its history is what whoever reverts a rule actually does |
+| **C1a's site**: `sq/spec.md` §4 reverted to *"buffer bytes have undefined content"* as current text, `SQ-R5` left standing | **caught** |
+| **C1b's site**: `fpu/spec.md` §7.3's restore branch reinstated as *"FR/XF/FPUL = undefined per SH-4"*, `FP-R1` left standing | **caught** |
+| the registry row repointed at a document that does not contain the wording | **caught**, same second arm. An orphaned claim is how a rename would quietly switch this off |
+| a retraction marker two lines above the match | **passes**, as it must — the tree's own idiom puts the marker on the line introducing a block quotation. A fixture asserts this, and a second fixture asserts that a marker *three* lines above **fails**, because a window with no asserted edge is a window that widens silently |
+
+**What this does not close, and it is the same residual as before.** The check
+catches the retired *wording* coming back. It does not catch the retired *rule*
+coming back in different words — Task F's rank-3 inversion — and nothing here
+narrows that. Three sites are registered; a fourth closed site adds its own row,
+and the table's prose says so, because a sweep that guessed at wordings would be
+the "check that fires on correct prose" this project switches off within a month.
+
+**Rank 6, hex drift, is still open and still recommended rather than
+implemented.** `check_no_stale_value` builds its licensing set with a
+decimal-only scan, so a hex fact can carry no value guard. Task F ranked it 6
+because the consequence is a misrouted document rather than a false security
+claim, and because the one hex fact with real security weight
+(`soc.cachectrl.base`) has a code binding. That judgement is unchanged and this
+task did not attempt it.
 
 
 ## Code bindings
