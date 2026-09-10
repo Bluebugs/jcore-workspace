@@ -118,7 +118,7 @@ are the substitute for a check that cannot be written cleanly — see
 | `hyp.tenancy.rules` | Tenancy-check rules `T-R1`–`T-R5`; the refusal is `T-R2` | [hypervisor/hardware-spec.md §4.7.2](hypervisor/hardware-spec.md) | `\bT-R[1-5]\b` |
 | `iommu.deny.rules` | IOMMU default-deny rules `I-R1`–`I-R10`; reset polarity `I-R1`, `GLOBAL` removal `I-R5` | [iommu/hardware-spec.md §3.10](iommu/hardware-spec.md) | `\bI-R(?:10\|[1-9])a?\b` |
 | `iommu.bypass.paths` | Paths reaching memory with no IOTLB permission check: **7** | [iommu/hardware-spec.md §3.10](iommu/hardware-spec.md) | `\*\*7\*\* bypass paths` |
-| `cache.dma.cacheops` | J4 Linux build compiles **no** cache-operations file; `cacheops-` keys on `CPU_J2` | [decisions/0010](decisions/0010-dma-coherence-is-software-maintained.md) | `` `cacheops-` selector keys on `` |
+| `cache.dma.cacheops` | The sole J-Core `cacheops-` arm keys on `CPU_J2`; the J4 compiles **no** cache-ops file | [decisions/0010](decisions/0010-dma-coherence-is-software-maintained.md) | `` `cacheops-` selector keys on `` |
 | `cache.l2.isolation.rules` | Cache-isolation rules beyond ways: `P-R1`–`P-R8` | [cache/l2-spec.md §16.2](cache/l2-spec.md) | `\bP-R[1-8]\b` |
 | `cache.l2.residuals` | Residual channels §16.2 leaves: **10** — 4 closed, 2 mitigated, 4 accepted | [cache/l2-spec.md §16.3](cache/l2-spec.md) | `\*\*10\*\* residual channels` |
 | `soc.cachectrl.base` | Shipping cache-control MMIO block: `0xabcd00c0`, **outside P4** | [cache/l2-spec.md §16.2](cache/l2-spec.md) | `0xabcd00c0` |
@@ -375,6 +375,56 @@ when the install path has a bug.
 
 C2d added no `## Image layouts` row: the `I-R` rules move no context state and specify
 no byte layout.
+
+### Post-F, 2026-09-10 — `cache.dma.cacheops`'s binding was blind to the fix it was designed to catch
+
+**The tripwire did not fire, and the reason generalises.**
+[decisions/0010](decisions/0010-dma-coherence-is-software-maintained.md) §Enforcement
+says of this row that if someone adds a `cacheops-$(CONFIG_CPU_JCORE)` arm — "which is
+exactly the fix decision 4 asks for — the binding goes red and this record has to be
+revisited, which is the intended behaviour, not a regression." The task that wrote that
+fix ran the gate against it and it stayed **green**.
+
+The code pattern was `` `cacheops-\$\(CONFIG_(CPU_J2)\)` ``: it pins the literal
+`CPU_J2` inside the pattern and captures it back out. The claim it was supposed to hold
+up is *"the J4 build compiles no cache-operations file"*, and the fix does not touch the
+J2 arm — it **adds** a second one. One arm, unchanged, still matched once, still captured
+`CPU_J2`, still equalled the document. **A pattern that pins the value it captures cannot
+notice anything except that value's own line disappearing.** The row read as a binding on
+"which CPU the selector keys on" while the fact is "how many J-Core CPUs the selector
+keys on, and which".
+
+The repair is one character class: `` `cacheops-\$\(CONFIG_(CPU_J\w*)\)` ``. On
+`origin/jcore` that still matches exactly one line and captures `CPU_J2`, so the row is
+green and says the same thing it always did. With the `CPU_JCORE` arm added it matches
+**two** lines with two distinct captures, and `_sole_capture` fails the row with *"captures
+2 different values (CPU_J2, CPU_JCORE); there is no single value to compare"* — which is
+red, on the right event, with the right message. Verified by running both patterns against
+both revisions of `arch/sh/mm/Makefile` directly.
+
+**Second finding, and it is not a defect but it needs saying once.** The binding reads
+`origin/jcore` and nothing else, by the [0002 §2](decisions/0002-supersede-convention.md)
+rule this table's preamble states. The fix currently lives on a topic branch, so the row
+would have stayed green even with the repaired pattern. That is correct behaviour — the
+registry describes the integration branch — but it means **"the record must be revisited"
+fires at merge time, not at authorship time**, and a decision record that waits for the
+gate to tell it the work happened will be months late. 0010 was revisited by hand instead.
+
+Two perturbations, run against a committed tree with a non-empty `git diff` asserted first
+(C2b's rule):
+
+| Perturbation | Result |
+|---|---|
+| the repaired code pattern reverted to the old `` `(CPU_J2)` `` form, with the `CPU_JCORE` arm present in the code | **passes** — the original defect, reproduced deliberately. This is the row's own disclosure and the reason the pattern changed |
+| the repaired pattern run against the same tree — the `CPU_JCORE` arm present | **caught**, `doc-matches-code`, on a **multi-capture** on the code side: *"captures 2 different values (CPU_J2, CPU_JCORE); there is no single value to compare"*. The positive control for the row above, and the event 0010 §Enforcement always meant to name |
+| the doc side of 0010 changed to say the selector keys on `CPU_JCORE`, code unchanged | **caught**, `doc-matches-code`, on a **value disagreement** with `linux:arch/sh/mm/Makefile@jcore` |
+
+The first two rows need the fix on the branch the registry reads, so they were run with
+`refs/remotes/origin/jcore` in the `linux` submodule temporarily retargeted at the fix
+commit and restored afterwards. That is the second finding above, made operational: a
+binding on the integration branch **cannot** be perturbed from a topic branch without
+saying so, and a perturbation table that quietly did it would be describing a tree nobody
+has.
 
 Wave-3 **C2e** added `cache.l2.isolation.rules`, `cache.l2.residuals` and
 `soc.cachectrl.base` — the C2d shape again, a name fact plus a value fact plus a code
@@ -683,7 +733,7 @@ formatting.
 | `biendian.dside.bytelane` | `` onto `we = "([01]+)"` — bit 3 `` | `jcore-cpu:core/datapath.vhm` | `when "00" =>\s+r\.we := "([01]+)"` | `eq-text` |
 | `biendian.ifetch.select` | `` `instr_o\.a\((\d+)\)` — an address bit `` | `jcore-soc:targets/data_bus_pkg.vhd` | `if instr_o\.a\((\d+)\) = '0' then` | `eq` |
 | `mmu.walk.spec` | `` `shadow_wr <= (\w+) and walk_side_i` `` | `jcore-cpu:core/cpu.vhd` | `shadow_wr\s*<=\s*(\w+) and walk_side_i;` | `eq-text` |
-| `cache.dma.cacheops` | `` `cacheops-` selector keys on `(CPU_\w+)` `` | `linux:arch/sh/mm/Makefile` | `cacheops-\$\(CONFIG_(CPU_J2)\)` | `eq-text` |
+| `cache.dma.cacheops` | `` `cacheops-` selector keys on `(CPU_\w+)` `` | `linux:arch/sh/mm/Makefile` | `cacheops-\$\(CONFIG_(CPU_J\w*)\)` | `eq-text` |
 | `soc.cachectrl.base` | `` `base-addr: 0x([0-9a-f]+)` `` | `jcore-soc:targets/boards/turtle_1v0/design.yaml` | `- class: cache_ctrl\n    base-addr: 0x([0-9a-f]+)` | `eq-hex` |
 
 Notes on what is deliberately **not** here, so the gaps are visible rather than
