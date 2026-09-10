@@ -704,6 +704,38 @@ rate-limiting/DoS; HCALL-bootstrap TCB inversion; LFSR reseeding + boot-time
 entropy; embedded-immediate gadget acknowledgement. Each gets a decision, not
 necessarily a fix.
 
+***Done 2026-09-10. Three fixed, two accepted with reasons, and the item that was
+expected to need design needed none.*** C3 is scheduled in no wave — it appears
+here and nowhere in [j4-execution-plan.md](j4-execution-plan.md) — so this is the
+last plan item, and with it the master plan is complete as a plan. **No bar item
+moves; all seven of [security/threat-model.md §8](security/threat-model.md) stay
+`NOT MET`**, and none of the five was gated on one.
+
+| Item | Decision | Where |
+|---|---|---|
+| Interrupt delegation | **Fixed**, and one thing this bullet's own framing got wrong | [aic/aic2-spec.md §3.4, §5.2 `A2-R1`, §5.5](aic/aic2-spec.md), [hypervisor/design-spec.md §4.3](hypervisor/design-spec.md), [sh4-guest-model.md §3.4](sh4-guest-model.md) |
+| HCALL rate-limiting / DoS | **Accepted** — no rate limiter. The scope-out it rests on gained a boundary, and one carve-out became a rule | [security/threat-model.md §5, §10](security/threat-model.md) item 17, [hypervisor/design-spec.md §4.4 `H-R1`](hypervisor/design-spec.md) |
+| HCALL-bootstrap TCB inversion | **Fixed by removing an option**, not by adding a mechanism | [hypervisor/hardware-spec.md §7.2 `H-B1`](hypervisor/hardware-spec.md), [security/threat-model.md §2](security/threat-model.md) |
+| LFSR reseeding + boot entropy | **Accepted** — no hardware entropy source. Three documentation defects found while deciding, all fixed | [mmu/hardware-spec.md §2.13](mmu/hardware-spec.md), [mmu/linux-spec.md](mmu/linux-spec.md), [hypervisor/hardware-spec.md §4.7.1 item 6](hypervisor/hardware-spec.md) |
+| Embedded-immediate gadget | **Accepted** as a class; the "acknowledgement" turned up a false claim in three places and that is **fixed** | [security/threat-model.md §10](security/threat-model.md) item 18, [isa-density/spec.md §3.4, §4.5](isa-density/spec.md), [mmu/hardware-spec.md §5.2](mmu/hardware-spec.md) |
+
+**Two things this bullet said, or implied, that did not survive.**
+
+1. **"Lower-severity" is right for four of the five and wrong for the
+   interrupt-delegation item.** What "unify the description" turned out to mean
+   was that `aic2-spec.md` §5.2 delivered a **host-owned device's interrupt into a
+   running guest's `VBR`**, because `HEDR` bit 15 is one bit for all interrupts and
+   §5.5 requires it set at every vCPU dispatch. That is a cross-domain delivery, not
+   a wording difference, and the reason it read as one is that each document was
+   internally coherent.
+2. **The stride the whole interrupt-delegation discussion rested on does not
+   exist.** `VBR + 0x600 + vector_number * 0x20` (owner: [priv-arch/design-spec.md §4.5](priv-arch/design-spec.md)) was in one document, cited to a
+   section that states no interrupt vector at all, and promoted from there into
+   [sh4-guest-model.md](sh4-guest-model.md) as "a J-Core convention". The shipping
+   RTL delivers a flat `VBR + 0x600` ([priv-arch/design-spec.md §4.5](priv-arch/design-spec.md)) with the vector going to `INTEVT`, which is
+   stock SH-4. Decision **B2-3**'s conclusion survives; the leg it stood on is
+   replaced by three that do not depend on any vector.
+
 ---
 
 ## Track D — Measure before we implement
