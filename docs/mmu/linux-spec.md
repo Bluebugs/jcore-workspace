@@ -508,7 +508,18 @@ enforcement: a future writer has to edit that function to get it wrong.
 applies one rule: **if either way already holds this VPN, overwrite that way.**
 Only when neither matches does it take the hardware's victim nomination from
 `TSBVICT` ([hardware-spec.md §2.13](hardware-spec.md)), whose LFSR the kernel
-seeds from boot entropy at MMU init through the write-only `TSBVSEED`.
+seeds through the write-only `TSBVSEED` in **two stages**: a best-effort write in
+`enable_mmu()` so that no CPU is ever unseeded, and the real seed from
+`jcore_reseed_tsb_vseed()`, a `late_initcall` in
+`arch/sh/kernel/cpu/jcore/probe.c` that runs `on_each_cpu()` once `random_init()`
+has actually run. *(This sentence previously read "seeds from boot entropy at MMU
+init", which the kernel's own comment contradicts: `enable_mmu()` for CPU0 runs
+from `setup_arch()`, before `random_init_early()`, so its `get_random_u32()`
+draws on essentially no mixed-in entropy — and on this platform there is no
+`RDSEED` and no bootloader entropy behind it. Corrected by Wave-3 **C3**,
+2026-09-10; the consequences are in [hardware-spec.md §2.13](hardware-spec.md).)*
+The seed is per-core, which is why this cannot be a single global initcall — it
+was one once, and left every secondary CPU's selector unseeded.
 
 This must not be "optimised" into always taking the nomination. Suppose a fresh
 entry for VPN `X` went to way 1 while a stale entry for the same `X` still sat
