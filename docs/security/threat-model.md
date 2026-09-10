@@ -1248,7 +1248,12 @@ field and DRAM strobe names — and all three are **already specified**, for the
 points [decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md)
 paused: [ooo/j32ooo-spec.md §3.2](../ooo/j32ooo-spec.md) trains every predictor
 structure at commit only from a `DOM` captured at rename, tags the BTB with the
-full `DOM`, and §9.4 rule 3 is the degenerate taint. C2b added no clause to any
+full `DOM`, and §9.4 rule 3 is what the plan's third name pointed at. *(That name,
+"degenerate-STT taint", is retired post-F, 2026-09-10 — 2019 work naming a
+register-taint structure claimed in force by AMD US10956157B1, which §9.4 rule 3
+deliberately is not; [ooo/j32ooo-spec.md §20.7](../ooo/j32ooo-spec.md) rejection 3
+carries the dates, the claim and the pre-2006 structure. The rule is unchanged and
+so is this widening.)* C2b added no clause to any
 of them. **Delayed speculative TLB/PTW fill** is the fourth, and it is the only
 one that lands on hardware that exists. A wave that had spent its effort on the
 first three would have produced a defence for a paused path and left the live arm
@@ -1541,15 +1546,27 @@ bandwidth figure — and not only in the table below.
 | **ESTIMATE** | Arithmetic or judgement, with no source |
 | **STRUCTURAL** | True by construction, so no measurement can confirm or refute it — only its *residual* needs measuring |
 
-**No row below is `SOURCED`, and that is a finding rather than an omission.**
-C0 followed **zero** external citations to a primary source: every piece of
-outside evidence in this document reaches it through
+**No row below was `SOURCED` when this table was written, and that was a finding
+rather than an omission.** C0 followed **zero** external citations to a primary
+source: every piece of outside evidence in this document reaches it through
 [j4-remediation-plan.md §E](../j4-remediation-plan.md), which is itself a
 distillation of two briefings archived outside the tree. The in-tree numbers were
 checked against the specs that own them, and the RTL claims against merged code —
-that is what this task did verify. The literature was not. A Wave-3 reviewer
-should read `LITERATURE` as "this project believes this and has not checked it",
-because on this page that is exactly what it means.
+that is what this task did verify. The literature was not. A reviewer should read
+`LITERATURE` as "this project believes this and has not checked it", because on
+this page that is exactly what it means.
+
+**Three rows are now `SOURCED`, and two of the three did not survive it**
+*(post-F, 2026-09-10, during the prior-art re-grounding sweep)*. The pattern C2c
+found in `fence.t`'s four numbers repeated: of the three literature figures
+followed to their primary sources, **one was reproduced, one is not in the paper
+it is attributed to, and one is not in any version of the document it is
+attributed to.** Both unreproducible figures are **removed** from
+[j4-remediation-plan.md §E.10](../j4-remediation-plan.md) rather than annotated,
+per [decisions/0005](../decisions/0005-unmeasured-figures-are-removed.md). The
+generalisation worth carrying: `LITERATURE` on this page has an observed survival
+rate of roughly one in three, so it should be read as *unverified*, not as
+*probably right*.
 
 | Claim | Figure | Status | What would settle it |
 |---|---|---|---|
@@ -1562,7 +1579,7 @@ because on this page that is exactly what it means.
 | A single-cycle flush pulse leaks | — | **ADOPTED AS A REQUIREMENT, 2026-09-09.** [hypervisor/hardware-spec.md §4.7.1a](../hypervisor/hardware-spec.md) constraint 4 (multi-cycle assert with observable completion) and scope classes 1–3 (miss handler, replacement state, arbiter). The claim was sourced to the post-2006 work named in the plan; what was adopted is the *design consequence*, which is cheap and whose failure mode is silent, and not the paper's numbers — see the row below | Done as a specification. T-E2 (§4.7.3) is the measurement, and a busy count of **zero cycles** fails it rather than passing it |
 | DAWG-semantics ways | "≤2%" | **LITERATURE (MICRO 2018), not verified by C0** | — |
 | Per-thread MSHR reservation | "≈0" | **PARTIALLY APPLICABLE.** Established for core-side MSHRs on an in-order core; **says nothing about the 4-entry shared L2 pool**, which is the cross-tenant one (§7.6) | Model the L2 pool under a 2-tenant miss-heavy mix — D1's L2 gate |
-| Tenant-tagged BTB beats full flush | "26–37%" | **LITERATURE (ARM CSV2), not verified by C0** | — |
+| Tenant-tagged BTB beats full flush | "26–37%" | **SOURCED and refuted** *(2026-09-10)*. Arm's *Cache Speculation Side-channels* whitepaper was read at v2.0 (May 2018), v2.4 (October 2018) and v2.5 (June 2020): **no 26% or 37% figure appears in any of them**, and no other source was found. The attribution is wrong as well as the number — CSV2 is a field of `ID_AA64PFR0_EL1` **added to Armv8.5-A** that reports whether a hardware mitigation is present, not a partial-context tagging scheme. The figure is **removed** from the plan, per [0005](../decisions/0005-unmeasured-figures-are-removed.md); the *mechanism* survives as `DOM` ([ooo/j32ooo-spec.md §3.2](../ooo/j32ooo-spec.md)), grounded pre-2006 there | — |
 | Taint unit fits a small FPGA core | "+17% LUT, +2% critical path" (ProSpeCT) | **LITERATURE, not verified by C0.** Note +17% LUT is *not* a small number on an 85F | ECP5 synthesis of the degenerate-taint variant only |
 | L2 way-partitioning cost | "~200 gates" | **IN-TREE ESTIMATE** ([cache/l2-spec.md §16.1](../cache/l2-spec.md)), not a synthesis result | Synthesize |
 | Security-mechanism area, J32-OOO / J32-LT | ~8,400 gates (3.7%) / ~15,200 (6.5%) | **IN-TREE ESTIMATES** ([ooo/j32ooo-spec.md §20.5](../ooo/j32ooo-spec.md), [ooo/j32lt-spec.md §16.5](../ooo/j32lt-spec.md)) for cores that do not exist | Synthesis, after B3 |
@@ -1571,8 +1588,8 @@ because on this page that is exactly what it means.
 | Full on-core scrub | "<1% perf / 0.13% area" | **LITERATURE, not verified by C0**, and **not carried into any spec**. The area figure is the one that matters for the ECP5 fit and it is quoted at two significant figures from a paper about a different core. C2c removed both figures from [j4-remediation-plan.md §E.10](../j4-remediation-plan.md) rather than annotating them ([decisions/0005](../decisions/0005-unmeasured-figures-are-removed.md)) and reproduced neither in [hypervisor/hardware-spec.md §4.7.1a](../hypervisor/hardware-spec.md) | ECP5 synthesis of the microreset — **not C2c**, which found no FGMT and no hypervisor RTL to synthesize. It is T-E2 (§4.7.3), and it is blocked on the RTL that builds them |
 | Dirty/init tracking makes an untouched save free | "~0" | **STRUCTURAL, and true by construction** — a 2-bit clean/dirty state skips a save that has nothing to save. The *residual* is what fraction of switches actually find the unit clean, which is a workload property and is unmeasured | Instrument FP/SIMD touch rate under D0a |
 | Privileged `ocbi`/`ocbp` | "at ~0 perf" | **UNSOURCED, and the weakest "~0" on this list.** These are the SH-4 cache-maintenance ops the TLB-shootdown path uses ([cache/l2-spec.md §17.5](../cache/l2-spec.md)); privileging them turns each into a trap on whatever path uses them, which is not obviously free. It is free only if user-space genuinely never issues them | Count user-mode `ocbi`/`ocbp`/`pref` in a real workload before assuming zero |
-| MemGuard-style bandwidth throttling | ">50% interference eliminated" | **LITERATURE, not verified by C0.** Note it is a *reduction* figure, not a bound — it does not close the channel | — |
-| Hypervisor UCP epoch sizing | "+11% weighted speedup, <2 kB monitor" | **LITERATURE, not verified by C0.** A *performance* result being used to argue a security control is affordable; the security-relevant number (how much the adaptation itself leaks) is not in it | — |
+| MemGuard-style bandwidth throttling | ">50% interference eliminated" | **SOURCED and refuted** *(2026-09-10)*. Yun, Yao, Pellizzoni, Caccamo and Sha, **RTAS, April 2013** — venue and date verified; the paper read at source. It reports a 40% / 9% improvement for background and foreground tasks and a 4.68× aggregate throughput result; **there is no ">50% interference eliminated" figure in it.** The observation that a reduction is not a bound stands and is why [`P-R5`](../cache/l2-spec.md) is marked *mitigated*. Figure **removed** from the plan; the mechanism is grounded pre-2006 to Deficit Round Robin (SIGCOMM 1995, read at source) at [cache/l2-spec.md §16.1](../cache/l2-spec.md) | — |
+| Hypervisor UCP epoch sizing | "+11% weighted speedup, <2 kB monitor" | **SOURCED and upheld, with the scope corrected** *(2026-09-10)*. Qureshi and Patt, MICRO-39, **December 2006** (`10.1109/micro.2006.49`) — paper read at source. Both figures are real: "up to 23%, and on average 11%" and a UMON storage overhead of **1920 B**. The scope was not: the 11% is over **LRU** on a **dual-core** system, not over free sharing in general. The original caveat stands — the security-relevant number, how much the adaptation itself leaks, is not in the paper. **The name is post-cutoff and is retired**: UCP itself says dynamic partitioning of a shared cache "was first investigated by Suh et al.", citing HPCA-8 (2002) and J. Supercomputing 28(1) (2004), which is the pre-2006 grounding | — |
 | Value prediction adds ~1pp even on OoO | "+1pp" | **LITERATURE, not verified by C0** — and it is cited to justify *not* building something, which is the direction where a weak number is cheapest to accept | — |
 | Gang-scheduling removes cross-tenant FGMT contention | — | **STRUCTURAL — and the strongest item on this list.** It is a placement property, not a performance estimate. It is also the one that fails silently if the scheduler is wrong — hence L1's detector clause | A test that a violating placement is detected |
 

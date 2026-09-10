@@ -1754,7 +1754,7 @@ Per the project-wide prior-art-pre-2006 policy ([../glossary.md §2](../glossary
 | Saturating ADD/SUB | TMS320C6000 saturating MAC | 1997 | TI SPRU189 |
 | VABS | MIPS MDMX (via MIN.OB R0 + sign extract) | 1996 | MIPS V instruction set |
 | VABS | ARMv6 USAD8 building block (implicit ABS) | 2002 | ARM ARM v6 |
-| VABS | SSSE3 PABSB/PABSW/PABSD | 2006 | **Within cutoff (March 2006).** Independent earlier prior art (MIPS MDMX 1996, ARMv6 2002) suffices on its own. |
+| VABS | SSSE3 PABSB/PABSW/PABSD | 2006 | **Outside the cutoff.** *(This cell read "Within cutoff (March 2006)" until post-F, 2026-09-10, and stated the policy backwards:* [../glossary.md §2](../glossary.md) *says "2006 itself is the cutoff: priority date Jan 1, 2006 or later is **not** acceptable prior art", so a 2006 instruction set is outside it whatever the month.)* The row is harmless and stays, because its second clause is what carries it: independent earlier prior art (MIPS MDMX 1996, ARMv6 2002) suffices on its own, and this entry is a *comparison* rather than the grounding. The wording is fixed because a contributor will copy it. |
 | VPOPCNT (scalar) | CDC 6600 CXi count | 1964 | Thornton, *Design of a Computer: The CDC 6600* |
 | VPOPCNT (vector) | CDC STAR-100 bit-count vector | 1974 | CDC STAR-100 Programming Reference |
 | VPOPCNT | DEC Alpha CTPOP | 1996 | Alpha AXP ARM |

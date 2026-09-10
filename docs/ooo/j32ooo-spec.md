@@ -1252,7 +1252,50 @@ The [glossary §2](../glossary.md) prior-art policy exists because J-Core's valu
 1. **No L0 speculative filter cache.** The obvious alternative to §8.2a is a small buffer that catches speculative fills and promotes them into L1 only when the load becomes non-speculative, clearing on squash and on domain switch — the SpecBuf shape proposed for BOOM in CARRV 2019, and the MuonTrap shape. The *structure* is thoroughly pre-2006: Jouppi 1990 stream buffers and Cray US5761706 (filed 1994, expired) hold prefetched blocks outside the cache; Intel US6223258 (filed 1998, expired) services a non-temporal load from a dedicated buffer "without accessing said cache". The combination that makes it a Spectre defence is not, and is claimed by live patents (Microsoft US11061824, priority 2019, deferring cache state update with a speculative buffer until non-speculative; and neighbouring split-cache and reserved-set variants). **Do not implement this**, and do not "optimise" §8.2a into it by adding a buffer for delayed misses.
 2. **The predictor-invalidate control keeps the shape of §20.4.** Hardware detection of a domain transition combined with a multi-mode, progressively re-enabled reset is claimed (SiFive US11429392, priority 2018). Save/restore of predictor state across context switches is claimed (Arm US10838730; Microsoft US11068273). The plain software-triggered unconditional invalidate is what SH-4's `CCR.ICI` has done to a different array since 1998. **Do not add transition detection, modes, or save/restore.**
 
-Similarly, §9.4 rule 3 is written as an ordering constraint on load forwarding and **not** as taint bits on architectural registers with a policy register selecting which speculation features to disable, which is the AMD US10956157 shape.
+3. **No architectural-register taint bits, and the name "degenerate STT" is not used for §9.4 rule 3.**
+   *(Promoted from a trailing sentence to a numbered rejection, post-F 2026-09-10, because the name
+   was being carried by five other documents with no date and no antecedent — the same defect the
+   `fence.t` and DAWG re-groundings were written to fix, applied to the neighbouring bullet and not
+   to this one.)*
+
+   **The name.** *Speculative Taint Tracking* is Yu, Yan, Khyzha, Morrison, Torrellas and Fletcher,
+   MICRO-52, **12 October 2019** (`10.1145/3352460.3358274`; also IEEE Micro 2020 and CACM 2021) —
+   verified at source. It is **2019 work and cannot be this project's authority** under
+   [glossary §2](../glossary.md). It may be cited as *evidence*, which the rule permits, and it is
+   not cited as anything else anywhere in this tree after this entry.
+
+   **The claim, which is the reason this rejection is normative and not editorial.** Marking
+   architectural registers with taint indicators and constraining speculation on that basis is
+   claimed by **AMD US10956157B1, "Taint protection during speculative execution"** (Kaplan and
+   Evers; priority **6 March 2018**, granted **23 March 2021**, **in force**, expiring 2039) —
+   filing data verified at source. Its independent claim covers marking architectural registers
+   with taint indicators and selectively disabling speculation features. That is the structure a
+   "1 bit per register" scheme would build. [glossary §2.1](../glossary.md) rule 2 is exactly this
+   case: the *structure* is old and the *purpose-specific combination* is separately claimed.
+
+   **The structure is old, and saying so is what makes the rejection precise rather than fearful.**
+   One bit per architectural register, set by a speculative load, propagated to the result of every
+   dependent instruction, and blocking any instruction that would commit the value to other state,
+   is **IA-64's NaT bit**, published in 2000: *Intel IA-64 Architecture Software Developer's
+   Manual, Volume 1: IA-64 Application Architecture*, Revision 1.1, July 2000 (245317-002) — read
+   at source. §3.1.1: "Each general register has 64 bits of normal data storage plus an additional
+   bit, the **NaT bit (Not a Thing)**, which is used to track deferred speculative exceptions."
+   §4.4.4: "Deferred exception tokens **propagate through the program in a dataflow manner**. A
+   speculative instruction that reads a register containing a deferred exception token will
+   propagate a deferred exception token into its target", and any instruction that would modify
+   state other than a general or floating-point register is non-speculative "since there would be
+   no way to represent the deferred exception". The same tag-a-speculative-result-and-check-later
+   shape is Mahlke, Chen, Hwu, Rau and Schlansker, *Sentinel Scheduling for VLIW and Superscalar
+   Processors*, **ASPLOS-V, September 1992** (`10.1145/143365.143529`), and per-word tag
+   propagation for a security purpose is pre-2006 too — Crandall and Chong, *Minos*, **MICRO-37,
+   2004** (`10.1109/micro.2004.26`). All three verified at source.
+
+   **So the structure is free and the combination is not, and this specification takes neither.**
+   §9.4 rule 3 is an **ordering constraint on load forwarding**: it says when one load may forward
+   to another, and it adds no register state, no tag, and no policy register. It is grounded
+   independently — US6035393 (priority 1995, expired), §20.13. **Do not "simplify" §9.4 rule 3 into
+   a poison bit**, and do not reintroduce the name: a reader who sees "degenerate STT" will
+   implement the AMD shape, which is the one thing this entry exists to prevent.
 
 The general rules, which belong in [glossary §2](../glossary.md) rather than here: prior art matches at the level of **mechanism, not motivation** — a claim covers structure and steps, so US6035393's 1995 stall-until-speculation-resolves reads on §8.2a regardless of why it was filed; and conversely a pre-2006 *structure* is necessary but not sufficient when the security-specific *combination* is separately claimed.
 

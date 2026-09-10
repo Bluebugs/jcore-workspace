@@ -1074,12 +1074,17 @@ are inline, in the section that specifies it.
 
 **What is being bounded is shipping hardware, not a proposal.** Three of the four
 mechanisms Wave 3 lists for C2b — commit-time predictor updates, a tenant-tagged
-BTB, degenerate-STT taint — describe structures `jcore-cpu@origin/master` does
-not contain, and are already specified for the design points
+BTB, and the one the plan called "degenerate-STT taint" — describe structures
+`jcore-cpu@origin/master` does not contain, and are already specified for the design points
 [decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md) paused
 ([ooo/j32ooo-spec.md §3.2, §9.4](../ooo/j32ooo-spec.md)). The fourth — delayed
 speculative TLB/PTW fill — is the one that lands on the core that exists, and it
-is the only one this subsection is about.
+is the only one this subsection is about. *(The third name is retired post-F,
+2026-09-10: it is 2019 work, and the register-taint structure it names is claimed
+in force by AMD US10956157B1. What §9.4 rule 3 specifies is a load-forwarding
+restriction that adds no register state —
+[ooo/j32ooo-spec.md §20.7](../ooo/j32ooo-spec.md) rejection 3. Nothing in W-R1–W-R5
+changes.)*
 
 #### The arm, quoted
 

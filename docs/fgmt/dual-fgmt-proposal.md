@@ -37,20 +37,123 @@ Before designing anything new, it is worth being explicit about what J-core alre
 
 In other words: the dual-core hardware exists today as a loosely-coupled AMP system with explicit `cpu1en_sbu` gating; the *coherent SMP* upgrade and the *per-core multithreading* work are largely additive rather than ground-up.
 
-## 4. Prior art
+## 4. Prior art (pre-2006), and post-2006 designs cited as evidence only
 
-The most relevant designs to study, in roughly increasing distance from J2's micro-architecture, are:
+**This section was swept post-F, 2026-09-10, and it was the only prior-art section
+in the tree not qualified "(pre-2006)".** Task F found it carrying six ungrounded
+post-2006 entries in a document that states it is not superseded and is cited
+normatively by three others — and, at the end, **a patent granted in 2023 offered
+as "useful prior art"**, which inverts [glossary.md §2](../glossary.md) rather than
+misapplying it: the rule asks for *expired* patents with priority dates no later
+than 2005, and has a companion rule (§2.1 rule 2) whose whole purpose is catching
+live claims. The same document applies the correct treatment twice elsewhere — §2's
+MIPS-MT correction and §4.1's IBM A2 entry below — so the rule was understood here
+and this section was simply never swept. The split below is the fix: what can
+ground a mechanism, and what is bibliography.
 
-- **MIPS MT ASE (34K, 1004K, interAptiv)** — fine-grained MT on a single-issue in-order RISC almost identical in spirit to J2. Defines **VPEs** (virtual processing elements: per-thread CP0/privileged state) and **TCs** (thread contexts: per-thread GPRs + PC + minimal status). A 34K configured with 2 VPEs looks to software like two MIPS32 CPUs sharing a pipeline and caches, with cache coherence "for free" because the L1 is shared. This is the closest published architectural template for what we want on J2.
-- **Sun UltraSPARC T1 ("Niagara") and T2** — multi-core (4/6/8) × 4-way FGMT, single-issue in-order per core. Each core has a per-thread register file (one window-set per thread for T1), a thread scheduler that picks among ready threads based on previous long-latency op, instruction type, and LRU. Demonstrates the throughput model at scale.
-- **IBM A2 (Blue Gene/Q, PowerEN)** — in-order, 4-way hardware multi-threaded, with a `wrlos` ("wait, reservation lost") instruction interacting with reservation-based atomics. Post-2006 (announced 2010); cited here for completeness only. The waking-on-synchronization-event pattern itself has pre-2006 prior art in the Tera MTA's full/empty bits (Smith 1990).
-- **XMOS xCORE** — up to 8 hardware threads per tile, deterministic interleave, no caches. Less directly applicable (no coherence) but a good reference for very lean thread context implementation.
-- **C-slow retiming** (Leiserson et al., '83; Weaver et al. on Xilinx Virtex; Strauch's SHP / RTL CSR work) — automatic transformation that "multiplies" a single-thread pipeline into N interleaved threads by adding C-1 registers in every feedback path. Worth evaluating as a tooling shortcut for early prototypes, although for an ASIC target the explicit, hand-designed approach below is preferred. The Berkeley "Simple Symmetric Multithreading in Xilinx FPGAs" project (cs252) is a directly relevant cautionary tale on the limits of pure C-slow for a real CPU.
-- **FlexPRET** — a small in-order RISC-V with fine-grained MT explicitly designed for mixed-criticality real-time. Good model for *flexible* thread scheduling (hard-real-time thread + best-effort threads sharing the pipe).
-- **BRISKI** — RISC-V barrel processor targeting kilo-core FPGA implementations. Good reference point for area/Fmax of a pure-barrel approach.
-- **Niagara2/T2 register file techniques** and **selectable register-file blocks** (US Patent 11,726,789) — useful prior art for how to size per-thread GPRs when threads don't all need full ISA-visible state.
+**Dates in §4.1 were verified at source this session except where the entry says
+otherwise.** An entry that says "not dated at source" is telling the truth about
+this sweep, not hedging about the design.
 
-For coherence in a 2-core system, the smallest credible protocol is **MSI** (or MESI, if the existing snoop port can carry one additional "exclusive" hint) over the existing snoop interface, with the ring_bus or a dedicated coherence bus carrying invalidation traffic. Anything more elaborate (MOESI, directory) is unjustified at this scale.
+### 4.1 Pre-2006 prior art — what may ground a mechanism
+
+- **MIPS MT ASE** — fine-grained MT on a single-issue in-order RISC almost identical in spirit to
+  J2. Defines **VPEs** (virtual processing elements: per-thread CP0/privileged state) and **TCs**
+  (thread contexts: per-thread GPRs + PC + minimal status), so a 2-VPE part looks to software like
+  two MIPS32 CPUs sharing a pipeline and caches, with cache coherence "for free" because the L1 is
+  shared. This is the closest published architectural template for what we want on J2, **and the
+  TC/VPE split is also this document's pre-2006 antecedent for giving different thread contexts
+  different amounts of architectural state** (§5.1). *The pre-2006 artifact is the ASE
+  specification — MIPS Technologies **MD00378 rev 1.00, 28 September 2005**, per
+  [decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md), which established that
+  date; **this sweep could not re-verify rev 1.00, because the copy obtainable is rev 1.12 of 16
+  July 2013** (MD00452 likewise, rev 1.02 of 9 September 2013). The date is carried on 0009's
+  authority and not on this sweep's.* The **cores** are a different matter and are not prior art:
+  the 34K was announced in February **2006**, and the 1004K and interAptiv are later still. Name
+  the specification, not the parts.
+- **Sun UltraSPARC T1 ("Niagara")** — 4/6/8 cores × 4-way FGMT, single-issue in-order per core,
+  with a per-thread register file (one window-set per thread) and a thread scheduler picking among
+  ready threads on previous long-latency op, instruction type and LRU. Demonstrates the throughput
+  model at scale, and is the second pre-2006 antecedent for per-thread register state. Kongetira,
+  Aingaran and Olukotun, *IEEE Micro* 25(2), March–April 2005, pp. 21–29.
+- **Barrel FGMT itself** — CDC 6600 peripheral processors (Thornton, AFIPS FJCC 1964), Denelcor
+  HEP (Smith, ICPP 1978) and Tera MTA (Alverson et al., ICS 1990), as §2 already cites. The
+  waking-on-synchronization-event pattern has its pre-2006 antecedent in the MTA's full/empty bits.
+- **C-slow retiming** — Leiserson, Rose and Saxe (1983); Weaver, Markovskiy, Patel and Wawrzynek,
+  *Post-Placement C-Slow Retiming for the Xilinx Virtex FPGA*, FPGA '03. The transformation that
+  "multiplies" a single-thread pipeline into N interleaved threads by adding C−1 registers in every
+  feedback path. Worth evaluating as a tooling shortcut for early prototypes; for an ASIC target
+  the explicit hand-designed approach of §5 is preferred.
+- **MSI coherence for two cores** over the existing snoop port, with the ring_bus or a dedicated
+  coherence bus carrying invalidation traffic. Anything more elaborate (MOESI, directory) is
+  unjustified at this scale. Prior art is in [../cache/l2-spec.md §6.1](../cache/l2-spec.md).
+
+### 4.2 Post-2006 designs — evidence only, and **not** usable to ground anything
+
+[glossary.md §2](../glossary.md) permits citing post-2006 work as evidence about the option space.
+It does not permit adopting a mechanism on that basis. Every entry here is in the first category.
+
+- **Sun UltraSPARC T2** — Shah et al., IEEE **A-SSCC, November 2007** (verified). Post-cutoff.
+- **IBM A2 (Blue Gene/Q, PowerEN)** — in-order, 4-way hardware multithreaded, with a `wrlos`
+  ("wait, reservation lost") instruction interacting with reservation-based atomics. Post-2006
+  (announced 2010); cited for completeness only. The waking-on-synchronization-event pattern itself
+  has pre-2006 prior art in the Tera MTA's full/empty bits (Smith 1990). *This entry already
+  carried the correct treatment before the sweep and is unchanged.*
+- **XMOS xCORE / XS1** — up to 8 hardware threads per tile, deterministic interleave, no caches.
+  Less directly applicable (no coherence) but a good reference for very lean thread-context
+  implementation. **Not dated at source this sweep** — the fetch returned a site index rather than
+  the XS1 architecture manual. Treated as post-2006, which is the safe direction: if it were
+  pre-2006 nothing here would change, because nothing is grounded on it.
+- **Strauch's SHP / RTL C-slow work** — arXiv:1508.07139 and arXiv:1807.05446. **Dated from the
+  arXiv identifiers this document itself prints** (August 2015 and July 2018); the papers were not
+  fetched. The pre-2006 half of C-slow is in §4.1; these are the modern follow-ups. The Berkeley
+  "Simple Symmetric Multithreading in Xilinx FPGAs" project (cs252) remains a directly relevant
+  cautionary tale on the limits of pure C-slow for a real CPU.
+- **FlexPRET** — Zimmer, Broman, Shaver and Lee, **RTAS, April 2014** (verified). A small in-order
+  RISC-V with fine-grained MT designed for mixed criticality; a good model for *flexible* thread
+  scheduling (hard-real-time thread plus best-effort threads sharing the pipe).
+- **BRISKI** — a RISC-V barrel processor targeting kilo-core FPGA overlays; a useful reference
+  point for area/Fmax of a pure-barrel approach. **Not dated at source** beyond its own README,
+  and it does not need to be: RISC-V postdates the cutoff, so no RISC-V core can be pre-2006 prior
+  art for anything.
+
+### 4.3 Removed: a live patent that was cited as prior art
+
+The entry **"Niagara2/T2 register file techniques and selectable register-file blocks (US Patent
+11,726,789) — useful prior art for how to size per-thread GPRs when threads don't all need full
+ISA-visible state"** is **removed**, and is recorded here rather than deleted silently because a
+contributor who saw it once will look for it.
+
+**Verified at source, 2026-09-10:** US11726789B1, *"Selectable Register File Blocks for Hardware
+Threads of a Multithreaded Processor"*, assignee **NXP B.V.**, inventor Michael Andrew Fischer,
+filed **27 January 2022**, priority **27 January 2022**, granted **15 August 2023**, **in force,
+expiring 2042**. Its independent claim covers allocating a register file of B blocks of N registers
+across T hardware threads such that each thread gets at least one block and not more than R/N
+blocks, supporting T threads with **fewer than T×R registers**.
+
+Three things follow, and the third is the reason this is a two-line fix and not a design problem.
+
+1. **It is not prior art under any reading.** [glossary.md §2](../glossary.md) accepts "expired
+   patents with priority dates ≤2005". This one has a 2022 priority and is in force for another
+   sixteen years. Citing it as "useful prior art" states the policy backwards.
+2. **It is a live claim on the mechanism the sentence recommended**, which is what §2.1 rule 2
+   exists to catch: a pre-2006 *structure* (per-thread register state — Niagara, the MIPS TC/VPE
+   split, both in §4.1) does not license the purpose-specific *combination* of sub-dividing one
+   register file into selectable blocks so that T threads share fewer than T×R registers.
+3. **This proposal does not do that, and gains nothing by dropping the citation.** §5.1 gives every
+   thread context the **full** sixteen SH-2 GPRs under both of its options — a 32-entry file
+   indexed by `TC_ID`, or two parallel 16-entry banks with a select mux. Neither is "fewer than
+   T×R", so neither reads on the claim. The citation was decoration on a design that had already
+   made the safe choice, which is the most likely way this class of mistake gets made.
+
+If a future revision *does* want to give some thread contexts less architectural state than others,
+the pre-2006 grounding is §4.1's MIPS TC/VPE split — a TC carries per-thread GPRs, PC and minimal
+status while a VPE carries the full privileged state — and the freedom-to-operate question must be
+re-asked at that point, because that is when the design starts approaching the claim.
+
+Neither this section nor [glossary.md §2.1](../glossary.md) constitutes legal advice or a
+freedom-to-operate opinion. The removal above is a documentation fix; a professional search is
+warranted before RTL commits, as §2.1's closing sentence already says.
 
 ## 5. Proposed architecture
 
