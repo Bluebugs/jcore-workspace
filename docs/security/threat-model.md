@@ -780,7 +780,8 @@ address of its own choosing.
 > adds the scrub, and defines the guest read; [hypervisor/hardware-spec.md
 > §4.7.1](../hypervisor/hardware-spec.md) item 7 puts the scrub on the
 > gang-switch list. **There is no store-queue RTL** — `jcore-cpu@origin/master`
-> has no store queue, no SQ region decode and no SH-4 `PREF` — so the site moves
+> has no store queue, no SQ region decode, and no SH-4 `PREF`-to-store-queue semantics and no `PREF` in the J4 decoder — the only `PREF` in the tree is the **SH-2A** hint form, `0000 nnnn 1000 0011`, declared in `jcore-cpu@origin/master:decode/gen-go/spec/sh2a/misc.toml` with `table_ref = "SH-2A"` and implemented as a NOP, in an overlay the J4 build does not use
+> *(precision added post-F, 2026-09-10)* — so the site moves
 > from *a specified "undefined"* to *a specified scrub*, and L6's evidence bar,
 > which is a residue test demonstrated red before the fix, has nothing to run on.
 

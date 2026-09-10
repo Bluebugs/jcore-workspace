@@ -408,7 +408,7 @@ Rules for adding new P4 allocations:
      for a guest; on the host, allocated here and unimplemented, and they stay
      unimplemented until the store queue exists at all
      ([../sq/spec.md](../sq/spec.md) is a paper spec — `jcore-cpu` has no store
-     queue, no SQ region decode and no SH-4 `PREF`).
+     queue, no SQ region decode, and no SH-4 `PREF`-to-store-queue semantics and no `PREF` in the J4 decoder — the only `PREF` in the tree is the **SH-2A** hint form, `0000 nnnn 1000 0011`, declared in `jcore-cpu@origin/master:decode/gen-go/spec/sh2a/misc.toml` with `table_ref = "SH-2A"` and implemented as a NOP, in an overlay the J4 build does not use — *precision added post-F, 2026-09-10*).
    - **`CCR` behaviour** is: emulated by the VMM with **no host register
      behind it**. This map is right not to allocate one, and this is now a
      decision rather than an omission. §7 item 3's `0xF0000000`–`0xF7FFFFFF`

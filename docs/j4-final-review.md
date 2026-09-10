@@ -489,13 +489,24 @@ Three claims are over- or under-stated and are worth correcting in place:
   behind it. The J4 build uses a different overlay, which has none. The sentence
   should read "no `PREF`-to-store-queue semantics, and no `PREF` in the J4
   decoder"; the conclusion C1a draws is unaffected.
+  > *Applied 2026-09-10 at the three sites carrying the bare form, with one
+  > correction to this bullet.* `jcore-cpu@origin/master:decode/gen-go/spec/sh2a/misc.toml`
+  > declares the instruction with `table_ref = "SH-2A"`, not SH-4 — the two
+  > architectures share the sixteen bits `0000 nnnn 1000 0011`, so "at the SH-4
+  > encoding" points at the right opcode by a description that invites the exact
+  > confusion the sentence exists to prevent. [sq/spec.md §1](sq/spec.md) already
+  > carried the precise form ("the only `PREF` … is the SH-2A hint form,
+  > implemented as a nop") and needed no change; it was the four other sites that
+  > had the bare claim.
 - **C2d's "the per-device block state already existed on both sides of the
-  interface" reads as hardware-and-kernel and is not.** The kernel side is real
+  interface" reads as hardware-and-kernel and is not.** *(Applied to the worklist
+  cell 2026-09-10.)* The kernel side is real
   generic IOMMU code. The hardware side is a specification document; there is no
   IOMMU in either RTL repository. The execution plan's own prose paragraph is
   accurate; it is the worklist table cell that compresses it into a claim a reader
   will take as RTL.
-- **C1c's correction to C1b is right and under-stated.** Six macros collapse to
+- **C1c's correction to C1b is right and under-stated.** *(Both halves verified
+  and applied 2026-09-10.)* Six macros collapse to
   nothing under the disabled configuration, not five; and the residual body of the
   wrappers it defends is live rather than a bare preempt pair on any kernel that
   enables FPU emulation — which is user-selectable precisely on this target,
