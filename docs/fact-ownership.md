@@ -72,6 +72,8 @@ are the substitute for a check that cannot be written cleanly — see
 | `mmu.vector.miss` | TLB **miss** vector: `VBR + 0x400` | [mmu/hardware-spec.md §5](mmu/hardware-spec.md) | `VBR ?\+ ?0x400` |
 | `mmu.vector.prot` | TLB **protection** vector: `VBR + 0x100` — *not* `0x400` | [mmu/hardware-spec.md §5](mmu/hardware-spec.md) | `VBR ?\+ ?0x100` |
 | `priv.vector.interrupt` | Interrupt vector: `VBR + 0x600`, **flat** — no per-vector stride | [priv-arch/design-spec.md §4.5](priv-arch/design-spec.md) | `VBR ?\+ ?0x600` |
+| `aic2.hostowned.polarity` | Host-owned source, guest vCPU on the target TC: **not delivered** (`A2-R1`) | [aic/aic2-spec.md §5.2](aic/aic2-spec.md) | `A2-R1\. Do NOT deliver` |
+| `hyp.bootstrap.polarity` | HCALL bootstrap on a tenant-facing bitstream: **MUST NOT** be built (`H-B1`) | [hypervisor/hardware-spec.md §7.2](hypervisor/hardware-spec.md) | `MUST NOT be built into a tenant-facing` |
 | `mmu.mmufsr.addr` | `MMUFSR` at P4 offset `0x02C` (`0xFF00002C`) | [soc/p4-mmio-map.md §3.2](soc/p4-mmio-map.md) | `0xFF00002C\|0x0?2C.{0,12}MMUFSR\|MMUFSR.{0,12}0x0?2C` |
 | `bus.bmid.width` | `BMID`: **8 bits**, `0x00`/`0xFF` reserved | [bus/fabric-spec.md §4](bus/fabric-spec.md) | `8-bit BMID` |
 | `hyp.expevt.hcall` | `HCALL`: EXPEVT `0x1D0` at `VBR_HYP + 0x180` | [hypervisor/hardware-spec.md §4.2](hypervisor/hardware-spec.md) | `0x1D0` |
@@ -1073,6 +1075,28 @@ when its canonical pattern matches nothing in the owner, for the same reason.
 **What this does not close.** The retired *rule* reintroduced in different
 words. That is Task F's rank-3 inversion; no syntactic check separates it from
 correct prose, F declined to recommend one, and nothing here narrows it.
+
+**And the sharper half of the same gap, demonstrated rather than asserted, with
+the narrow answer C3 added.** *(2026-09-10.)* An absence claim guards a wording a
+document **retired**. It says nothing about a rule the document currently
+**states**, so a rule can be **inverted in place** with every guarded wording
+intact. C3 perturbed [`A2-R1`](aic/aic2-spec.md) exactly that way — the
+delivery-rule pseudocode's `Do NOT deliver` changed to `Deliver to the guest`,
+every retraction and every absence claim untouched — and the gate returned
+**exit 0**.
+
+There is no general syntactic fix and this table does not claim one. There is a
+**per-rule** one, and it is a Registry row rather than an absence claim: register
+the single clause carrying the rule's *polarity*, and `owner-has-fact` then
+requires it to still be there. `aic2.hostowned.polarity` pins `A2-R1. Do NOT
+deliver`; `hyp.bootstrap.polarity` pins `H-B1`'s `MUST NOT be built into a
+tenant-facing`. **Read the limit honestly.** This catches the polarity clause
+being edited away or deleted. It does not catch the rule being stated correctly
+in one place and contradicted in another — which is what
+[aic/aic2-spec.md](aic/aic2-spec.md) §5.5 contained for as long as it existed, and
+which no check in this file would have found. Two rows are not a policy; they are
+two rules whose polarity is the whole of their content, which is what makes the
+row worth its cost.
 
 | Site | Document | Retired wording |
 |---|---|---|
