@@ -161,7 +161,7 @@ Four levels, with a different mechanism at each. Getting these confused is how
 |---|---|---|---|
 | **Thread context** (FGMT, 2-way on the product) | contexts of one core | everything not architectural state: L1-I, L1-D, TLB, TSB, predictor arrays, prefetch tables, issue bandwidth ([ooo/j32ooo-spec.md §13.3](../ooo/j32ooo-spec.md)) | **Nothing.** Contexts of a core are **one security domain** ([glossary.md §4](../glossary.md)) |
 | **Core** | tenants over time | the same structures, plus their residue across a switch | The **gang switch** ([hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)) — a software sequence, with no hardware backstop |
-| **Chip** | all cores | one set of L2 tag and data arrays, its pLRU, its MSHR pool, the fabric, the memory controller ([cache/l2-spec.md §2](../cache/l2-spec.md)) | **L2 way-partitioning on allocation only** ([cache/l2-spec.md §16.1](../cache/l2-spec.md)). Nothing else |
+| **Chip** | all cores | one set of L2 tag and data arrays, its pLRU, its MSHR pool, the fabric, the memory controller ([cache/l2-spec.md §2](../cache/l2-spec.md)) | **L2 way-partitioning on allocation** ([cache/l2-spec.md §16.1](../cache/l2-spec.md)), plus the replacement-metadata, MSHR-reservation and arbiter rules of [§16.2](../cache/l2-spec.md) *(C2e, 2026-09-09; specified, and there is no L2)*. Below the L2 — the memory controller, DRAM — still **nothing**: [§13.4](../cache/l2-spec.md) is a single request port and nothing on that path carries a domain identity |
 | **Board** | all tenants | DRAM device, power, thermals | Nothing in this document |
 
 Three consequences that must be carried into every Wave-3 decision:
@@ -606,6 +606,50 @@ generous pool; saturating it is a low-effort, high-bandwidth channel.
 construction and is worth building. It does not close replacement-metadata,
 MSHR, bank-FIFO or bandwidth channels, and §16.1's "closes the channel" sentence
 must be scoped to occupancy. Item **L5**.
+
+#### 7.6a The scoping is done, and the worklist's flush-op question was asked about the wrong thing *(C2e, 2026-09-09)*
+
+**The narrowing landed** as [cache/l2-spec.md §16.1](../cache/l2-spec.md)'s
+"What this closes — the occupancy channel, and only that", with the residual
+channels enumerated as [§16.3](../cache/l2-spec.md) and each marked *closed*,
+*mitigated* or *accepted*. Three further things came out of doing it, and two of
+them contradict the brief this document wrote.
+
+*First, §16.1's justification for unrestricted hits was wrong, not merely
+incomplete.* It read that restricting hits buys "no security gain, since a hit
+reveals only that the line is present — which is what the partition already
+prevents an attacker from *causing*". A hit reveals two more things: that it
+**moved replacement metadata**, which is this section's own finding, and that it
+**hit rather than missed on a line the attacker also maps**, which is
+Flush+Reload's reload half. The conclusion — keep hits unrestricted — survives;
+the argument for it does not, and it has been deleted rather than softened. The
+real reason is that the alternative costs shared read-only pages outright.
+
+*Second, the `ocbi`/`ocbp`/`pref` gating question does not survive
+[cache/l2-spec.md §17.5](../cache/l2-spec.md)'s own table.* The C2 worklist calls
+those instructions "a Flush+Reload primitive across the partition". Read the
+table's L2 column: `ocbwb` writes back and downgrades the **local** copy, `ocbp`
+clears **this core's** `dir_vec` bit, and of `ocbi` it says in so many words that
+"the L2 copy, if any, is unaffected". **None of the three evicts from the L2**,
+so none is a flush primitive against an L2 way partition at all; what they flush
+is the issuing core's own L1-D, and a core is one tenant (**L1**). The two that
+*do* reach the L2 are `pref` and `movca.l`, and they reach it by **allocating**,
+which §16.1 already confines by mask. So the item is discharged by a section
+that already existed, for the instructions where it matters, and is not
+applicable for the ones the worklist named. §17.5 records the decision:
+**they stay user-mode**, with the cost stated. See §10 item 14 for the residual
+that is left, which is real and is a different channel.
+
+*Third, what is actually ungated is a register.* `jcore-cpu@origin/master`'s
+`cache/icache_modereg.vhm` decodes a cache-control block whose word at offset
+`0x4` carries **core 1's** whole-cache invalidate bits (`ic1_inv`, `dc1_inv`) and
+an IPI to core 1 in the same word, and `jcore-soc@upstream/HEAD` instantiates it
+at `0xabcd00c0` — **outside P4**, so its protection is a stage-2 mapping policy
+and not a privilege level. Under **L1**, where a core is a tenant, one mapping
+mistake hands a tenant a whole-cache flush of another tenant's core. This is the
+C2d shape again: the thing the plan named was not the thing that was wrong.
+[cache/l2-spec.md §16.2](../cache/l2-spec.md) `P-R8` states the rule and §11
+below carries the defect with an owner.
 
 ### 7.7 IOMMU — the reset state is on the wrong side, and the fix is narrower than proposed
 
@@ -1251,7 +1295,30 @@ measured, not asserted; a dedup test proving no page is shared across tenants;
 and a privilege test per gated instruction. **Five mechanisms, five tests** — a
 single "partitioning works" test discharges only the first.
 
-**Gated Wave-3 items:** C2e.
+**All five are specified, 2026-09-09, and one of the five was discharged by a
+section that already existed.** The design is
+[cache/l2-spec.md §16.2](../cache/l2-spec.md) `P-R1`–`P-R8`, its residual list is
+[§16.3](../cache/l2-spec.md), its experiments are [§16.4](../cache/l2-spec.md)
+`P-E1`–`P-E5`, and the five tests above are written out against the rules at
+[§22.1b](../cache/l2-spec.md). Per mechanism:
+
+| Requirement | Outcome |
+|---|---|
+| per-tenant **replacement metadata** | **specified**, `P-R1`+`P-R2`. Not DAWG's mechanism: one pLRU tree with updates confined to the accessor's subtree, rather than a tree per domain. Bought with a constraint — masks must be aligned power-of-two way groups, so three tenants get 4+2+2 and **not** the 3+3+2 that §16.1's old sizing sentence implied |
+| per-tenant **MSHR** reservation at the L2 | **specified**, `P-R3`, with `L2_MSHRS / NUM_DOMAINS >= 2` as an elaboration constraint and **no shared remainder**. `P-R4` closes a second MSHR channel nobody had named: cross-domain *coalescing* on a shared line, which survives reservation because it is about sharing an entry rather than occupying one |
+| memory-**bandwidth** QoS | **specified as a bound, not a closure**, `P-R5` (deficit round robin over domains within each of §5.3's classes). §16.3 marks it *mitigated*; `P-E3` owes the measurement this item demands, and nothing below the L2 is touched |
+| no cross-tenant **page deduplication** | **specified**, `P-R6`, and **narrowed in two directions**. There is no "per-tenant KSM" to build: on `linux@origin/jcore` KSM's merge scope is every opted-in `mm` system-wide with no cgroup or namespace boundary, the only axis being the NUMA node — the control is on or off. It is off, in that neither `arch/sh/configs/jcore_defconfig` nor `arch/sh/configs/j2_defconfig` sets `CONFIG_KSM`. Narrowing: KSM *inside* one guest is intra-tenant and is permitted; and **turning KSM off does not remove cross-tenant shared memory**, because §16.1's own text names the hypervisor's shared read-only mappings, which are shared by construction |
+| **privilege-gated** `ocbi`/`ocbp`/`pref` | **reversed** — see §7.6a. Per [cache/l2-spec.md §17.5](../cache/l2-spec.md)'s own table none of `ocbi`/`ocbp`/`ocbwb` evicts from the L2, so they are not a flush primitive across the partition; `pref` and `movca.l` reach the L2 by *allocating* and were already confined by §16.1. Decision: **they stay user-mode**. The genuinely ungated facility is a register outside P4, `P-R8` |
+
+**This does not make L5 `MET`, and the gap is now entirely evidence.** There is
+no L2 in `jcore-cpu@origin/master` or `jcore-soc@upstream/HEAD` — every
+case-insensitive `l2` match in either tree is a textio variable, an FPGA ball
+name, a TLB comment or prose — so none of the five tests can be run at all, in
+either direction. **`P-E1` and the `movca.l` residue test are specified to be run
+red first**, and a test that cannot be run red is not evidence that anything was
+fixed.
+
+**Gated Wave-3 items:** C2e *(design landed 2026-09-09)*.
 
 ### L6 — Scrub on ownership change; "undefined = previous tenant's data" is banned
 
@@ -1263,8 +1330,8 @@ anywhere may resolve "undefined" to residual state from a previous owner.**
 `movca.l`'s partially-defined L2 line, and the no-saved-image branch of the
 lazy-FPU restore (§7.8). Both are user-mode-reachable.
 
-**Two of the three are now specified away, 2026-09-09**, which leaves
-**1** open `undefined` site. The store-queue instance is C1a's, and
+**All three are now specified away, 2026-09-09**, which leaves
+**0** open `undefined` sites. The store-queue instance is C1a's, and
 [sq/spec.md §6.5](../sq/spec.md) replaces it: the buffer is zeroed at reset, on
 burst completion and on the hyperprivileged `HSQCR` write that ends a restore,
 and a guest load of the region returns zero rather than "undefined". The FP/SIMD
@@ -1272,11 +1339,29 @@ instance is C1b's, and [fpu/spec.md §7.7](../fpu/spec.md) with
 [simd/spec.md §2.6.1](../simd/spec.md) replaces it: every architectural bit of
 both files takes a defined scrub value at a change of tenant, and the word
 "undefined" is withdrawn from [fpu/spec.md §7.3](../fpu/spec.md)'s restore
-branch. The one that remains is
-[cache/l2-spec.md §17.5](../cache/l2-spec.md)'s `movca.l` line (**C2e**).
-**Specified is not met**: there is no store queue, no FPU and no SIMD unit in
-`jcore-cpu@origin/master`, so the residue tests below cannot be run red, let
-alone green.
+branch. The third was
+[cache/l2-spec.md §17.5](../cache/l2-spec.md)'s `movca.l` line, and **C2e**
+replaced it: the line is allocated in `M` with `R0`'s word at its offset and
+every other byte **zero** ([cache/l2-spec.md §16.2](../cache/l2-spec.md)
+`P-R7`), a per-sub-word written mask having been rejected because it would add
+tag state to be maintained through every §7.5 transition while zero-fill keeps
+the instruction's whole reason for existing — `movca.l` saves the SDRAM read,
+not the array write.
+
+**Say precisely what zero open sites does and does not mean.** It means this
+item's *specification* half is complete: there is no longer a place in these
+documents where a tenant-visible value resolves to a previous owner's bytes.
+It does **not** move the item, and the distance left is not a specification
+distance. **Specified is not met**: there is no store queue, no FPU, no SIMD
+unit and no L2 in `jcore-cpu@origin/master`, so all four residue tests below
+cannot be run red, let alone green — and this item's stated bar is *red before
+the fix*. L6 is now the item whose gap is **purely** evidence, which is a
+different category from **L5**'s (five mechanisms specified, some of them
+bounds rather than closures) and from **L4**'s (transmitters that exist on
+`origin/master` today and lack RTL). Conflating "no open `undefined`" with
+"scrubbed" is the precise mistake this item exists to prevent, and Wave-3
+**C1a** already named its general form: saving is not scrubbing, and a
+mitigation conditioned on state existing misses the fresh case.
 
 The ban is a *specification* rule, not only an implementation one: a spec that
 says "undefined" where the hardware will supply the previous owner's bytes has
@@ -1299,7 +1384,10 @@ specifications are where it will come back. **It is still not there**: as of
 2026-09-09 `scripts/check-doc-facts.py --list-checks` names no such check, and
 C1a — which had the strongest motive to write one — deliberately did not, because
 the check is B0c's and a check owned by whoever happened to need it is a check
-nobody maintains.
+nobody maintains. **C2e declined for the same reason and the case is now
+stronger, not weaker**: with zero open sites the check's job is no longer to find
+the remaining one, it is to stop a reintroduction, and a reintroduction guard is
+by definition something CI owns rather than a task.
 
 **Gated Wave-3 items:** C1a, C1b, C2e.
 
@@ -1359,7 +1447,7 @@ which bar they must clear.
 | **C2b** speculation coverage *(design landed 2026-09-09; **the implementation half is dispatchable in part, which no earlier Wave-3 item was** — see §8 L4)* | **L4**, **L7** part 4 | The **TSB walk** is a frontend transmitter (§7.2), and the I-side arm is on the *in-order* core too. Also: §12's code-level trigger — making the walk uncacheable flips §7.1. The clause most likely to be missed **next** is that three of this row's four named mechanisms target structures no repository contains *and are already specified* for the paused design points, so an implementer who works the list in order builds nothing that runs; the fourth, delayed speculative TLB/PTW fill, is the whole of the live work. The second is that an abort path in `core/tlb_walk.vhd` looks like the same mitigation and is not — [mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) **W-R2**: it closes the two installs and leaves the cacheable TSB reads, which are §7.1's observable. On **L7 part 4**, the clause named one counter address and there are two: `TLBINST` at `0xFF000058` counts the speculative DTLB installs this task is about, and it is the register a reader arriving from C2b will meet first |
 | **C2c** FGMT single-tenant core + microreset *(design landed 2026-09-09; no RTL possible — there is no FGMT and no hypervisor in `jcore-cpu@origin/master`)* | **L1**, both halves | The detector — "an unenforceable rule with no detector is not a control" — and it is now [hypervisor/hardware-spec.md §4.7.2](../hypervisor/hardware-spec.md) **T-R1**–**T-R5**. The clause most likely to be missed **next** is that the item's flush half named a structure — "MSHRs" — that means two different pools, one of which (**the L2's**, shared across cores) no gang switch can ever reach and which belongs to **L5**; see §8 L1. The second is that this row's mechanism is **not** the one the plan named: `fence.t` is 2020s work with no pre-2006 prior art of its own, and what survives the [glossary.md §2](../glossary.md) test is the pre-2006 *object-reuse* shape, not the instruction. The third is that C2c's own detector is a **refusal**, not a trap, for a reason §4.1 makes concrete — a trap would clobber the `HSPC`/`HSSR` the refused entry needs |
 | **C2d** IOMMU *(design landed 2026-09-09; no RTL possible — there is no IOMMU, no IOTLB and no BMID in either repo, and no bus field to carry one)* | **L2** | Both inherited clauses survive and are derived in §7.7a. The clause most likely to be missed **next** is that the bar's "per-device deny state" is **not a new state on either side**: in hardware it is the existing miss behaviour, and in the kernel it is `IOMMU_DOMAIN_BLOCKED` plus `blocked_domain`/`release_domain`, which already exist — an implementer who builds a state machine has built the wrong thing. The second is that **`GLOBAL` is removed rather than guarded**, and the thing that makes removal free is the `.map` loop that already writes one entry per attached BMID. The third is [`I-R2`](../iommu/hardware-spec.md): the J-Core bus has no error response, so "block and return `SLVERR`" hangs the master, and the deny path is now the default path. The fourth is that the worklist's *"the L2 exposes no fabric snoop port"* is right about the conclusion and wrong about every noun — there is no L2, the write-back cache that matters is the L1-D, and a snoop port **does** exist today on the L1-D and is tied off ([decisions/0010](../decisions/0010-dma-coherence-is-software-maintained.md)) |
-| **C2e** cache isolation | **L5**, **L6** | Five mechanisms, five tests. The MSHR one must target the **L2** pool, not the core-side pool that already has evidence |
+| **C2e** cache isolation *(design landed 2026-09-09; no RTL possible — there is no L2 in `jcore-cpu@origin/master` or `jcore-soc@upstream/HEAD`)* | **L5**, **L6** | Five mechanisms, five tests. The MSHR one must target the **L2** pool, not the core-side pool that already has evidence. The clause most likely to be missed **next** is that **L6 reaching zero open `undefined` sites moves nothing** — its bar is a residue test demonstrated red first, and there is no hardware for any of the four. The second is that one of the five mechanisms — the `ocbi`/`ocbp`/`pref` gate — was asked about the wrong object: per [cache/l2-spec.md §17.5](../cache/l2-spec.md)'s own table none of them evicts from the L2, and what is actually ungated is a **register outside P4** (§7.6a). The third is that `P-R5` is a *bound* and §16.3 marks it *mitigated*; reading the row as "bandwidth QoS: done" is how a mitigated channel becomes an undocumented one |
 | Hypervisor (Phase 3) | **L7**, and it carries **L1**'s enforcement | L7's four parts are a single bounds-check handler's correctness; §7.5 explains why it fails silently in two directions at once |
 
 ### Bar status at the time of writing
@@ -1370,8 +1458,8 @@ which bar they must clear.
 | L2 | **NOT MET** — every clause is now *specified* ([iommu/hardware-spec.md §3.10](../iommu/hardware-spec.md) `I-R1`–`I-R10`, C2d) and *unbuilt*. Reset is deny in the specification; no IOMMU RTL exists in `jcore-cpu` or `jcore-soc` at `origin/master` (case-insensitive `iommu`, `bmid`, `iotlb`, `dvma`: zero files in both), so `I-E0`–`I-E5` are written and not runnable. **The prerequisite is larger than the IOMMU:** the J-Core bus carries no master identifier at all (`cpu2j0_pkg.vhd`'s `cpu_data_o_t` is `{en,a,rd,wr,we,d}`; the DDR mux tells masters apart by port position), so there is no field to put a BMID in. **The item's *launch-blocker* condition is separately `N/A` today** and must be recorded rather than skipped: §8 L2 makes it blocking only for a configuration with a tenant-influenced DMA master, and there is **no DMA master at all** — `components/dma/` is a stub with no entity and `dma_dbus_o` is tied to zero on all four boards. `N/A`-as-blocker does not make the item `MET`. C2a's design landed and does **not** move this item — its windows sit inside the GPU, one master port down from where L2 acts | the RTL that builds a BMID-carrying fabric and an IOMMU |
 | L3 | **NOT MET** — eager-across-tenants specified by C1b; *specified, unbuilt* — no FPU and no SIMD unit exists to run the five residue tests on. C1c's design landed and does **not** bear on this item: its defect is intra-tenant (§8 L3) | the RTL that builds an FPU |
 | L4 | **NOT MET** — the I-side walk arm is now *specified* ([mmu/hardware-spec.md §5.0a](../mmu/hardware-spec.md) W-R1–W-R5, C2b) and unimplemented; the frontend rules of the paused specs are tightened but remain specified for cores that do not exist. **Not the same category as L2/L3/L6:** the transmitters are on `origin/master` today, so what is missing is RTL against shipping hardware, not hardware to test | C2b |
-| L5 | **NOT MET** — way-partitioning specified; metadata, L2 MSHRs, bandwidth, KSM, flush-op gating all open | C2e |
-| L6 | **NOT MET** — **1** open `undefined` site, was three; the store-queue and FP/SIMD sites are *specified, unbuilt* — the scrubs are stated and `jcore-cpu` has neither queues nor an FPU to run the residue tests on. C2a adds three more *specified, unbuilt* sites and no new `undefined` one: the GPU tile buffer, texture cache and per-warp register files ([simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md) G-R8) | C2e, and the RTL that builds the queues, the FPU and the GPU |
+| L5 | **NOT MET** — all five mechanisms are now *specified* ([cache/l2-spec.md §16.2](../cache/l2-spec.md) `P-R1`–`P-R8`, C2e) and **none is built**: there is no L2 in either hardware repository, so not one of the five tests can be run in either direction. Two of the five are narrower than the item's wording: `P-R5` is a measured **bound** on bandwidth interference and not a closure, and the `ocbi`/`ocbp`/`pref` gate was **reversed** — §7.6a. Four residual channels are **accepted** with reasons ([§16.3](../cache/l2-spec.md), §10 items 14–16), two of which nobody had listed | C2e |
+| L6 | **NOT MET** — **0** open `undefined` sites, was three; `movca.l`'s was closed by C2e ([cache/l2-spec.md §16.2](../cache/l2-spec.md) `P-R7`). **Zero open sites is not progress toward `MET`, it is the completion of the specification half only**: the bar is a residue test per site demonstrated **red before the fix**, and there is no store queue, no FPU, no SIMD unit, no GPU and no L2 to run one on. This item's gap is now purely evidence, which is a different category from L4's and from L5's. The store-queue and FP/SIMD sites are *specified, unbuilt* — the scrubs are stated and `jcore-cpu` has neither queues nor an FPU to run the residue tests on. C2a adds three more *specified, unbuilt* sites and no new `undefined` one: the GPU tile buffer, texture cache and per-warp register files ([simd/gpu/simd-gpu-spec.md §16.3](../simd/gpu/simd-gpu-spec.md) G-R8) | C2e, and the RTL that builds the queues, the FPU and the GPU |
 | L7 | **NOT MET** — both preconditions absent; walker already merged. C2b widened **part 4** to a second counter (`0xFF000058`, `TLBINST`) without moving the item: the register is decoded in RTL and nothing virtualizes either address | hypervisor Phase 3 |
 
 Seven of seven. That is the correct reading of the current state and it is not a
@@ -1473,11 +1561,28 @@ close one is scope expansion, not compliance.
    removes FGMT. Not mitigated; the answer is L1 (observer and victim are the
    same tenant).
 2. **[gated — L5]** **L2 replacement metadata**, updated on hits across way partitions (§7.6).
-3. **[gated — L5]** **L2 MSHR occupancy**, 4 entries shared chip-wide.
+   *Specified closed 2026-09-09* by [cache/l2-spec.md §16.2](../cache/l2-spec.md) `P-R2`, which
+   makes an out-of-partition hit update no replacement state and confines an in-partition update
+   to the accessor's own pLRU subtree. It stays **gated** and not *closed* for the reason L5 gives:
+   `P-E1` requires the leak to be demonstrated **before** the rule, and there is no L2 to
+   demonstrate it on.
+3. **[gated — L5]** **L2 MSHR occupancy**, 4 entries shared chip-wide. *Specified closed
+   2026-09-09* by `P-R3` (static per-domain reservation, no shared remainder, pool sized from the
+   domain count). **A second MSHR channel was found while specifying the first and is closed by a
+   separate rule:** cross-domain *coalescing* on a shared line, `P-R4`. It survives reservation
+   because it is about sharing an entry rather than occupying one, and it was on no list — the
+   same shape as item 8's lesson about structures nobody thought of.
 4. **[gated — L5]**, for the bandwidth half only; the row-buffer half is **[accepted]**. **DRAM row-buffer and bandwidth contention.** Nothing in the design addresses
    it; DRAMA is cited for ~Mbps across CPUs with no shared memory or cache
    (**`LITERATURE`**, §9's scale — the figure is quoted from
    [j4-remediation-plan.md §E.8](../j4-remediation-plan.md), not from the paper).
+   *2026-09-09:* `P-R5` adds deficit round robin over domains **within** each of
+   [cache/l2-spec.md §5.3](../cache/l2-spec.md)'s priority classes. That is a **bound, not a
+   closure**, and it applies only at the L2 arbiter — [§13.4](../cache/l2-spec.md) is a single
+   request port and in the shipping SoC the arbitration below it
+   (`jcore-soc/components/misc/bus_mux_typecsub.vhm`) is unweighted rotating priority over
+   positional masters carrying no domain identity at all. The bandwidth half stays **gated** with
+   the bound owed as a measurement (`P-E3`); the row-buffer half stays **accepted**, unchanged.
 5. **[accepted]** **TSB set contention within a guest**, unless the guest partitions its own TSB
    ([mmu/hardware-spec.md §2.13a](../mmu/hardware-spec.md)).
 6. **[accepted]** **Walker timing** — 3 reads for a way-0 hit, 5 for way 1, 4 for a both-ways
@@ -1538,6 +1643,34 @@ close one is scope expansion, not compliance.
     **L5**'s, this is a squashed path inside one domain and is **L4**'s. The one mechanism
     that would close it has no price in §E.10 and the decision belongs to whoever resumes the
     design point.
+14. **[accepted]** **The cross-partition architectural hit on a line two tenants both map** —
+    Flush+Reload's *reload* half, without its flush half. *(Added by C2e, 2026-09-09.)*
+    [cache/l2-spec.md §16.1](../cache/l2-spec.md) permits a domain to hit in any way **by design**,
+    because confining hits breaks coherence and shared read-only mappings; `P-R2`(b) removes the
+    metadata half of the resulting signal and the timing half remains. **The reason this is
+    accepted rather than gated is the one that matters, and it corrects the C2 worklist's
+    framing:** deciding "no cross-tenant page dedup" (`P-R6`) does **not** remove the precondition,
+    because §16.1's own justification names the other source of shared lines — the hypervisor's own
+    text and shared pages, which are shared by construction and not by deduplication. The
+    alternative is Page's 2005 partitioned cache, in which "access by a process to partitions of
+    another process is invalid", and it costs shared pages outright. That trade is refused here.
+15. **[accepted]** **Inclusion recall of a shared line.** *(Added by C2e, 2026-09-09.)* A line
+    shared between two domains lives in exactly one way, therefore in exactly one domain's
+    partition. When that domain's allocation pressure evicts it,
+    [cache/l2-spec.md §7.7](../cache/l2-spec.md) recalls the **other** domain's L1-D copy, so the
+    other domain observes a latency event whose cause is the first domain's allocation rate —
+    across the partition, through a mechanism way-partitioning cannot reach, because the whole
+    point of a shared line is that it is not duplicated. Precondition is again cross-domain
+    sharing, so it stands or falls with item 14. Found by asking **C2c**'s question of the L2:
+    not which structures leak, but which shared structures have no per-domain control at all.
+16. **[accepted]** **Bank contention and data-array port contention at the L2.** *(Added by C2e,
+    2026-09-09.)* Banks are selected by `address[11:10]` ([cache/l2-spec.md §5.1](../cache/l2-spec.md)),
+    independently of the way partition, so two domains contend for banks always; the data-array
+    port is time-multiplexed per bank across five consumer classes and
+    [§10.4](../cache/l2-spec.md) argues feasibility rather than isolation. `P-R5` bounds the rate.
+    Closing either needs **bank partitioning**, which is set-partitioning under another name, and
+    §16.1 rejects set-partitioning for a reason that has not changed — it would give each domain a
+    fraction of the physical address space.
 
 ---
 
@@ -1573,7 +1706,8 @@ now the implementation half of C2b.
 | `jcore-cpu/docs/architecture/tlb.md §7` still claims the core is "strictly non-speculative" and that "the **software** TLB walk … removes … AnC". Both false; cross-repo. **C2b's design half read the file and the count is now four, not two** *(2026-09-09)*: the same sentence also says "no prefetcher" and "no data/target speculation", and **§4.1 of that same file calls the I→D shadow fill a "speculative install" in four places** — so the document contradicts itself across two sections, which is why the row cannot be closed by deleting a clause; the residual paragraph under it also carries the `TSB_SIZE_LOG` offset range that Wave-2 **B1** corrected in [mmu/hardware-spec.md §2.8a](../mmu/hardware-spec.md), and §1's banner still describes the walker as arriving on a branch. **This is C2b's implementation half and it is dispatchable now** — it needs no hardware, only the repository | Wave-3 **C2b**, implementation half |
 | **J32-FM — the product — has no owning specification.** One glossary table cell is its entire definition, and the glossary is not authoritative | Wave-2 **B3** |
 | **The guest-`ASIDR` justification has expired** — *the contradiction is corrected, the security question is not.* [hypervisor/design-spec.md §5](../hypervisor/design-spec.md) now records that `ASIDR` is the TLB **match** input on every translation (`core/cpu.vhd`, `asid => dp_mmu_regs.asidr(...)` into both TLB instances) and a TSB index input on every miss, so the "write-only staging state consulted only at `LDTLB` time" argument for leaving a guest write untrapped is void; the stale one-`LDTLB`-trap costing beside it is likewise marked. **Whether the write must now be trapped is a hypervisor-design decision B1 did not make.** | Wave-2 **B1** (doc) → **Wave-3** (decide) |
-| [cache/l2-spec.md §16.1](../cache/l2-spec.md)'s "closes the channel" needs scoping to occupancy (§7.6) | Wave-3 **C2e** |
+| **The cache-control register at `0xabcd00c0` is outside P4 and reaches the other core.** `jcore-cpu@origin/master`'s `cache/icache_modereg.vhm` decodes core 1's whole-cache invalidate bits (`ic1_inv`, `dc1_inv`) and an IPI to core 1 in one word, and `jcore-soc@upstream/HEAD`'s `targets/boards/turtle_1v0/design.yaml` places the block at `base-addr: 0xabcd00c0` — outside the P4 segment that [soc/p4-mmio-map.md §3](../soc/p4-mmio-map.md) makes `SR.MD = 1` and non-guest-visible. Under **L1**, where a core is a tenant, its only protection is a stage-2 mapping policy. The fix — move it into P4 beside the L2 CSRs, or split its cross-core fields per core — is an SoC change. **This is shipping RTL, not a paused spec**, which puts it in **L4**'s category and not **L5**'s. *(Found by C2e, 2026-09-09; rule stated as [cache/l2-spec.md §16.2](../cache/l2-spec.md) `P-R8`)* | RTL / SoC integration |
+| **The J4 kernel target installs no cache-maintenance implementation at all.** On `linux@origin/jcore`, `arch/sh/Kconfig`'s `CPU_SUBTYPE_JCORE` selects `CPU_JCORE` — **not** `CPU_J2` — while `arch/sh/mm/Makefile` builds `cache-j2.o` only under `CONFIG_CPU_J2` and `cache-sh2.o` only under `CONFIG_CPU_SUBTYPE_SH7619`. So an `arch/sh/configs/jcore_defconfig` build compiles **no** cacheops object: `cpu_probe()` never sets `boot_cpu_data.type = CPU_J2`, never ioremaps `j2_ccr_base` and never writes the enable word, and `cpu_cache_init()` reaches its `CPU_FAMILY_SH2` branch and calls `sh2_cache_init()`, which on that config is a `__weak` declaration in `arch/sh/include/asm/cacheflush.h` with no definition anywhere. Every `local_flush_*` and every `__flush_*_region` therefore stays a no-op, and `sys_cacheflush(2)` — which **is** reachable from unprivileged userspace, validated only against the caller's own VMAs — does nothing on J4. *Not a channel and not C2e's bar item*; recorded because C2e went looking for the kernel's flush primitive and found the J4 target has none. **The J2 target is unaffected** | `linux`, J4 bring-up |
 | Intra-guest AnC (§7.1) has no bar item and no owner | Wave-3, after C2b |
 | The one-cycle `dp_p4_viol` window clobbers an older fault's `TEA` ([j4-wave0-status.md](../j4-wave0-status.md)) | Wave-3 follow-up, red guard first |
 
