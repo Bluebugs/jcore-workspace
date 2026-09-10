@@ -1186,10 +1186,20 @@ The specified destination for it is [aic/aic2-spec.md §3.5](../aic/aic2-spec.md
 which is itself unbuilt — the shipping boards carry `jcore,aic1`. So this rule has a second SoC
 dependency and a second kernel dependency, in `smp-j2.c`, beside the `cache-j2.c` one 0010 names.
 
+**The kernel half is now done, and it adds an ordering constraint on the split.** *(2026-09-10.)*
+[decisions/0010](../decisions/0010-dma-coherence-is-software-maintained.md) decision 4 landed on
+`linux@jcore/cacheops`: `cache-j2.c` and the new `arch/sh/mm/cache-jcore.c` write only the issuing
+core's own word, and the cross-core reach they gave up is taken from `smp_call_function()` in
+`arch/sh/mm/cache.c`'s `cacheop_on_each_cpu()` instead. That is compliance with this rule, and it
+makes **cross-core cache maintenance a client of the IPI** — which is bit 28 of the very word this
+rule splits. So the two halves of the split are ordered: relocating the interrupt facility to
+[`IPI_SEND`](../aic/aic2-spec.md) must land **with or before** the per-core cache split, because a
+split that leaves `smp-j2.c` unable to reach another core's bit 28 takes `flush_dcache_folio()`
+and every streaming `dma_sync_*` down with it. Splitting the cache fields first is not a partial
+step toward this rule; it is a broken kernel.
+
 Until the split happens the mapping policy is the only control and it belongs on the reviewed list.
-Recorded as a defect with an owner in [security/threat-model.md §11](../security/threat-model.md);
-the kernel half is [decisions/0010](../decisions/0010-dma-coherence-is-software-maintained.md)
-decision 4, which is written against this same register and carries the matching constraint.
+Recorded as a defect with an owner in [security/threat-model.md §11](../security/threat-model.md).
 
 ### 16.3 What partitioning does not close `[T1/T2]` *(C2e, 2026-09-09)*
 

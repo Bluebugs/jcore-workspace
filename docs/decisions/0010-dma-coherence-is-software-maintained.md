@@ -1,6 +1,9 @@
 # 0010 — DMA coherence is software-maintained, and the IOMMU does not own it
 
-**Status:** Accepted 2026-09-09. Wave-3 task **C2d**, from
+**Status:** Accepted 2026-09-09; **decision 4 executed 2026-09-10** on
+`linux@jcore/cacheops`, with three of its own premises corrected and its Enforcement
+binding repaired — see decision 4's "Done, and what this list got wrong" and
+§Enforcement. Wave-3 task **C2d**, from
 [j4-remediation-plan.md §C2](../j4-remediation-plan.md), whose IOMMU worklist ends
 *"and own coherent-DMA vs the write-back L2 (the L2 exposes no fabric snoop port
 today)"*. This record is that ownership.
@@ -170,7 +173,11 @@ L1-D holding a dirty line needs a writeback response the port has no channel for
 **At `[T1/T2]` the answer is the L2 directory or nothing**, and that is a decision for
 whoever writes the L2 RTL, not this record.
 
-**4. The kernel work is named, is constrained by `P-R8`, and is not done here.** `arch/sh`
+**4. The kernel work is named, is constrained by `P-R8`, and is not done here.**
+*(Done 2026-09-10, on `linux@jcore/cacheops`. The heading and the constraint list below
+are left as written, because they are what the implementer had to work from and three of
+their premises did not survive the build — see "Done, and what this list got wrong".)*
+`arch/sh`
 needs real cache-maintenance primitives for `CPU_SUBTYPE_JCORE`: a `cacheops-` arm that
 compiles for the J4, definitions of `__flush_wback_region` / `__flush_purge_region` /
 `__flush_invalidate_region` against the J-Core CCR that `cache-j2.c` already reaches
@@ -223,6 +230,95 @@ hypercall), so the primitives this decision asks for are constrained:
   28"* — so the register the split takes apart is also the SMP IPI. That is a second kernel
   dependency of `P-R8` and it is recorded there.
 
+**Done, and what this list got wrong.** *(2026-09-10, by the task this decision
+dispatched. `linux@jcore/cacheops`, one commit.)* The arm is
+`cacheops-$(CONFIG_CPU_JCORE) := cache-jcore.o`; the three primitives are in the new
+`arch/sh/mm/cache-jcore.c`; `DMA_NONCOHERENT` in `arch/sh/Kconfig` now also selects
+`ARCH_HAS_SYNC_DMA_FOR_CPU` and `arch/sh/kernel/dma-coherent.c` has the matching
+`arch_sync_dma_for_cpu()`; `cache-j2.c`'s three helpers and `arch/sh/mm/cache.c`'s
+`cacheop_on_each_cpu()` changed in the same commit. It compiles: `jcore_defconfig` links
+a `vmlinux` with `cache-jcore.o` in it under `sh2-elf-gcc 14.2.0`, and `j2_defconfig`'s
+`arch/sh` subtree still builds clean. Five things above were wrong or incomplete, and
+each of them would have cost the next implementer time.
+
+- **"the J-Core CCR that `cache-j2.c` already reaches through `j2_ccr_base`" is not
+  reachable from a J4 build at all.** `j2_ccr_base` is *defined* in `cache-j2.c` and
+  *assigned* in `arch/sh/kernel/cpu/sh2/probe.c`, and a `CPU_JCORE` build compiles
+  neither: `arch/sh/kernel/cpu/sh2/Makefile` drops `probe.o` when `CPU_JCORE=y`, because
+  `arch/sh/kernel/cpu/jcore/probe.c` supplies the J4's `cpu_probe()`. Both `scan_cache()`
+  and the symbol it fills are inside `#if defined(CONFIG_CPU_J2)` besides. The symbol does
+  not exist in the J4 link, so `cache-jcore.c` maps the register itself and keeps its own
+  pointer. The register is the same one — `turtle_1v0` and `mimas_v2` both instantiate
+  `cache_ctrl` at `0xabcd00c0` and the J4 synth configuration is
+  `jcore-cpu@origin/master:synth/cpu_synth_j4_config.vhd`, whose first line is *"J4 synth
+  placeholder == J2"* — but the kernel path to it is not.
+
+- **`sh2_cache_init()` on the J4 was not "not a cache-maintenance implementation". It was
+  a call to NULL.** The corrected paragraph in Context concluded that `skip` is never taken
+  and `sh2_cache_init()` is always the destination, and stopped there. `sh2_cache_init()`
+  is defined only in `cache-sh2.c`, which a `CPU_JCORE` build does not compile, so its
+  `__weak` declaration in `arch/sh/include/asm/cacheflush.h` resolves to **address zero**.
+  Disassembling the unpatched `jcore_defconfig` `vmlinux` shows `cpu_cache_init()` falling
+  through the `CPU_FAMILY_SH2` arm into `jsr @r1` with `r1` loaded from a literal-pool word
+  of `0` — inside `mem_init()`, with the MMU on and nothing mapped at virtual zero. The J4
+  kernel cannot have survived that call. The fix is a side effect of this work: the new
+  `CPU_JCORE` arm precedes the family arm, so the NULL call is gone. **The lesson for the
+  rest of this programme is that "the destination is `X()`" and "`X()` exists in this link"
+  are different claims, and the `__weak`-declaration idiom `arch/sh` uses for all seven
+  `*_cache_init()` hooks makes the second one silently false.**
+
+- **The register cannot be mapped from `cpu_cache_init()`.** `arch/sh/mm/init.c` calls
+  `cpu_cache_init()` from the top of `mem_init()`, while `mem_init_done` is still `0`, and
+  `arch/sh/mm/ioremap.c` routes every pre-`mem_init_done` `ioremap()` to `ioremap_fixed()`
+  — which on an MMU J-Core build is the `BUG()` stub in `arch/sh/mm/ioremap.h`, because
+  `CONFIG_IOREMAP_FIXED` depends on `X2TLB`. The J2 gets away with mapping it from
+  `cpu_probe()` only because a J2 is `!MMU` and picks up `arch/sh/mm/nommu.c`'s trivial
+  `ioremap()`. So the J4's mapping is a `core_initcall`, and there is a window from
+  `mem_init()` to that initcall in which the primitives are no-ops — which is what the
+  whole build did before, so nothing regresses in it, but it is a window and it is stated
+  here rather than discovered later.
+
+- **Two IPI arms, not one.** The bullet above says "the J-Core arm is part of this work".
+  It is two arms: removing the `for_each_possible_cpu` loop from `cache-j2.c` removes the
+  **J2's** cross-core reach at the same time, so `cacheop_on_each_cpu()` needs
+  `CONFIG_CPU_J2` as well as `CONFIG_CPU_JCORE` or the J2 silently loses coherent
+  `flush_dcache_folio()` across cores. Compliance and regression are the same edit here.
+
+- **The flush write must not be blind, because on the J4 the caches are off.**
+  `cache-j2.c` writes `CACHE_ENABLE | *_FLUSH`, so a flush also *enables* both caches.
+  Copying that into `__flush_purge_region()` would make `dma_sync_single_for_cpu()` turn
+  the caches on as a side effect. On the J4 that is not theoretical: `cachemodereg_reg_reset`
+  in `jcore-cpu@origin/master:cache/cache_pkg.vhd` is all zeros, and **nothing in the
+  `CPU_JCORE` build or in either board's boot path writes the enable bits** — the only
+  writer, `sh2/probe.c`'s `__raw_writel(0x80000303, ...)`, is the file that is not compiled.
+  So `cache-jcore.c` does a read/modify/write instead, which is safe because the RTL
+  (`cache/icache_modereg.vhm`) reads the invalidate and interrupt bits back as zero and
+  only the two enable bits as themselves. **Whether the J4 should enable its caches is a
+  separate question and this decision does not answer it**; it only refuses to answer it
+  accidentally, from the DMA path.
+
+**The stride collision is left exactly where this record put it, and there is now a third
+reason.** `arch/sh/kernel/cpu/sh2/probe.c:49`'s `j2_ccr_base + 4*cpu` is still wrong —
+`icache_modereg` decodes `db_i.a(5 downto 2)`, `jcore-soc`'s `board.dts` says
+`cpu-offset = <4>`, and `jcore-cpu@origin/master:sim/tests/dualcore/smp_bringup.s` puts
+cpu0 at `0xC0` and cpu1 at `0xC4`; three independent statements of a four-byte stride
+against one statement of sixteen. It is **not fixed here**, for the reason this record
+gave plus one it did not have: that file is not in the J4 build, so fixing it changes only
+`j2_defconfig`, on hardware this task cannot run, in a patch whose subject is the J4. A
+fix that cannot be tested by the person making it, in a file the change does not otherwise
+touch, is how a second bug arrives. What this work owes it is that the next reader not
+copy it, and `cache-jcore.c`'s header comment says so at the point of use.
+
+**Two further J4 defects were found and deliberately not fixed**, because both belong to
+SP2 cache bring-up and fixing either would mean inventing a value:
+`arch/sh/kernel/cpu/jcore/probe.c` zeroes `boot_cpu_data.dcache.{ways,sets,entry_shift}`
+with a comment deferring them, and `compute_alias()` in `arch/sh/mm/cache.c` turns
+`sets = 0` into `alias_mask = 0xFFFFC000` and `n_aliases = 262144`, so every
+`n_aliases`-guarded path in `arch/sh/mm/cache.c` — `copy_to_user_page()`'s
+`kmap_coherent()` branch included — takes its aliasing arm on a J4. Supplying a geometry
+here would be an unmeasured figure ([0005](0005-unmeasured-figures-are-removed.md)); the
+J2 defaults are not the J4's to borrow just because the synth placeholder is.
+
 **5. What is safe today, and exactly why.** At `[T0]` with a write-through L1-D, the
 *device-read* direction is safe by construction: the most recent value of any line is
 always at or below the L2's position, so a device read cannot observe stale data. The
@@ -252,6 +348,30 @@ compiles no cache-operations file to `arch/sh/mm/Makefile`'s `cacheops-` selecto
 `CPU_J2`. If someone adds a `cacheops-$(CONFIG_CPU_JCORE)` arm — which is exactly the
 fix decision 4 asks for — the binding goes red and this record has to be revisited,
 which is the intended behaviour, not a regression.
+
+**That is what was supposed to happen, and it did not.** *(2026-09-10, from the task that
+wrote the fix.)* The arm was added and the gate stayed **green**, for two independent
+reasons, and both are worth more than the row is.
+
+1. **The pattern pinned the value it captured.** The code side read
+   `` `cacheops-\$\(CONFIG_(CPU_J2)\)` ``, so it could only ever capture `CPU_J2` or
+   fail to match. The fix does not touch the `CPU_J2` arm; it adds a second one. One
+   match, one capture, still equal to the document, still green — while the claim the row
+   states, *"the J4 build compiles no cache-operations file"*, had become false.
+   [fact-ownership.md](../fact-ownership.md) §Code bindings carries the repair
+   (`` `(CPU_J\w*)` ``, which now matches **two** arms and fails on having two distinct
+   captures) and the general form of the mistake.
+2. **The registry reads `origin/jcore`, and the fix is on a branch.** That is the
+   [0002 §2](0002-supersede-convention.md) rule working as designed, not a defect — but it
+   means the binding's red is a **merge-time** signal, and a decision record cannot wait
+   for it. This record was revisited by hand, at authorship time, which is what decision 4's
+   new block above is.
+
+**So the honest statement of what this binding buys is smaller than the original text
+claimed.** It does not detect that decision 4 has been done. It detects, once the work
+reaches the integration branch, that this record's Enforcement section is describing a
+tree that no longer exists — which is still worth having, and is now the only thing the
+row promises.
 
 ## Rejected alternatives
 
@@ -298,8 +418,11 @@ cheap then.
 - **The L2 RTL is written**, which forces the open question decision 3 defers: whether
   a device transaction traverses the L2 array, and whether the directory gains a
   device-side port. Either answer supersedes decision 3's `[T1/T2]` half.
-- **`arch/sh` gains a `cacheops-` arm for `CPU_JCORE`**, which is decision 4 being done
-  and which turns this record's Enforcement binding red on purpose.
+- ~~**`arch/sh` gains a `cacheops-` arm for `CPU_JCORE`**, which is decision 4 being done
+  and which turns this record's Enforcement binding red on purpose.~~ **Happened**
+  2026-09-10 on `linux@jcore/cacheops`; decision 4 carries the outcome and Enforcement
+  carries the two reasons the binding did not in fact go red. It goes red when the branch
+  reaches `origin/jcore`, and this bullet is then spent.
 - **The L1-D becomes write-back** at any tier a board actually builds
   ([0007](0007-l1d-write-policy-under-msi.md) decision 2), at which point the
   invalidate-only snoop port of decision 3 is no longer sufficient in either direction.
