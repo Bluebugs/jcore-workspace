@@ -995,8 +995,18 @@ write at a *cross-tenant* switch, and a kernel→user transition inside one gues
   `#ifdef CONFIG_SH_FPU`; `arch/sh/Kconfig`'s `CPU_SUBTYPE_JCORE` selects `CPU_JCORE` and `MMU` and
   reaches no `select CPU_HAS_FPU` by any path, and `arch/sh/Kconfig.cpu`'s `SH_FPU` is
   `depends on CPU_HAS_FPU`. So `CONFIG_SH_FPU` cannot be set on a J-Core build and
-  `arch/sh/include/asm/fpu.h` reduces `save_fpu`, `restore_fpu`, `release_fpu`, `grab_fpu` and
-  `fpu_state_restore` to `do { } while (0)`.
+  `arch/sh/include/asm/fpu.h` reduces **six** macros to `do { } while (0)`: `save_fpu`,
+  `restore_fpu`, `release_fpu`, `grab_fpu`, `fpu_state_restore` **and `__fpu_state_restore`**.
+  *(The sixth was missing from this list until post-F, 2026-09-10; Task F §5.2 found it and the
+  header confirms it.)* **What does *not* vanish is the wrappers' own bodies**, and the difference
+  matters on this target specifically: `unlazy_fpu` and `clear_fpu` are `static inline`s **outside**
+  the `#ifdef`, so with the six macros gone `__unlazy_fpu` still tests and clears `TS_USEDFPU` and
+  still zeroes `thread.fpu_counter`. That residual is live rather than a bare `preempt_disable` /
+  `preempt_enable` pair on any kernel that enables **FPU emulation** — which is user-selectable
+  precisely here, because `SH_FPU_EMU` depends on the FPU being *absent*. So the state these
+  wrappers maintain is reachable on the configuration this project ships, and a reader who takes
+  "the FPU support is compiled out" to mean "nothing runs" is wrong about the one configuration
+  that matters.
 - **There is no `kernel_fpu_begin` under `arch/sh` at all** — no definition and no call, checked
   case-insensitively along with `kernel_neon`, `fpu_begin`, `fpu_end` and `may_use_simd` — and
   `arch/sh` is not among the architectures selecting `ARCH_HAS_KERNEL_FPU_SUPPORT` (`arch/Kconfig`
