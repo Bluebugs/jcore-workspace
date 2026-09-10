@@ -580,11 +580,11 @@ Four, and the fourth is the one a hypervisor author would not think to look for.
    [`P-R5`](../cache/l2-spec.md)'s `L2DRRQ` quantum is hyperprivileged exactly like `L2WAYMASK`
    and is part of the same act of admitting a tenant; setting the mask alone leaves that mechanism
    inert. [`P-R3`](../cache/l2-spec.md)'s per-domain MSHR reservation is **not** assignable —
-   *this item said it was, until post-F 2026-09-09*: [`P-R3`](../cache/l2-spec.md) fixes it at elaboration as
+   *this item said it was, until post-F 2026-09-10*: [`P-R3`](../cache/l2-spec.md) fixes it at elaboration as
    `NUM_MSHRS / NUM_DOMAINS`, so the hypervisor's obligation is to *read* it, from `L2MSHRRSV`
    ([cache/l2-spec.md §13.5](../cache/l2-spec.md)), and to refuse to admit an `NUM_DOMAINS + 1`-th
    tenant rather than to configure one.
-3. **`HTCR` is the carrier, not `PDID`.** *(Corrected post-F, 2026-09-09. This item read "`PDID`
+3. **`HTCR` is the carrier, not `PDID`.** *(Corrected post-F, 2026-09-10. This item read "`PDID`
    is the carrier here too … One identifier, three consumers — predictors, IOMMU BMID ranges
    (§3.7) and now the L2", and it was wrong twice.)* `PDID` cannot carry it: `PDID` is optional
    and [hardware-spec.md §2.8](hardware-spec.md) says it is "not required on the in-order J2/J32

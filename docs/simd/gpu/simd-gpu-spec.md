@@ -987,7 +987,7 @@ fetches fill. Each resident context has a numeric **`GCID`** and a window:
 >    tenants occupy thread contexts of one core at any instant" and "cross-tenant
 >    fine-grained MT is out of bounds for launch", and an SM is a barrel-threaded
 >    core holding 4–8 warps resident ([architecture.md §1.1, §3.1](architecture.md)).
->    *(Corrected post-F, 2026-09-09: this clause read "Whether an SM is 'a core'
+>    *(Corrected post-F, 2026-09-10: this clause read "Whether an SM is 'a core'
 >    for L1 is undecided in the text … Until that is resolved by whoever owns L1"
 >    — forty-nine lines below the paragraph in which whoever owns L1 resolved it.
 >    A reader arriving at the rule got the open question and not the answer,

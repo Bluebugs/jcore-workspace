@@ -330,7 +330,7 @@ Data fields.
 [1:0]    reserved
 ```
 
-*(Corrected post-F, 2026-09-09.* `CACHEABLE`'s one-line description read *"Device
+*(Corrected post-F, 2026-09-10.* `CACHEABLE`'s one-line description read *"Device
 transaction snoops CPU caches"* and `WBA`'s read *"Write-back acknowledge (for
 posted writes)"*. §7.1 and [decisions/0010](../decisions/0010-dma-coherence-is-software-maintained.md)
 withdrew exactly that promise, and `I-R9` makes both bits attributes — but the

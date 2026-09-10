@@ -2022,7 +2022,7 @@ Three consequences, and the third is the one this task exists for.
    file and there is simply no restore after it. *(That sentence read "Its restore is the scrub and
    nothing else", which reads as siting the write inside the restore; it is not, and
    [../hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)'s ordering paragraph had
-   taken it that way and generalised it to all three writes. Corrected post-F, 2026-09-09 — the
+   taken it that way and generalised it to all three writes. Corrected post-F, 2026-09-10 — the
    mechanism is unchanged, the placement is now stated once.)* The no-image branch is not a second
    code path that could be forgotten; it is the same write with no restore after it. This is the branch
    [../security/threat-model.md §7.8](../security/threat-model.md) identifies and that **L3**

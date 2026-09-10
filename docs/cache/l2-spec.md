@@ -127,7 +127,7 @@ The L2 controller is a parameterized VHDL entity. The baseline matches the J32-O
 | `NUM_THREADS_PER_CORE` | integer | 1   | 1, 2                           | all  | FGMT contexts per core; used to size lock-owner field |
 | `LOCK_TIMEOUT_CYC` | integer |    256  | 64–4096                        | T1/T2 | Forward-progress backstop (cycles)    |
 | `SNOOP_FABRIC`     | enum    | broadcast | broadcast, ring                | T1/T2 | `ring` reserved for future ≥6-core configs (see §5.4) |
-| `NUM_DOMAINS`      | integer |       1  | 1–8                            | T1/T2 | L2 trust domains of §16.1, **including the host domain `H`**. `1` is the unpartitioned build. Sizes `L2WAYMASK`, `L2DRRQ` and the `P-R3` reservation *(added post-F, 2026-09-09: `P-R3`'s elaboration constraint was written over this name and over a miss-capacity generic spelled differently from §4's, and neither name was in this table)* |
+| `NUM_DOMAINS`      | integer |       1  | 1–8                            | T1/T2 | L2 trust domains of §16.1, **including the host domain `H`**. `1` is the unpartitioned build. Sizes `L2WAYMASK`, `L2DRRQ` and the `P-R3` reservation *(added post-F, 2026-09-10: `P-R3`'s elaboration constraint was written over this name and over a miss-capacity generic spelled differently from §4's, and neither name was in this table)* |
 
 Derived quantities for the T1 baseline (`L2_SIZE_KB=128, L2_WAYS=8, L2_LINE_BYTES=32, NUM_BANKS=4, NUM_CORES=2, NUM_THREADS_PER_CORE=2, ADDR_WIDTH=32`):
 
@@ -666,7 +666,7 @@ L1-I issues a line read; L2 responds asynchronously. The `core_id` field is requ
 `domain` is the way-partition tag of [§16.1](#161-way-partitioning-by-trust-domain-t1t2) and is
 present only at T1/T2. It is `{VALID, TENANT[5:0]}` read from the issuing thread context's `HTCR`
 ([hypervisor/hardware-spec.md §2.10](../hypervisor/hardware-spec.md)); `VALID = 0` selects the
-host domain `H`. *(Added post-F, 2026-09-09. §16.1 said the tag was "carried on the fabric
+host domain `H`. *(Added post-F, 2026-09-10. §16.1 said the tag was "carried on the fabric
 alongside the existing `owner` field of §6". Neither of these records had a domain field, §6's
 `owner` is a lock owner and not a domain, and none of this traffic is on the fabric — it is
 core-to-L2. Without the field the partition has no index and every rule of §16.2 is inert.)*
@@ -759,7 +759,7 @@ This is the existing `dcache_mcl.vhm` interface widened to `ADDR_WIDTH` and to t
 | `L2DRRQ[d]`  |    32 | T1/T2 | §16.2 `P-R5` deficit-round-robin quantum, one per domain `d`. Equal quanta are the reset state |
 ```
 
-*The last three rows were added post-F, 2026-09-09.* §16.1 and §16.2 specify `L2WAYMASK` and
+*The last three rows were added post-F, 2026-09-10.* §16.1 and §16.2 specify `L2WAYMASK` and
 `L2DRRQ` as hyperprivileged registers and [hypervisor/design-spec.md §6.2](../hypervisor/design-spec.md)
 obliges a hypervisor to write both on every tenant admission — and neither appeared in any
 register map in this document, so there was nothing for that hypervisor to write to. `L2MSHRRSV`
@@ -875,7 +875,7 @@ L2WAYMASK[d]   8 bits (one per way)   -- ways into which domain d may allocate
   is **accepted** at §16.3 row 8. Unrestricted hits remain the right choice; the reason is that
   the alternative costs shared pages, not that the alternative buys nothing.
 - **The domain tag travels with the request, and it is `HTCR.TENANT` — not `PDID`.** *(Decided
-  post-F, 2026-09-09. This bullet read "It is the same `PDID` the CPU specs use for predictor
+  post-F, 2026-09-10. This bullet read "It is the same `PDID` the CPU specs use for predictor
   tagging …, carried on the fabric alongside the existing `owner` field of §6", and all three of
   those halves were wrong: the register, the transport, and the field.)*
 
@@ -1041,7 +1041,7 @@ per-domain cap = reservation = NUM_MSHRS / NUM_DOMAINS
 miss-capacity generic that appears in no configuration-parameter table in this document — §4
 calls it **`NUM_MSHRS`** — and over `NUM_DOMAINS`, which was not a generic at all. An elaboration
 constraint written over two names the entity does not declare cannot be elaborated. Both are §4
-rows now *(post-F, 2026-09-09)*.
+rows now *(post-F, 2026-09-10)*.
 
 Each domain may hold at most its share and always has its whole share available. **There is no
 shared remainder**, and that is the point: a remainder any domain may take is exactly the
@@ -1130,14 +1130,16 @@ It is written as a rule because the shipping SoC violates it. `jcore-cpu@origin/
 core 0's `ic0_inv`/`dc0_inv` (bits 8 and 9) and whose word at offset `0x4` carries **core 1's**
 `ic1_inv`/`dc1_inv` in the same bit positions — plus `int1`, an IPI, at bit 28 of the same word.
 So one write invalidates the *other* core's L1-I and L1-D wholesale and interrupts it. On
-`jcore-soc@origin/master` that block is instantiated by
-`targets/boards/turtle_1v0/design.yaml` at `base-addr: 0xabcd00c0` — **not in P4**. Its protection
+`jcore-soc@origin/master` that block is instantiated by **two** boards —
+`targets/boards/turtle_1v0/design.yaml` and `targets/boards/mimas_v2/design.yaml`, both at
+`base-addr: 0xabcd00c0` — **not in P4**. *(This sentence named one board until post-F,
+2026-09-10.)* Its protection
 today is therefore a stage-2 page-mapping policy and not a privilege level, and under
 [security/threat-model.md §8](../security/threat-model.md) **L1**, where a core is a tenant, a
 mapping mistake hands one tenant a whole-cache flush of another's core.
 
 **The J4 requirement is the per-core split, and the P4 move is rejected.** *(Decided post-F,
-2026-09-09. This rule previously offered "move into P4 alongside the L2 CSRs, **or** split its
+2026-09-10. This rule previously offered "move into P4 alongside the L2 CSRs, **or** split its
 cross-core fields per core" as two equal options and left the choice to the integrator. It is not
 open, because the two options differ in what they do to a guest kernel's DMA maintenance and
 [decisions/0010](../decisions/0010-dma-coherence-is-software-maintained.md) decision 4 builds that
@@ -1231,7 +1233,7 @@ or prose — so these are specified and unbuilt, exactly like §22.1a's tests.
 | **`P-E3`** | Measure the interference bound `P-R5` claims: with domain A saturating its quantum, the worst-case increase in B's L2 service latency, over a fixed epoch | **Killed if the measured worst case is unbounded, or if it exceeds the bound the hypervisor's admission policy assumes.** An asserted bound does not discharge **L5**; this row exists because that is stated there in those words |
 | **`P-E4`** | `movca.l` residue test, per **L6**: tenant A writes a recognisable pattern through the L2; tenant B issues `movca.l` to a line whose physical address A used, then reads the bytes it did not write | **Must be demonstrated red before `P-R7` and green after.** If it cannot be made red, the test is not testing `P-R7` |
 | **`P-E5`** | Enumerate every path by which one domain can cause an invalidate, flush or lock of a line in another domain's ways, and check each against `P-R8` | **Killed if any path exists that is reachable from non-hyperprivileged state.** The known one is the `0xabcd00c0` register of `P-R8`; the experiment exists because that one was found by reading the SoC's board YAML, which is not where anyone looks for a security control |
-| **`P-E6`** | Elaborate the L2 with `NUM_DOMAINS > 1` on a model whose CPU reports `CPUINFO[18] = TENANCY_CHECK` **clear** — no `HTCR`, hence no domain tag *(added post-F, 2026-09-09)* | **Killed if elaboration succeeds.** This is the failure §16.1 shipped with and nobody could see: a partition whose tag register is absent on the microarchitecture [decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md) makes the default, isolating nothing while [hypervisor/hardware-spec.md §4.7](../hypervisor/hardware-spec.md) asserts the channel closed. A build that cannot carry the tag must refuse to build the partition rather than build an inert one |
+| **`P-E6`** | Elaborate the L2 with `NUM_DOMAINS > 1` on a model whose CPU reports `CPUINFO[18] = TENANCY_CHECK` **clear** — no `HTCR`, hence no domain tag *(added post-F, 2026-09-10)* | **Killed if elaboration succeeds.** This is the failure §16.1 shipped with and nobody could see: a partition whose tag register is absent on the microarchitecture [decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md) makes the default, isolating nothing while [hypervisor/hardware-spec.md §4.7](../hypervisor/hardware-spec.md) asserts the channel closed. A build that cannot carry the tag must refuse to build the partition rather than build an inert one |
 
 ---
 
