@@ -1366,7 +1366,7 @@ This subsection applies when the implementation pairs this MMU with an extension
 
 > **An interior word is a *valid* opcode, and three documents said it was not.**
 > *(Corrected by Wave-3 **C3**, 2026-09-10.)* This section and
-> [../isa-density/spec.md §4.5](../isa-density/spec.md) both described word1 as
+> [../isa-density/spec.md §4.5](../isa-density/spec.md) previously read that word1 is
 > "not a valid opcode" and its execution as "garbage". On a 16-bit fixed-width ISA
 > where every even address is a legal instruction boundary, that cannot be true:
 > word1 is sixteen bits at an aligned address, and the decoder has no notion of
