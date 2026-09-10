@@ -252,6 +252,38 @@ reference is Kocher 1996, and [ooo/j32ooo-spec.md §20](../ooo/j32ooo-spec.md)
 already scopes it out correctly); denial of service and fair scheduling; and
 every residual channel enumerated in §10.
 
+> **The denial-of-service scope-out needed a boundary, and this is it.**
+> *(Wave-3 **C3**, 2026-09-10.)* Until now the clause above was the document's
+> only statement about availability, and it read as absolute — while §7.7a
+> simultaneously *accepted* an availability finding and closed it with a
+> normative rule ([`I-R8`](../iommu/hardware-spec.md), [iommu/hardware-spec.md §3.10](../iommu/hardware-spec.md)), calling it in its own words "an availability break on another tenant,
+> reachable from an ordinary mapping API". Those two positions were never
+> reconciled, and an unreconciled exception is not a scope: it is a licence to
+> argue either way about the next case. C3's task was the next case — HCALL
+> rate-limiting — so the boundary is drawn here rather than in the item.
+>
+> **The test.** An availability finding is **in scope** for this document when
+> either half holds:
+>
+> - **(a) The cost lands somewhere other than on the tenant that caused it.**
+>   Self-inflicted slowness is the tenant's own business.
+> - **(b) The effect outlives the causing tenant's scheduling quantum**, so the
+>   scheduler is not the remedy.
+>
+> Everything else is **out of scope** and stays a non-guarantee. The
+> [`I-R8`](../iommu/hardware-spec.md) finding is in scope on both halves: the failing `dma_map_*` is the *victim's*, and the
+> documented response to the resulting fault — "disable the offending device"
+> ([iommu/design-spec.md §4.4](../iommu/design-spec.md)) — persists after the
+> attacker is descheduled. That is why it was closed by a rule
+> ([iommu/hardware-spec.md §3.10](../iommu/hardware-spec.md)) and why closing it
+> was not scope creep.
+>
+> **The test is deliberately not "is it a channel".** §10 already separates
+> channels from escapes, and the IOMMU quota is neither: it is an architectural
+> effect one tenant has on another through a supported API. A test phrased on
+> mechanism would have put it back out of scope, which is the error this box
+> exists to prevent.
+
 ---
 
 ## 6. Applicability matrix, per core class
@@ -1739,6 +1771,25 @@ close one is scope expansion, not compliance.
     Closing either needs **bank partitioning**, which is set-partitioning under another name, and
     §16.1 rejects set-partitioning for a reason that has not changed — it would give each domain a
     fraction of the physical address space.
+17. **[accepted] Hypercall flooding — a guest that spends its whole quantum in `HCALL`.**
+    *(Added by C3, 2026-09-10; this is the item's decision, not a note beside it.)* `HCALL` is
+    unprivileged, so guest **user** code reaches it ([hypervisor/hardware-spec.md §3.1](../hypervisor/hardware-spec.md)),
+    and it is serializing ([hypervisor/hardware-spec.md §4.6](../hypervisor/hardware-spec.md)) —
+    [ooo/j32ooo-spec.md §4.7](../ooo/j32ooo-spec.md) prices it as "a drained ROB per hypercall".
+    **A per-guest hypercall budget is refused**, and the reason is §5's test rather than a cost
+    argument: the drained pipeline, the trap entry and the handler all run inside the flooder's
+    own gang-scheduled quantum ([hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)),
+    so the cost lands on the tenant that caused it and stops when it is descheduled. Neither half
+    of the test holds. **Gang scheduling is already the rate limiter**, and a second one would be
+    a mechanism with no bar item to satisfy, no detector, and a per-guest counter that has to be
+    saved and restored across the very switch that already bounds the thing it counts.
+    **Two consequences are recorded rather than left implied.** *(i)* The argument is a *load*
+    argument and it holds only while a hypercall's service time is charged to its caller — which
+    is exactly what [`H-R1`](../hypervisor/design-spec.md) makes a rule, because two hypercalls
+    on today's surface break it. *(ii)* `HCALL_HV_CONS_PUTCHAR` ([hypervisor/design-spec.md §4.4](../hypervisor/design-spec.md))
+    is one trap per character, which makes an early-boot console the cheapest way for a guest to
+    generate hypercalls at the maximum rate the machine allows; that is a *measurement* target for
+    D0, not a defect, and it is named so nobody rediscovers it as one.
 
 ---
 

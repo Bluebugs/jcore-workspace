@@ -342,6 +342,43 @@ HCALL_HV_INTR_EOI                 end-of-interrupt for virtual IRQ
 
 The hypercall numbering and parameter convention mirror the sun4v hypervisor API.
 
+> **`H-R1` — a hypercall handler MUST NOT hold a lock another guest needs across an
+> iteration whose length the caller influences.** *(Wave-3 **C3**, 2026-09-10. Normative.)*
+> Either bound the iteration and hold the lock, or drop and re-take it per iteration. This is
+> the one hypercall rule C3 found necessary, and the reason it is necessary is that it is the
+> premise of the decision *not* to rate-limit hypercalls at all
+> ([../security/threat-model.md §10](../security/threat-model.md) item 17): a hypercall storm
+> is self-limiting **because the caller pays for it**, and that stops being true the moment a
+> handler's cost is borne by a guest on another core.
+>
+> **The instance this rule was written for.** `HCALL_HV_IOMMU_MAP` / `HCALL_HV_IOMMU_UNMAP`
+> (§4.6) are serviced by the IOMMU driver, and [../iommu/linux-spec.md §8.2](../iommu/linux-spec.md)
+> states its own model plainly: *"The IOMMU is a single SoC-level block, not per-CPU. All CPUs
+> see the same IOMMU state. The driver uses `spin_lock_irqsave` to serialize MMIO access from
+> different CPUs."* Under that one lock, with interrupts off, `.map` walks
+> `for_each_set_bit(bmid, domain->bmids, JCORE_IOMMU_MAX_BMID)` writing one IOTLB entry per
+> attached BMID and busy-waiting on `STATUS_IOTLB_WRITE_BUSY` after each
+> ([../iommu/linux-spec.md §5.2](../iommu/linux-spec.md)); teardown busy-waits on an
+> `INVALIDATE_BMID` that [../iommu/hardware-spec.md §2](../iommu/hardware-spec.md) prices at
+> *"N cycles where N = IOTLB entry count"*. The attached-BMID count is a property of the
+> **calling guest's** domain, so guest *A* chooses how long guest *B*'s hypercall waits. That is
+> §5's clause (a) of [../security/threat-model.md](../security/threat-model.md) exactly, and it
+> is the same shape as [`I-R8`](../iommu/hardware-spec.md) at a different structure — one
+> tenant reaching another through a supported API.
+>
+> **Bounding is cheap here and the bound already exists.** A domain's BMID count is what
+> [`I-R8`](../iommu/hardware-spec.md)'s per-BMID reservation already accounts for, so `H-R1` is
+> discharged for this pair by capping attached BMIDs per domain rather than by restructuring the
+> lock. **This rule adds no mechanism to the hardware and none to the hypercall ABI**; it
+> constrains how a handler may be written, which is where every other hypercall-argument rule in
+> this document already lives (§4.6).
+>
+> **Not covered, deliberately.** `H-R1` says nothing about a handler that is merely *slow* —
+> `HCALL_HV_MMU_DEMAP_CTX`'s "flush all entries for a context" is unbounded in the plan's sense
+> but bounded by the caller's own TSB and holds nothing anyone else wants. Slowness charged to
+> the caller is [../security/threat-model.md §5](../security/threat-model.md)'s out-of-scope
+> case and stays there.
+
 ### 4.5 Guest TLB miss flow
 
 1. Guest user code touches a VA; TLB miss.
