@@ -342,12 +342,20 @@ unwired instantiation, and would fail on a rename that changed nothing. The chec
 would close this is the one 0007 also asked for: a doc-vs-code binding written *with*
 the RTL that connects the port, not before it.
 
-**One binding is available and is taken**, because it is a value and it is the value
-that makes decision 4 true: the registry binds this record's claim that the J4 build
-compiles no cache-operations file to `arch/sh/mm/Makefile`'s `cacheops-` selector for
-`CPU_J2`. If someone adds a `cacheops-$(CONFIG_CPU_JCORE)` arm — which is exactly the
-fix decision 4 asks for — the binding goes red and this record has to be revisited,
-which is the intended behaviour, not a regression.
+**One binding is available and is taken.** *(Rewritten 2026-09-10, after decision 4
+landed as `mountain-reverie/linux`#16 and the binding below replaced the one described
+next.)* The registry now binds the claim that **the J4's arm compiles `cache-jcore.o`**
+to `arch/sh/mm/Makefile`. It captures the **file**, anchored on `CONFIG_CPU_JCORE`, so
+it goes red if the arm is removed or renamed, and is unmoved by sibling arms being
+added or removed beside it.
+
+*Previously this bound the record's original claim — that the J4 build compiles no
+cache-operations file — to the `cacheops-` selector for `CPU_J2`, on the reasoning that
+adding a `cacheops-$(CONFIG_CPU_JCORE)` arm would turn it red and force this record to
+be revisited. It did not, for two reasons recorded below; and once the arm existed, a
+pattern widened to `(CPU_J\w*)` could not settle either, because it captured two values
+and had no single one to compare. Binding the file rather than the symbol is what makes
+the assertion both true and stable.*
 
 **That is what was supposed to happen, and it did not.** *(2026-09-10, from the task that
 wrote the fix.)* The arm was added and the gate stayed **green**, for two independent
