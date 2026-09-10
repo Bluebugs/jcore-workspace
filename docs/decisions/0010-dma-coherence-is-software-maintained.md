@@ -178,7 +178,7 @@ through `j2_ccr_base`, and `ARCH_HAS_SYNC_DMA_FOR_CPU` with a matching
 `arch_sync_dma_for_cpu()`. Until then the DMA API's cache maintenance on J4 is a
 no-op, and this record's decision 1 is a contract the kernel does not yet keep.
 
-**They must not be written the way `cache-j2.c` writes them.** *(Added post-F, 2026-09-09.
+**They must not be written the way `cache-j2.c` writes them.** *(Added post-F, 2026-09-10.
 This decision previously stopped at the paragraph above. As it stood it told the next
 implementer — and this is one of the very few dispatchable items in the programme — to
 harden a rule violation into the DMA hot path.)* Each of `cache-j2.c`'s three flush
