@@ -857,7 +857,19 @@ hypervisor architecture.
    - Hypervisor takes over, sets SR.HPRIV=1, returns to kernel in S-mode
    - From this point, the kernel runs as the "host OS" with the hypervisor active
 
-Alternative: HYP_AT_RESET fuse set, hypervisor boots first, then HRTEs to load the Linux kernel.
+> **This sequence is a development-board sequence, and the alternative below it is the
+> product's.** *(Wave-3 **C3**, 2026-09-10.)* Steps 3's *"Install hyperprivileged trap handlers
+> at VBR_HYP"* and *"Allocate hypervisor's runtime state"* are performed by S-mode Linux before
+> any hyperprivileged instruction has retired, so on this path the kernel above chooses what
+> code first executes at `SR.HPRIV = 1`.
+> [`H-B1`](hardware-spec.md) makes `HYP_AT_RESET` normative for any configuration hosting more
+> than one tenant, which means **`CONFIG_KVM` must not compile the `ACTIVATE_HYP` path on a
+> tenant-facing build**, and on such a build `jcore_detect_virtualization()` (§4.2) finds a
+> hypervisor that is already running rather than one it is about to start. The argument, the
+> three legs of the inversion, and why a write-once lock on `VBR_HYP` is *not* the fix are in
+> [hardware-spec.md §7.2](hardware-spec.md).
+
+Alternative — **and the product's path**: HYP_AT_RESET fuse set, hypervisor boots first, then HRTEs to load the Linux kernel.
 
 ### 5.2 Guest boot
 

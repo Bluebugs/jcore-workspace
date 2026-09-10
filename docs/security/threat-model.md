@@ -133,6 +133,23 @@ there is still no GPU RTL in either repo to run it on, and the outer boundary it
 4. **The IOMMU** ([iommu/hardware-spec.md](../iommu/hardware-spec.md)) for any
    configuration with a DMA-capable device a tenant can influence.
 5. **The boot ROM and bitstream**, trivially.
+5a. **The kernel that loads the hypervisor — but only on a build that has one, and the
+   product must not.** *(Added by Wave-3 **C3**, 2026-09-10.)* This list previously ran from
+   the hypervisor to the management plane without naming the software that *creates* item 1,
+   and the omission was not neutral: [hypervisor/hardware-spec.md §7.2](../hypervisor/hardware-spec.md)
+   offered an `HCALL #ACTIVATE_HYP` bootstrap in which S-mode Linux installs the
+   hyperprivileged trap handlers at `VBR_HYP` and hands the hypervisor a setup-descriptor
+   pointer ([hypervisor/linux-spec.md §5.1](../hypervisor/linux-spec.md)), and §1's *"No
+   control of the hypervisor"* was asserted against an adversary that, on such a build,
+   *is* control of the hypervisor. §7.2 said so itself — "the kernel briefly has more
+   privilege than the hypervisor" — and recommended shipping it anyway.
+   **C3 removed the option rather than adding this row's caveat to every other row**:
+   [`H-B1`](../hypervisor/hardware-spec.md) makes the `HYP_AT_RESET` fuse normative for any
+   multi-tenant configuration, so on the product there is no loading kernel and this entry is
+   empty. It stays on the list because an empty TCB slot that used to be occupied is the kind
+   of fact a later build option quietly refills — and because a reader of a §7.2 development
+   board needs to know that on *that* board, its guest-to-be kernel is in the TCB and the
+   exclusion list below does not apply to it.
 6. **The management plane** (board control, image build, tenant admission) — out
    of scope for the microarchitecture but named so nobody reads its absence as
    a claim that it is safe.

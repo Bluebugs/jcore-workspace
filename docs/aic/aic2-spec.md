@@ -692,7 +692,7 @@ Per [mmu/hardware-spec.md §8.3](../mmu/hardware-spec.md), wake interrupts (RTC,
 
 ### 7.4 Hypervisor bootstrap `[T2]`
 
-After the hypervisor takes control (either via `HYP_AT_RESET` fuse or HCALL bootstrap, per [hypervisor/hardware-spec.md §7](../hypervisor/hardware-spec.md)):
+After the hypervisor takes control — via the `HYP_AT_RESET` fuse on any configuration hosting more than one tenant, per [hypervisor/hardware-spec.md §7](../hypervisor/hardware-spec.md) `H-B1`; the HCALL bootstrap of §7.2 there is a development facility only, and this sentence previously offered the two as interchangeable:
 
 - It programs `AIC2_LOCK` to restrict register writes to its own BMID.
 - It clears all `GUEST_OWNED[*]` (default at reset, but reasserted as policy).
