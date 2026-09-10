@@ -598,6 +598,8 @@ and this row, which is Wave 3's last, does not either.**
 | F | Whole-implementation review across all merged tracks (security bar met, no regressions, docs↔code consistent). Then `superpowers:finishing-a-development-branch` per repo. **DONE 2026-09-09** — [j4-final-review.md](j4-final-review.md). Its findings are not this row; they are the row below. | **Opus** |
 | G | **Act on F's blocking findings.** **DONE 2026-09-10**, branch `post-f/blocking-findings`. This row did not exist when F was written, which is the point F made about the programme: F found two contradictions **between merged documents** that every prior task had missed because each verified only its own claims, and it found two obligations filed against destinations that could not act on them. Neither class had anywhere to be scheduled. What this row closed: the [`P-R8`](cache/l2-spec.md)↔[0010](decisions/0010-dma-coherence-is-software-maintained.md) collision that sat in front of the next implementer; the L2 partition's carrier, which was `PDID` — optional and absent on the in-order default path [0009](decisions/0009-in-order-fgmt-is-the-default-path.md) chose, so building the L2 would not have moved **L5**; F §3.2's stale statements; F §7's prior-art class; and F §2.2 rank 5, the `undefined` absence guard, now `site-absence-claim`. **Still open and deliberately so:** rank 3 (inversion) and rank 4 (narrowing), which no syntactic check reaches, and rank 6 (hex drift), which F ranked last and which this row did not attempt. | **Opus** |
 
+| H | **C3 — lower-severity tracked items.** **DONE 2026-09-10**, branch `c3/tracked-items`. **This row is here because C3 was in no wave.** It is the last item of [j4-remediation-plan.md §C3](j4-remediation-plan.md), it was never decomposed into this table, and §5's sequencing block below ends Wave 3 at `C2e` — so the one plan item whose own instruction was "each gets a decision" had no place to be scheduled and would have closed by being forgotten. **With it the master plan is complete as a plan.** Three of the five were fixed, two accepted with reasons, and the item the plan expected to need design (HCALL rate-limiting) needed none: C0 had already scoped availability out, and what was missing was a boundary on that scope-out, not a rate limiter. **No bar item moves** — all seven stay `NOT MET` and none of the five was gated on one, which is why [security/threat-model.md §8](security/threat-model.md)'s reverse index gives C3 a row whose bar cell reads *none* and spends the rest of the row saying why. The finding that was not "lower-severity": [aic/aic2-spec.md](aic/aic2-spec.md) §5.2 delivered a **host-owned device's interrupt into a running guest's `VBR`**, and the `VBR + 0x600 + vector_number * 0x20` stride ([priv-arch/design-spec.md §4.5](priv-arch/design-spec.md) owns the real value) that framed the whole interrupt discussion **does not exist in the RTL** and never did. | **Opus** |
+
 ## 5. Sequencing (dependency waves)
 
 ```
@@ -605,8 +607,18 @@ Wave 0  A0→A1, A2, A3a, A3b            (hotfixes — start now, parallel excep
 Wave 1  B0a/b/c, C0, D0a, D0b          (foundations — parallel with Wave 0)
 Wave 2  B4, B1, B2, B3                 (needs B0 conventions; B4 needs B0c CI)
 Wave 3  C1a..C2e                       (each needs C0 threat model + its D.3 confirm; several need D0 measurements)
-Final   F                             (needs all)
+Final   F, then G, then H              (F needs all; G is F's blocking findings; H is C3, which no wave contained)
 ```
+
+> **`C3` is missing from the Wave-3 line above and that is a defect this table
+> now records rather than repeats.** *(H, 2026-09-10.)* Wave 3 was decomposed as
+> `C1a..C2e` from [j4-remediation-plan.md](j4-remediation-plan.md)'s Track C, and
+> §C3 of that document — five items, one paragraph, no sub-numbering — was not
+> decomposed at all. The failure mode is the same one row **G** exists for: an
+> obligation with no destination closes silently. The general lesson, worth more
+> than the instance: **a plan item written as prose rather than as a list of
+> numbered sub-items is the one that does not get scheduled**, because the
+> decomposition step reads structure.
 
 - **Within a wave**, dispatch independent tasks one at a time (the skill forbids
   parallel *implementer* subagents on the same tree — conflicts). Independent
