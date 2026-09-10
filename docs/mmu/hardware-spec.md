@@ -577,10 +577,60 @@ something an attacker can predict or steer.
 
 The selector is a 16-bit Fibonacci LFSR, taps 16/14/13/11
 (`x¹⁶+x¹⁴+x¹³+x¹¹+1`, maximal length 65535). **The seed is not in the
-hardware**: the OS writes it at MMU init from real boot entropy. That is not
+hardware**: the OS writes it. That is not
 ceremony. This is an open-source core, so the polynomial and any constant seed
 compiled into the RTL are readable by anyone, and a victim sequence an attacker
 can replay offline is worth no more than a fixed choice.
+
+**Seeding is two-stage, and this paragraph previously claimed one stage that does
+not exist.** *(Corrected by Wave-3 **C3**, 2026-09-10.)* It previously read "the OS
+writes it at MMU init **from real boot entropy**". The second half is false against
+the kernel it describes, and the kernel says so in its own comments.
+`linux@origin/jcore`'s `arch/sh/include/asm/mmu_context.h` writes
+`get_random_u32()` to `JCORE_TSB_VSEED` inside `enable_mmu()` and records that this
+is *"only a BEST-EFFORT boot seed: `enable_mmu()` for CPU0 runs from `setup_arch()`,
+which `init/main.c` calls BEFORE `random_init_early()` and `random_init()`, so
+`get_random_u32()` here draws on essentially no mixed-in entropy yet."*
+`arch/sh/kernel/cpu/jcore/probe.c` then supplies the real seed from a
+`late_initcall`, `jcore_reseed_tsb_vseed()`, over `on_each_cpu()` — and gives the
+reason this platform in particular needs it: *"on a J-core FPGA target there is no
+`RDSEED` and no bootloader entropy to fall back on."*
+
+**Three consequences, none of which was written down.**
+
+1. **There is a window.** Everything between MMU enable and `late_initcall` runs on a
+   seed drawn before the kernel RNG was initialised. On this platform that is close
+   to a fixed value across boots. The window is real, it is short, and it covers
+   early boot only — which is why the answer is to *state* it rather than to grow a
+   mechanism for it.
+2. **A payload that never writes `TSBVSEED` runs the published sequence forever, and
+   nothing says so.** Reset leaves the state at zero, the lock-up value, which heals
+   to `x"ACE1"`; the sequence from there is arithmetic anyone can reproduce, and the
+   first nomination is way 1. `jcore-cpu@origin/master`'s own bare-metal harnesses
+   depend on exactly that (`sim/tests/mmulinux.S`: *"this bare-metal harness never
+   calls `jcore_tsb_victim_seed_init()` and the LFSR sits at its self-heal
+   constant"*), which is fine for a harness and is a silent, un-signalled loss of the
+   whole mechanism for a firmware, an RTOS, or a hypervisor that forgets. **This is
+   the failure the self-heal was introduced to make non-silent, and it made the
+   *slowness* non-silent while leaving the *predictability* silent.**
+3. **A re-seed is owed at every tenant ownership change**, not only at boot.
+   `TSBVSEED` is per-core, no gang-switch item reached it, and the microreset cannot
+   supply one because it has no entropy to write. It is now item 6 of
+   [../hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md).
+
+**No hardware entropy source is added, and that is a decision.** There is none in
+either repository today — `git grep -i` for `lfsr`, `prng`, `trng`, `ring.osc`,
+`entropy` and `hwrng` over `jcore-soc@origin/master`'s `.vhd`/`.vhm` returns
+nothing, and this LFSR is the sole synthesizable pseudo-random structure in
+`jcore-cpu@origin/master`. Adding a ring-oscillator or metastability TRNG would be
+new IP needing its own [../glossary.md §2](../glossary.md) screen, new area on a part
+whose budget is contested, and a new health-test and failure-mode story — all to
+serve **one bit of hardening** which §2.13a below already declines to call a
+boundary. The cheap controls exist and are software: the `late_initcall` re-seed,
+which ships, and item 6's ownership-change re-seed, which is one register write on a
+path that already performs several. If a future part gains a TRNG for another reason,
+seeding this selector from it is free; that is a reason to keep the write-only port,
+not a reason to build one.
 
 **Only the 1-bit nomination is exposed.** `TSBVSEED` has no read case at all
 and returns a hard zero — deliberately, not by omission: if software could
@@ -604,6 +654,26 @@ cutoff — A. J. Smith, "Cache Memories", ACM Computing Surveys 14(3), 1982;
 Hennessy & Patterson, any edition ≤4th; and it is the replacement policy of
 essentially every ARM core of the era. *Pre-2006 publication is evidence of
 prior art, not patent clearance.*
+
+**Prior art for the *seeding and re-seeding* half** *(added by C3, 2026-09-10,
+because the paragraph above grounds the random choice and nothing grounded the
+seed management the paragraphs above now make normative).* J. Kelsey, B. Schneier
+and N. Ferguson, *Yarrow-160: Notes on the Design and Analysis of the Yarrow
+Cryptographic Pseudorandom Number Generator*, Counterpane Systems — **read at
+source**. It names re-seeding as a first-class component of a generator rather
+than an initialisation step: *"The process of combining the existing key and new
+sample(s) into a new key is called the reseeding"*, with *"A Reseed Mechanism
+which periodically reseeds the key with new entropy from the pools"* and *"A
+Reseed control that determines when a reseed is to be performed"* listed as two
+of the design's four components. It also gives the boot-entropy mechanism
+directly: *"If a system is shut down and restarted, it is desirable to store some
+high-entropy data (such as the key) in non-volatile memory. This allows the PRNG
+to be restarted in an unguessable state at the next restart. We call this stored
+data the seed file."* §4.7.1 item 6's ownership-change re-seed is that reseed
+control with the domain switch as its trigger. **Venue caveat, stated rather than
+implied:** the copy read carries no venue line. Yarrow-160 is standardly
+attributed to Selected Areas in Cryptography 1999 (LNCS 1758); **that attribution
+was not verified here**, only the authors, title, affiliation and the quoted text.
 
 ### 2.13a Isolation is partitioning, not hashing
 

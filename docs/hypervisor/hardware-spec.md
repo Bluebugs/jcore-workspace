@@ -1288,7 +1288,7 @@ the boundary:
 | 3 | Invalidate predictors, BTB, RAS and stride tables, **per context** | [../ooo/j32ooo-spec.md §20.4](../ooo/j32ooo-spec.md) | one register write each |
 | 4 | Invalidate L1-I and L1-D | SH-4 `CCR.ICI` / `CCR.OCI`. **L1-D is write-through** ([../ooo/j32ooo-spec.md §11.2](../ooo/j32ooo-spec.md)), so there is no dirty data to write back and this is an invalidate, not a flush | one register write each |
 | 5 | Flush the TLB | tens of entries; `ASID_TAG` tagging makes this unnecessary for *correctness*, and it is done for the channel | negligible |
-| 6 | Switch `TSBBR`, `PDID`, `HTCR` | already per-guest or per-context (§2.8, §2.10, design-spec §3.8). **`L2WAYMASK` is not in this list and was, until post-F 2026-09-10:** it is indexed *by* the tenant rather than switched with it, so a gang switch that reassigns ways writes it as part of admitting the incoming tenant ([design-spec.md §6.2](design-spec.md) item 1), not as part of the context swap. Switching `HTCR` is what re-points the L2 tag ([../cache/l2-spec.md §16.1](../cache/l2-spec.md)) | three register writes |
+| 6 | Switch `TSBBR`, `PDID`, `HTCR`, **and re-seed the TSB victim selector** | already per-guest or per-context (§2.8, §2.10, design-spec §3.8). **The re-seed is new** *(Wave-3 **C3**, 2026-09-10)*: `TSBVSEED` ([../mmu/hardware-spec.md §2.13](../mmu/hardware-spec.md)) is per-core state that no other item on this list touches, and it is the **only** hardware pseudo-random source in `jcore-cpu@origin/master`. It is here rather than in §4.7.1a's microreset because a *clear* would be actively worse than doing nothing — zero is the LFSR's lock-up state and self-heals to a compile-time constant, so scrubbing it would pin every incoming tenant to the same published sequence. Only a write of fresh entropy is a scrub for this structure, and hardware has none to write. **`L2WAYMASK` is not in this list and was, until post-F 2026-09-10:** it is indexed *by* the tenant rather than switched with it, so a gang switch that reassigns ways writes it as part of admitting the incoming tenant ([design-spec.md §6.2](design-spec.md) item 1), not as part of the context swap. Switching `HTCR` is what re-points the L2 tag ([../cache/l2-spec.md §16.1](../cache/l2-spec.md)) | three register writes |
 | 7 | **Scrub the store-queue buffers, per context** | [../sq/spec.md §6.5](../sq/spec.md) rule **SQ-R3**: the hyperprivileged `HSQCR` write clears the buffer of every queue whose written `VALIDn` is 0, so the `HSQCR` write that ends [../sq/spec.md §7](../sq/spec.md)'s restore **is** the scrub | none — it is item 10's own `HSQCR` write |
 | 8 | **Scrub the FP and SIMD register files, per context** | [../fpu/spec.md §7.7](../fpu/spec.md) rule **FP-R3** and [../simd/spec.md §2.6.1](../simd/spec.md) rule **V-R3**: the hyperprivileged `FPDS` / `VDS` write that records the change of owner applies each file's defined scrub value to every bit of it, in the same step | the two writes, plus each file's save and only where the dirty state says the outgoing tenant wrote it |
 | 9 | **Microreset the core's untagged transient state** | §4.7.1a: write `HMRC.SCRUB` = 1 (§2.11), then poll `HMRC.SCRUB` to 0 | unknown at this stage — needs measurement |
@@ -1390,12 +1390,35 @@ following **4** structure classes:
 | # | Class | Why nothing else on the list reaches it |
 |---|---|---|
 | 1 | **Miss-handling state** — MSHRs, fill buffers, and the miss handler's own sequencing state, including entries allocated by a context that has since been quiesced | There is no software-visible control that clears an MSHR. Item 4's cache invalidate clears tags and valid bits; a fill already in flight is not a tag |
-| 2 | **Replacement-policy state** of the L1-I, the L1-D and the TLB — pLRU trees, LFSR seeds, round-robin pointers | `CCR.ICI`/`CCR.OCI` clear valid bits and do not touch replacement state. That state is a per-set record of which lines the outgoing tenant touched, which is the same information the valid bits carried |
+| 2 | **Replacement-policy state** of the L1-I, the L1-D and the TLB — pLRU trees, LFSR seeds, round-robin pointers. **Not** the TSB victim selector; see the note below | `CCR.ICI`/`CCR.OCI` clear valid bits and do not touch replacement state. That state is a per-set record of which lines the outgoing tenant touched, which is the same information the valid bits carried |
 | 3 | **FGMT thread-select state** — the ready-thread arbiter's priority state, and the switch-on-miss history of [../glossary.md §4](../glossary.md)'s default path | It is introduced by the threading model and appears in no per-structure control. It is also the structure that exists only on the path [../decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md) made the default |
 | 4 | **Any store or write buffer between a write-through L1-D and the L2**, on implementations that have one | The L1-D is write-through ([../decisions/0007](../decisions/0007-l1d-write-policy-under-msi.md)), so there is no dirty write-back for item 4 to flush — but "nothing to write back" is not "nothing held". This class is stated conditionally because whether such a buffer exists is a property of the implementation, not of this specification |
 
+> **Class 2 names a structure that exists and one that does not, and C3 found it by looking for
+> the second.** *(2026-09-10.)* "LFSR seeds" in class 2 is written against the L1-I, the L1-D and
+> the TLB. **None of those has one.** In `jcore-cpu@origin/master` both L1s are direct-mapped and
+> hold no replacement state at all, and `core/tlb.vhd` replaces by NRU with an ascending scan —
+> "prefer an invalid slot, else a not-recently-used one, else clear all *used* bits and take slot
+> 0" — which is fully deterministic and needs no seed. The clause is therefore forward-looking,
+> and correctly so, since a set-associative L1 or an L2 would bring one.
+>
+> Meanwhile the **one** pseudo-random source the design does have — the TSB victim selector's
+> 16-bit LFSR, `core/datapath_pkg.vhd`'s `tsb_lfsr_next` — fell between the two lists: it is not
+> in the L1-I, the L1-D or the TLB, so class 2 did not reach it, and it has a software-visible
+> control, so §4.7.1's items 3–8 logic said it belonged there and no item claimed it. That is the
+> exact gap **C2c**'s question was asked to find, arriving from the opposite direction: not a
+> structure with no control, but a control with no item.
+>
+> **It is excluded from the microreset deliberately, not by oversight.** `HMRC.SCRUB` clears
+> structures to a reset value. Clearing this one writes zero, zero is the LFSR's lock-up state,
+> and it self-heals to the compile-time constant `x"ACE1"` — so a microreset that included it
+> would hand **every** incoming tenant the identical published sequence, which is worse than the
+> residue it was meant to remove. The scrub for this structure is a *re-seed*, it needs entropy,
+> and hardware has none: §4.7.1 item 6 makes it the hypervisor's write.
+
 **Out of scope, enumerated so the list is closed rather than open-ended.**
 
+- **The TSB victim selector**, per the note above — §4.7.1 item 6 owns it.
 - **Everything items 3–8 already clear.** Two controls for one structure leaves neither of them the
   authority ([../decisions/0001](../decisions/0001-one-authority-per-fact.md)), and the one that is
   not used in practice is the one that rots.
