@@ -15,8 +15,8 @@
 ## Changelog
 
 - **v0.4** (2026-09-09, Wave-3 **C2e**): Added §16.2 (`P-R1`–`P-R8`), §16.3 (what partitioning does
-  not close — **10** residual channels classified: four closed, two mitigated, four accepted, two
-  of them found by this task), §16.4
+  not close — each remaining channel marked closed, mitigated or accepted, two of them found by
+  this task), §16.4
   (`P-E1`–`P-E5`) and §22.1b. **Narrowed §16.1's "Why this closes the channel" to the occupancy
   channel** and deleted the justification for unrestricted hits, which was wrong in two ways.
   Corrected §16.1's sizing sentence, which licensed a way split `P-R1` does not allow. `movca.l` no
