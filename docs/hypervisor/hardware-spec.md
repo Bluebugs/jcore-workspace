@@ -1431,12 +1431,35 @@ carried over deliberately and for §20.7's reason; the fourth is this item's own
 
 **Why the microreset does not subsume items 3–8, which is the obvious simplification.** Two
 reasons, and the first is dispositive. **Ordering:** items 7 and 8 are not separate actions at all —
-their mechanisms are hardware side effects of the `HSQCR`, `FPDS` ([../fpu/spec.md §7.7](../fpu/spec.md))
-and `VDS` ([../simd/spec.md §2.6.1](../simd/spec.md)) writes that item 10
-performs *as part of the restore*. A single whole-core reset placed before the restore cannot
-perform them, and one placed after would erase the restore it followed. **Authority:** an L1
-invalidate reachable both through `CCR.ICI` and through `HMRC` makes one of the two the
-second-class path, and this project has a record about what happens to second copies.
+their mechanisms are hardware side effects of register writes the switch already performs, so a
+single whole-core reset placed before those writes cannot perform them and one placed after would
+erase what it followed. **Authority:** an L1 invalidate reachable both through `CCR.ICI` and
+through `HMRC` makes one of the two the second-class path, and this project has a record about
+what happens to second copies.
+
+**Which write, and on which side of the boundary — items 7 and 8 differ, and this paragraph used
+to say they did not.** *(Corrected post-F, 2026-09-09. It read "hardware side effects of the
+`HSQCR`, [`FPDS`](../fpu/spec.md) and [`VDS`](../simd/spec.md) writes that item 10 performs **as
+part of the restore**", which is true of one of the three and false of the other two — and the
+false half is the dangerous one, because
+"as part of the restore" invites an implementer to skip it for a context that has nothing to
+restore, which is precisely the no-image branch [../security/threat-model.md §8](../security/threat-model.md)
+**L3** requires as its own test case.)*
+
+- **Item 8 is on the *outgoing* side, at item 8's position.**
+  [`FP-R3`, fpu/spec.md §7.7](../fpu/spec.md) is explicit that the gang switch writes
+  `FPDS` = `00` "because that write *is* how it
+  records that the physical file no longer belongs to the **outgoing** vCPU", and that a restore
+  "**if there is one**, follows and overwrites the whole file".
+  Same for [`VDS`, §2.6.1 `V-R3`](../simd/spec.md). So the write happens whether or not a
+  restore follows it, and a fresh vCPU gets the scrub with no restore after it.
+- **Item 7 is on the *incoming* side, at item 10.** [../sq/spec.md §6.5](../sq/spec.md) `SQ-R3`
+  places it there by design — §7's restore writes `HSQCR` last and unconditionally, and a fresh
+  vCPU's `HSQCR` is the reset value `0` (§2.7), so the restore scrubs both queues.
+- **The invariant that covers both**, and the one to hold an implementation to: *every one of
+  these writes is unconditional and per context, and none of them is conditioned on there being
+  an image to restore.* Both rules state that in their own third consequence; this list is where a
+  reader of the checklist finds it.
 
 **What the microreset is not, and what still is not covered.** It is a *flush*, not a *placement*
 control: a gang switch that performs items 1–8 and 10 but skips item 9 leaves residue, and §4.7.2's

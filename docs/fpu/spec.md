@@ -2017,9 +2017,14 @@ Three consequences, and the third is the one this task exists for.
 2. A restore, if there is one, follows and overwrites the whole file, ending with `FPDS` = `01`.
    A queue-shaped partial restore is impossible here because the image of §7.4 covers every
    architectural bit.
-3. **A fresh vCPU with no saved image is covered by construction.** Its restore is the scrub and
-   nothing else. The no-image branch is not a second code path that could be forgotten; it is the
-   same write with no restore after it. This is the branch
+3. **A fresh vCPU with no saved image is covered by construction.** The `FPDS` = `00` write of
+   consequence 1 has already happened on the outgoing side, so the fresh context finds a scrubbed
+   file and there is simply no restore after it. *(That sentence read "Its restore is the scrub and
+   nothing else", which reads as siting the write inside the restore; it is not, and
+   [../hypervisor/hardware-spec.md §4.7.1](../hypervisor/hardware-spec.md)'s ordering paragraph had
+   taken it that way and generalised it to all three writes. Corrected post-F, 2026-09-09 — the
+   mechanism is unchanged, the placement is now stated once.)* The no-image branch is not a second
+   code path that could be forgotten; it is the same write with no restore after it. This is the branch
    [../security/threat-model.md §7.8](../security/threat-model.md) identifies and that **L3**
    requires as its own test case, and it is why FP-R3 is not conditioned on there being an image.
 

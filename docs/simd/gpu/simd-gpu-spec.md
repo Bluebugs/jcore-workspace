@@ -950,36 +950,54 @@ fetches fill. Each resident context has a numeric **`GCID`** and a window:
 > Consequently:
 >
 > 1. **Multi-tenant GPU operation requires both halves**, and the ordering is
->    hard: C2d before any GPU bring-up that runs more than one tenant. Today the
->    IOMMU resets with `BMID_BYPASS_*` all-ones — every master bypasses — and
->    `ENABLE = 0` ([../../iommu/hardware-spec.md §8](../../iommu/hardware-spec.md)),
->    so routing GPU traffic through it buys nothing until C2d changes that. It is
->    weaker still than "unconfigured": no IOMMU RTL exists in `jcore-soc` or
->    `jcore-cpu` at `origin/master` either (case-insensitive `iommu`, `bmid`:
->    zero files).
-> 2. **The GPU has no BMID.** [../../bus/fabric-spec.md §4.4](../../bus/fabric-spec.md)'s
->    normative allocation policy has no GPU row and its §4.5 worked example has
->    none, although [../../iommu/design-spec.md §4.1](../../iommu/design-spec.md)'s
->    topology diagram draws a GPU as an initiator. Assigning one is fabric-spec
->    work that no task currently schedules, and it is a precondition of clause 1.
+>    hard: C2d before any GPU bring-up that runs more than one tenant. **C2d has
+>    since landed and this clause's premise is retired** *(corrected post-F,
+>    2026-09-09)*: it read "Today the IOMMU resets with `BMID_BYPASS_*` all-ones
+>    — every master bypasses — and `ENABLE = 0` …, so routing GPU traffic through
+>    it buys nothing until C2d changes that". C2d changed exactly that.
+>    [../../iommu/hardware-spec.md §8](../../iommu/hardware-spec.md) now resets
+>    `IOMMU_CTRL` to `ENABLE = 1` with `BMID_BYPASS_*` **all zeros**, and states
+>    *"out of reset the IOMMU is active and every BMID is denied"* — which is
+>    [`I-R1`](../../iommu/hardware-spec.md). So routing GPU traffic through it buys the default-deny, and the
+>    ordering constraint this clause states survives its own premise being
+>    reversed: what C2d has to precede is now GPU bring-up *claiming a BMID*
+>    rather than GPU bring-up finding a bypass. What has not changed is that no
+>    IOMMU RTL exists in `jcore-soc` or `jcore-cpu` at `origin/master`
+>    (case-insensitive `iommu`, `bmid`: zero files), so the deny is specified and
+>    unbuilt like everything else here.
+> 2. **The GPU has no BMID, and this obligation now has an owner.**
+>    [../../bus/fabric-spec.md §4.4](../../bus/fabric-spec.md)'s normative
+>    allocation policy had no GPU row and its §4.5 worked example had none,
+>    although [../../iommu/design-spec.md §4.1](../../iommu/design-spec.md)'s
+>    topology diagram draws a GPU as an initiator — and this clause filed the
+>    work with a document that contained **no occurrence of "GPU" at all**, which
+>    is a filing no reader of that document could act on. *(Corrected post-F,
+>    2026-09-09.)* §4.4 now carries the GPU's allocation, so what remains is not
+>    "no task schedules it" but the same blocker bar item **L2** already carries:
+>    no record in either repository has a master-identifier field to put it in.
+>    Tracked in [../../security/threat-model.md §11](../../security/threat-model.md).
 > 3. **If the GPU arrives before either half, it runs single-tenant.** Exactly one
 >    tenant owns the whole GPU at a time — the shape bar item **L1** already
 >    imposes on a core — and G-R8's scrub still applies on handover, because
 >    handover between single tenants is precisely an ownership change. This is
 >    recorded as a supported degraded mode rather than left as an implication, so
 >    that shipping it is a decision somebody made.
-> 4. **The multi-tenant mode needs one more thing that is not C2d.** **L1** reads
->    "no two tenants occupy thread contexts of one core at any instant" and
->    "cross-tenant fine-grained MT is out of bounds for launch", and an SM is a
->    barrel-threaded core holding 4–8 warps resident
->    ([architecture.md §1.1, §3.1](architecture.md)). Whether an SM is "a core"
->    for L1 is undecided in the text, and the two readings differ on whether the
->    multi-tenant mode is legal at launch at all
->    ([../../security/threat-model.md §8, item L1](../../security/threat-model.md)).
->    Until that is resolved by whoever owns L1, clause 3's single-tenant mode is
->    the only mode this section claims is launch-legal. G-R1..G-R9 remain
->    required in it: they are what separates *processes* inside the one tenant,
->    and what keeps a shader bug inside the tenant that wrote it.
+> 4. **The multi-tenant mode needs one more thing that is not C2d, and the
+>    question this clause used to pose is answered above.** **L1** reads "no two
+>    tenants occupy thread contexts of one core at any instant" and "cross-tenant
+>    fine-grained MT is out of bounds for launch", and an SM is a barrel-threaded
+>    core holding 4–8 warps resident ([architecture.md §1.1, §3.1](architecture.md)).
+>    *(Corrected post-F, 2026-09-09: this clause read "Whether an SM is 'a core'
+>    for L1 is undecided in the text … Until that is resolved by whoever owns L1"
+>    — forty-nine lines below the paragraph in which whoever owns L1 resolved it.
+>    A reader arriving at the rule got the open question and not the answer,
+>    which is the failure the conventions exist to prevent.)* **An SM is a core
+>    for L1**, decided 2026-09-09 by Wave-3 C2c; see the G-R9 note above for the
+>    argument and the consequence. So clause 3's single-tenant mode is the only
+>    mode this section claims is launch-legal — the same conclusion the open
+>    question reached, now for a stated reason rather than by caution. G-R1..G-R9
+>    remain required in it: they are what separates *processes* inside the one
+>    tenant, and what keeps a shader bug inside the tenant that wrote it.
 
 ### 16.4 Rejected alternatives
 

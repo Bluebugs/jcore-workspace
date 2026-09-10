@@ -322,10 +322,20 @@ Data fields.
 [23:16]  PFN[39:32]     High PFN bits (J64)
 [15:8]   reserved
 [7:4]    reserved
-[3]      CACHEABLE      Device transaction snoops CPU caches
-[2]      WBA            Write-back acknowledge (for posted writes)
+[3]      CACHEABLE      Cacheability attribute forwarded to the fabric. NOT a
+                        coherency guarantee -- the IOMMU has no path to any
+                        cache. See I-R9 and §7.1.
+[2]      WBA            Write-back-acknowledge attribute forwarded to the fabric.
+                        Same status: an attribute, not a promise (§7.1).
 [1:0]    reserved
 ```
+
+*(Corrected post-F, 2026-09-09.* `CACHEABLE`'s one-line description read *"Device
+transaction snoops CPU caches"* and `WBA`'s read *"Write-back acknowledge (for
+posted writes)"*. §7.1 and [decisions/0010](../decisions/0010-dma-coherence-is-software-maintained.md)
+withdrew exactly that promise, and `I-R9` makes both bits attributes — but the
+field description is what an RTL engineer implements from, and it still promised
+the snoop.*)*
 
 ### 3.9 BMID_BYPASS_* (0x0100–0x011F)
 
@@ -383,7 +393,7 @@ gates or names one:
 | 2 | `BMID_BYPASS[BMID] = 1` | `I-R1` (reset all-zeros), `I-R7` (restored to 0 before release) |
 | 3 | `IOMMU_CTRL.SUPER_BYPASS = 1` | `I-R4` (reset 0, self-arming lock) |
 | 4 | BMID `0x00`, *"untagged / bypass"* ([bus/fabric-spec.md §4.3](../bus/fabric-spec.md)) | `I-R6` (blocked, never bypassed) |
-| 5 | BMID `0xFF`, which that section makes a **permanent** bypass | `I-R6` (blocked; and the fabric must not assign it) |
+| 5 | BMID `0xFF`, which that section made a **permanent** bypass until C2d reversed it | `I-R6` (blocked; and the fabric must not assign it) |
 | 6 | an IOTLB entry with `GLOBAL = 1`, matching every BMID | `I-R5` (never matches; refused at install) |
 | 7 | a master whose path to memory does not traverse the IOMMU at all | **Not closed — named.** `I-R1a` |
 
