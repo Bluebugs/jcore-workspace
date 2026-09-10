@@ -1717,7 +1717,7 @@ The invariants:
      `V->fpu_image[]` (§7.4). Else: apply the [§7.7](#77-cross-tenant-fp-ownership-eager-switch-dirty-tracking-scrub-normative-t2)
      scrub — every architectural bit of the file takes rule FP-R1's
      defined value, not merely `FPSCR`.
-     *(This branch read "FR/XF/FPUL = undefined per SH-4, but the
+     *(This branch previously read "FR/XF/FPUL = undefined per SH-4, but the
      hypervisor must write at least FPSCR to its default to ensure
      determinism" until 2026-09-09. That was
      [../security/threat-model.md §7.8](../security/threat-model.md)'s
@@ -1889,7 +1889,7 @@ same reason.
 
 [../security/threat-model.md §1](../security/threat-model.md)'s adversary is a guest kernel handed
 a core another tenant used. §7.3's restore branch handed it the previous tenant's registers. Until
-this section it read:
+this section it previously read:
 
 > Else: reset the physical FPU to post-reset defaults (FPSCR = …, FR/XF/FPUL = undefined per
 > SH-4, but the hypervisor must write at least FPSCR to its default to ensure determinism).

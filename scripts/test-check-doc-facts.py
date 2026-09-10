@@ -117,6 +117,12 @@ VG_CANON = r"(\d+)[-\s]byte\s+SIMD\s+(?:[\w/-]+\s+)*image"
 # against a number written into the checker.
 VE_CANON = r"\*\*(\d+)\*\* isolation rules"
 
+# The fixture's absence claim. `site-absence-claim` scans `simd.md` for this,
+# and every match must sit on -- or within ABSENCE_LOOKBACK lines below -- a
+# retraction marker. Named here so the cases mutate THIS rather than a copy
+# that drifts, exactly as VG_CANON and VE_CANON are.
+AC_PATTERN = r"(?:\*\*)?undefined(?:\*\*)? content"
+
 REGISTRY = """# Fact ownership registry
 
 ## Registry
@@ -145,6 +151,12 @@ REGISTRY = """# Fact ownership registry
 |---|---|---|
 | `simd.rules` | `#` | `Rule` |
 
+## Absence claims
+
+| Site | Document | Retired wording |
+|---|---|---|
+| `simd.tail` | [simd.md](simd.md) | `{AC}` |
+
 ## Image layouts
 
 | Fact ID |
@@ -161,7 +173,8 @@ REGISTRY = """# Fact ownership registry
 
 | Fact ID | File | Why |
 |---|---|---|
-""".replace("{VG}", VG_CANON).replace("{VE}", VE_CANON)
+""".replace("{VG}", VG_CANON).replace("{VE}", VE_CANON)\
+     .replace("{AC}", AC_PATTERN)
 
 GLOSSARY = """# Glossary
 
@@ -181,6 +194,9 @@ The 520-byte SIMD image is the architectural size.
 | 0x200  | 4     | P0            |
 | 0x204  | 4     | VCSR          |
 | 0x208  | —     | end (520 bytes) |
+
+> **SUPERSEDED — 2026-09-09.** This section previously read that the tail bytes
+> have **undefined** content. They are zero.
 
 There are **3** isolation rules:
 
@@ -1788,6 +1804,175 @@ def _(tmp):
     # An orphaned row is how a rename quietly switches a check off.
     build(tmp, registry=REGISTRY.replace("| `simd.rules` | `#` | `Rule` |",
                                          "| `simd.absent` | `#` | `Rule` |"))
+
+
+# ------------------------------------- Post-F: site-absence-claim
+#
+# The class this closes: a wording a document RETIRED coming back as current
+# text while the count that says the site is closed stays put. `docs/fact-
+# ownership.md` records Wave-3 C2e demonstrating it twice, and both passing --
+# `P-R7` inverted so `movca.l`'s remainder is "undefined until written" again
+# with `security.l6.undefined` still reading 0, and §17.5's instruction-table
+# row reverted with `P-R7` left standing. Two registered facts contradict each
+# other and no check relates them. `sq/spec.md` §6.5 filed the guard against
+# Wave-1 B0c, which had already closed; C1b and C2e declined it; Task F ranked
+# it 5 and recommended rather than implemented. The first two cases are those
+# two disclosures.
+
+
+@case("a retired wording reasserted as current text fails, retraction intact",
+      True, expect_check="site-absence-claim",
+      expect_text="with no retraction marker")
+def _(tmp):
+    # C2e's SECOND disclosure, which is the harder one: the retraction is still
+    # there and correct, and the sentence a reader actually reads has gone back
+    # to the retired wording three sections away from it. Both halves of one
+    # fix, only one reverted.
+    build(tmp, simd=SIMD.replace(
+        "There are **3** isolation rules:",
+        "Tail bytes have **undefined** content.\n\nThere are **3** isolation "
+        "rules:"))
+
+
+@case("a retired wording reasserted with the retraction deleted fails", True,
+      expect_check="site-absence-claim",
+      expect_text="with no retraction marker")
+def _(tmp):
+    # C2e's FIRST disclosure: the rule itself inverted. The retraction goes
+    # with it, because whoever reverts the rule reverts its history.
+    build(tmp, simd=SIMD.replace(
+        "> **SUPERSEDED — 2026-09-09.** This section previously read that the "
+        "tail bytes\n> have **undefined** content. They are zero.",
+        "Tail bytes have **undefined** content."))
+
+
+@case("a retired wording deleted altogether fails as unguarded", True,
+      expect_check="site-absence-claim",
+      expect_text="matches nothing")
+def _(tmp):
+    # The arm that stops this becoming decorative. With the wording gone the
+    # row can never notice it coming back, so it would pass forever while
+    # guarding nothing -- which is worse than not having the row, because the
+    # table says the site is guarded. `no-stale-value` fails the same way when
+    # its canonical pattern finds nothing in the owner.
+    build(tmp, simd=SIMD.replace(
+        "> **SUPERSEDED — 2026-09-09.** This section previously read that the "
+        "tail bytes\n> have **undefined** content. They are zero.\n\n", ""))
+
+
+@case("a retraction marker on the SAME line as the match passes", False)
+def _(tmp):
+    build(tmp, simd=SIMD.replace(
+        "> **SUPERSEDED — 2026-09-09.** This section previously read that the "
+        "tail bytes\n> have **undefined** content. They are zero.",
+        '> This section previously read "tail bytes have **undefined** '
+        'content".'))
+
+
+@case("a marker ABSENCE_LOOKBACK lines above the match passes", False)
+def _(tmp):
+    # Two lines above is the limit, and the tree's own idiom needs it: the
+    # marker introduces a block quotation with a blank line between.
+    build(tmp, simd=SIMD.replace(
+        "> **SUPERSEDED — 2026-09-09.** This section previously read that the "
+        "tail bytes\n> have **undefined** content. They are zero.",
+        "This section previously read:\n\n> Tail bytes have **undefined** "
+        "content."))
+
+
+@case("a marker one line beyond the window fails", True,
+      expect_check="site-absence-claim",
+      expect_text="with no retraction marker")
+def _(tmp):
+    # The window has to have an edge, and the edge has to be asserted in both
+    # directions or a widened one is invisible. A window big enough to reach
+    # the previous paragraph would exempt a reintroduced rule that merely
+    # follows somebody else's retraction.
+    build(tmp, simd=SIMD.replace(
+        "> **SUPERSEDED — 2026-09-09.** This section previously read that the "
+        "tail bytes\n> have **undefined** content. They are zero.",
+        "This section previously read:\n\n\n> Tail bytes have **undefined** "
+        "content."))
+
+
+@case("a bare document path, not a link, resolves", False)
+def _(tmp):
+    build(tmp, registry=REGISTRY.replace(
+        "| `simd.tail` | [simd.md](simd.md) |",
+        "| `simd.tail` | `simd.md` |"))
+
+
+@case("a missing '## Absence claims' section fails closed", True,
+      expect_check="site-absence-claim",
+      expect_text="This is a failure, not a skip")
+def _(tmp):
+    # Fails CLOSED like every other registry table: a renamed heading must not
+    # silently switch the check off.
+    build(tmp, registry=REGISTRY.replace("## Absence claims", "## Notes"))
+
+
+@case("an empty Absence claims table fails", True,
+      expect_check="site-absence-claim", expect_text="has no rows")
+def _(tmp):
+    build(tmp, registry=REGISTRY.replace(
+        "| `simd.tail` | [simd.md](simd.md) | `" + AC_PATTERN + "` |\n", ""))
+
+
+@case("a malformed absence-claim row fails", True,
+      expect_check="site-absence-claim", expect_text="malformed row")
+def _(tmp):
+    build(tmp, registry=REGISTRY.replace(
+        "| `simd.tail` | [simd.md](simd.md) | `" + AC_PATTERN + "` |",
+        "| `simd.tail` | [simd.md](simd.md) |"))
+
+
+@case("an absence claim with an empty site name fails", True,
+      expect_check="site-absence-claim", expect_text="empty site name")
+def _(tmp):
+    build(tmp, registry=REGISTRY.replace(
+        "| `simd.tail` | [simd.md](simd.md) | `" + AC_PATTERN + "` |",
+        "|  | [simd.md](simd.md) | `" + AC_PATTERN + "` |"))
+
+
+@case("two rows for one site fail", True,
+      expect_check="site-absence-claim", expect_text="One site, one claim")
+def _(tmp):
+    # How a claim gets quietly replaced by a weaker one: both rows run, the
+    # weak one passes, and the table still says the site is guarded.
+    build(tmp, registry=REGISTRY.replace(
+        "| `simd.tail` | [simd.md](simd.md) | `" + AC_PATTERN + "` |",
+        "| `simd.tail` | [simd.md](simd.md) | `" + AC_PATTERN + "` |\n"
+        "| `simd.tail` | [simd.md](simd.md) | `nothing-matches-this` |"))
+
+
+@case("an absence claim naming no document fails", True,
+      expect_check="site-absence-claim", expect_text="names no document")
+def _(tmp):
+    build(tmp, registry=REGISTRY.replace(
+        "| `simd.tail` | [simd.md](simd.md) | `" + AC_PATTERN + "` |",
+        "| `simd.tail` |  | `" + AC_PATTERN + "` |"))
+
+
+@case("an absence claim naming a missing document fails", True,
+      expect_check="site-absence-claim", expect_text="missing or unreadable")
+def _(tmp):
+    build(tmp, registry=REGISTRY.replace(
+        "| `simd.tail` | [simd.md](simd.md) |",
+        "| `simd.tail` | [gone.md](gone.md) |"))
+
+
+@case("an absence claim with an empty pattern fails", True,
+      expect_check="site-absence-claim", expect_text="empty pattern")
+def _(tmp):
+    build(tmp, registry=REGISTRY.replace(
+        "| `simd.tail` | [simd.md](simd.md) | `" + AC_PATTERN + "` |",
+        "| `simd.tail` | [simd.md](simd.md) |  |"))
+
+
+@case("an uncompilable absence-claim pattern fails", True,
+      expect_check="site-absence-claim", expect_text="uncompilable pattern")
+def _(tmp):
+    build(tmp, registry=REGISTRY.replace("`" + AC_PATTERN + "`", "`undefined(`"))
 
 
 # ------------------------------------------ B0c: image layouts, per FACT
