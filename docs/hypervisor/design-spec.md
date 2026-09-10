@@ -576,14 +576,28 @@ Four, and the fourth is the one a hypervisor author would not think to look for.
    4+2+2 on an eight-way L2. An illegal write leaves the previous mask standing and sets
    `WAYMASK_REJECT` in `L2_STATUS`, so **a hypervisor that does not read that bit back will run
    with the previous tenant's mask and no error**. Read it back.
-2. **Assign the reservation and the quantum with the mask.** [`P-R3`](../cache/l2-spec.md)'s
-   per-domain MSHR reservation and [`P-R5`](../cache/l2-spec.md)'s `L2DRRQ` quantum are
-   hyperprivileged, exactly like `L2WAYMASK`, and are part of the same act of admitting a tenant. Setting the mask alone leaves two of the five mechanisms inert.
-3. **`PDID` is the carrier here too.** The domain tag the L2 consults is the same `PDID` that
-   [hardware-spec.md §2.8](hardware-spec.md) carries to the predictors, per
-   [cache/l2-spec.md §16.1](../cache/l2-spec.md). One identifier, three consumers — predictors,
-   IOMMU BMID ranges (§3.7) and now the L2 — so a `PDID` reuse bug is simultaneously a predictor
-   channel and a cache-partition failure.
+2. **Assign the quantum with the mask, and read the reservation back.**
+   [`P-R5`](../cache/l2-spec.md)'s `L2DRRQ` quantum is hyperprivileged exactly like `L2WAYMASK`
+   and is part of the same act of admitting a tenant; setting the mask alone leaves that mechanism
+   inert. [`P-R3`](../cache/l2-spec.md)'s per-domain MSHR reservation is **not** assignable —
+   *this item said it was, until post-F 2026-09-09*: [`P-R3`](../cache/l2-spec.md) fixes it at elaboration as
+   `NUM_MSHRS / NUM_DOMAINS`, so the hypervisor's obligation is to *read* it, from `L2MSHRRSV`
+   ([cache/l2-spec.md §13.5](../cache/l2-spec.md)), and to refuse to admit an `NUM_DOMAINS + 1`-th
+   tenant rather than to configure one.
+3. **`HTCR` is the carrier, not `PDID`.** *(Corrected post-F, 2026-09-09. This item read "`PDID`
+   is the carrier here too … One identifier, three consumers — predictors, IOMMU BMID ranges
+   (§3.7) and now the L2", and it was wrong twice.)* `PDID` cannot carry it: `PDID` is optional
+   and [hardware-spec.md §2.8](hardware-spec.md) says it is "not required on the in-order J2/J32
+   cores", which [../decisions/0009](../decisions/0009-in-order-fgmt-is-the-default-path.md) makes
+   the default path — so an L2 partition indexed by `PDID` is inert on the part this project
+   actually intends to build, while [hardware-spec.md §4.7](hardware-spec.md) claims the channel
+   closed. [cache/l2-spec.md §16.1](../cache/l2-spec.md) now tags each request with
+   `{VALID, TENANT}` from [hardware-spec.md §2.10](hardware-spec.md)'s **`HTCR`**, the register
+   §4.7.2 allocated for exactly this reason. And §3.7 was never a `PDID` consumer: it partitions
+   the **ASID and BMID** spaces and contains no `PDID`. The correct count is **two** identifiers
+   and two stories — `PDID` for the predictors where it exists, `HTCR.TENANT` for the tenancy
+   check and the L2 — so a recycling bug in `HTCR.TENANT` is simultaneously a [`T-R1`](hardware-spec.md) failure and a
+   cache-partition failure, and that is the reuse hazard this item should have named.
 4. **Do not deduplicate pages across guests, and do not conclude that this removes cross-guest
    shared memory.** [cache/l2-spec.md §16.2](../cache/l2-spec.md) `P-R6` is the rule; two halves
    matter here. *The host half:* there is no per-tenant page-dedup mode to configure — on

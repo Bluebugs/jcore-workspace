@@ -170,13 +170,58 @@ L1-D holding a dirty line needs a writeback response the port has no channel for
 **At `[T1/T2]` the answer is the L2 directory or nothing**, and that is a decision for
 whoever writes the L2 RTL, not this record.
 
-**4. The kernel work is named and is not done here.** `arch/sh` needs real
-cache-maintenance primitives for `CPU_SUBTYPE_JCORE`: a `cacheops-` arm that compiles
-for the J4, definitions of `__flush_wback_region` / `__flush_purge_region` /
+**4. The kernel work is named, is constrained by `P-R8`, and is not done here.** `arch/sh`
+needs real cache-maintenance primitives for `CPU_SUBTYPE_JCORE`: a `cacheops-` arm that
+compiles for the J4, definitions of `__flush_wback_region` / `__flush_purge_region` /
 `__flush_invalidate_region` against the J-Core CCR that `cache-j2.c` already reaches
 through `j2_ccr_base`, and `ARCH_HAS_SYNC_DMA_FOR_CPU` with a matching
 `arch_sync_dma_for_cpu()`. Until then the DMA API's cache maintenance on J4 is a
 no-op, and this record's decision 1 is a contract the kernel does not yet keep.
+
+**They must not be written the way `cache-j2.c` writes them.** *(Added post-F, 2026-09-09.
+This decision previously stopped at the paragraph above. As it stood it told the next
+implementer — and this is one of the very few dispatchable items in the programme — to
+harden a rule violation into the DMA hot path.)* Each of `cache-j2.c`'s three flush
+helpers does
+
+```c
+for_each_possible_cpu(cpu)
+        __raw_writel(CACHE_ENABLE | ..._FLUSH, j2_ccr_base + cpu);
+```
+
+— one core reaching **every other core's** whole-cache invalidate bits through the
+word-per-core window of `jcore-cpu@origin/master:cache/icache_modereg.vhm`, whose word at
+offset `0x4` carries core 1's `ic1_inv`/`dc1_inv`. That is exactly the cross-domain reach
+[cache/l2-spec.md §16.2](../cache/l2-spec.md) `P-R8` forbids, on exactly the register `P-R8`
+says the SoC ships on the wrong side of. `P-R8`'s J4 requirement is the **per-core split**
+(the P4 move is rejected there, because it would put a guest's `dma_sync_*` behind a
+hypercall), so the primitives this decision asks for are constrained:
+
+- **Write only the issuing core's own word** — `j2_ccr_base + hard_smp_processor_id()`, never
+  a loop over `for_each_possible_cpu`. After the split there is no other word to reach, and
+  before it, writing one is the violation.
+- **Take cross-core reach from an IPI, not from the register.** `arch/sh/mm/cache.c`'s
+  `cacheop_on_each_cpu()` calls `smp_call_function` only under `CONFIG_CPU_SHX3`; its comment
+  reads *"Needing IPI for cross-core flush is SHX3-specific"*, and it is SHX3-specific only
+  because the J2 CCR made the IPI unnecessary. That comment stops being true under `P-R8`, so
+  the J-Core arm is part of this work and not a follow-up.
+- **`j2_flush_*` changes in the same patch.** Adding compliant `__flush_*_region` beside the
+  existing loop leaves the violation standing, because `local_flush_cache_all` and the
+  `flush_icache_*` family still go through it.
+- **The per-core stride is 4 bytes, and one existing site disagrees.** `cache-j2.c` uses
+  `j2_ccr_base + cpu` — a `u32 __iomem *`, so 4 bytes per core — and
+  `jcore-soc@origin/master:targets/boards/turtle_1v0/board.dts` says `cpu-offset = <4>`. But
+  `arch/sh/kernel/cpu/sh2/probe.c:49` writes `j2_ccr_base + 4*cpu`, which is 16 bytes per core
+  and lands on `icache_modereg`'s `when others` arm, where the write is silently dropped; and
+  `scan_cache()` two lines above `ioremap`s **4 bytes**, one word, for a block the same file
+  then indexes per core. Found while resolving this collision, not by 0010's original pass. It
+  is not the reason for the constraint above and it is not fixed here, but anyone writing
+  `__flush_*_region` against `j2_ccr_base` will copy one of the two conventions and needs to
+  know they differ.
+- **The IPI has to move with the split.** `arch/sh/kernel/cpu/sh2/smp-j2.c`'s `j2_send_ipi()`
+  reaches the same word to set bit 28 — *"Generate the actual interrupt by writing to CCRn bit
+  28"* — so the register the split takes apart is also the SMP IPI. That is a second kernel
+  dependency of `P-R8` and it is recorded there.
 
 **5. What is safe today, and exactly why.** At `[T0]` with a write-through L1-D, the
 *device-read* direction is safe by construction: the most recent value of any line is
