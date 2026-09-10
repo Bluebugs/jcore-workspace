@@ -156,7 +156,9 @@ against §5.
    has happened. This is the first time in the programme a code-change tripwire
    has had the chance to fire, and it did not.
 5. **[security/threat-model.md](security/threat-model.md) §11, and this one is
-   security-relevant.** The row says of `sys_cacheflush(2)` that "on J4 every path
+   security-relevant.** ***Closed 2026-09-10; the sentence below is quoted as the
+   wording that was withdrawn, and the finding it names is fixed.***
+   The row **used to read**, of `sys_cacheflush(2)`, that "on J4 every path
    it dispatches to is a no-op — so it is neither a flush primitive nor a channel
    there." `arch/sh/kernel/sys_sh.c` dispatches straight into
    `__flush_invalidate_region` / `__flush_purge_region` / `flush_icache_range`,
@@ -165,6 +167,15 @@ against §5.
    whole-L1-D invalidate. The code's reason for ignoring the region is sound — the
    L1-D is write-through with no writeback path — but the *channel* conclusion
    rested on "it is a no-op", and that premise is gone.
+   **Resolution.** The data side no longer runs for userspace on J-Core, the
+   instruction side is [§10 item 19](security/threat-model.md) accepted with a
+   reason, and §11's clause is corrected rather than annotated. Two things this
+   item got right that are worth keeping, and one it overstated: the write-through
+   argument holds and is now the *justification* for the fix rather than a
+   consolation; the "any valid VMA" reach is exact, and a zero-length range works
+   too. Overstated: the reach is **not** cross-core on anything that ships today,
+   because `CPU_SUBTYPE_JCORE` does not `select SYS_SUPPORTS_SMP` — which is item
+   6's own "also under-stated" note, arriving as the mitigating half of item 5.
 6. **The J4 ASIC target has no cache maintenance and no document says so.**
    `jcore-soc@origin/master:targets/asic/gf180_j4mmu/board.dts` has neither a
    `jcore,cache` node nor an IPI node, so `jcore_cache_ccr_init()` takes its warn
