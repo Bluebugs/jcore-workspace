@@ -1634,6 +1634,14 @@ Seven of seven. That is the correct reading of the current state and it is not a
 crisis: none of the speculative hardware exists yet, the exposure is latent, and
 this is the cheapest moment in the programme to fix all of it.
 
+**Where the evidence would come from, which this section does not say and a
+reader needs.** Every "Blocking" cell above names a piece of hardware or a design
+task; none of them names the *experiment* that would discharge the item once the
+hardware exists. Those are collected, with the hardware each needs and the
+clauses each does and does not move, in
+[hardware-runbook.md](../hardware-runbook.md) — whose §8 is this table read in
+the other direction. *(Added 2026-09-10; no verdict in this section changes.)*
+
 ---
 
 ## 9. The efficiency position, and the evidence status of every number in it

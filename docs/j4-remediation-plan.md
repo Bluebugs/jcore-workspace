@@ -766,6 +766,15 @@ gate. General method, then the per-decision table.
 
 ### D1. Per-decision measurement gates (each has a kill criterion)
 
+**These nine gates are not a list of nine tasks, and reading them as one is how
+the measurement work stayed unscheduled.** Three can be started on hardware that
+exists, five wait on a hardware programme nobody has scheduled, and one needs the
+ASIC flow — and they sit alongside twenty-seven further named experiments that
+Wave 3 specified in the subsystem specs. All thirty-six, sorted by what hardware
+each needs, are [hardware-runbook.md §1](hardware-runbook.md); the entry
+conditions on each are its §4. *(Added 2026-09-10. This table is unchanged; what
+is new is that there is now somewhere to read it from.)*
+
 | Decision (current guess) | Measure how | Baseline | Gate / kill criterion |
 |---|---|---|---|
 | OoO worth it vs in-order FGMT *(prior: drop it — §E.1)* | Model both on real traces; FPGA-measure the in-order+FGMT point | measured in-order wall-clock at the J4 `Fmax` of [platform-baseline.md §3](platform-baseline.md) — this cell previously read "80 MHz in-order J32", a figure nothing produced | Burden is on OoO: keep it **only if** it beats in-order+FGMT at equal area/effort AND holds `Fmax` ≥ 50 MHz. Else **drop OoO** (default). Note that 50 MHz is above every measured variant today, J2 included |

@@ -6,6 +6,8 @@ Design docs and roadmaps for new J-Core subsystems (MMU, IOMMU, hypervisor, L2 c
 
 - [`docs/glossary.md`](docs/glossary.md) — naming, product points, threading model, memory terms, **prior-art policy**.
 - [`docs/jcore-ulx3s-service-plan.md`](docs/jcore-ulx3s-service-plan.md) — the overall platform plan.
+- [`docs/hardware-runbook.md`](docs/hardware-runbook.md) — **if you have a board on the desk, start here.**
+  Every measurement the programme still owes, as one list, split by what hardware each item needs.
 - Subsystem specs live under `docs/{mmu,iommu,hypervisor,cache,fpu,simd,ooo,fgmt}/`.
 
 ## Scope

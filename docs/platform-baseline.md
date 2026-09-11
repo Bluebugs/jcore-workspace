@@ -198,4 +198,8 @@ is not a weaker check than binding a range would have been.
 It is not a status page and not a plan. It carries facts with an owner and a
 citation each. Roadmap sequencing lives in
 [jcore-ulx3s-service-plan.md](jcore-ulx3s-service-plan.md); the remediation
-worklist lives in [j4-remediation-plan.md](j4-remediation-plan.md).
+worklist lives in [j4-remediation-plan.md](j4-remediation-plan.md). The measurement
+work that consumes §3's table — what to run on a board, in what order, and what
+each result decides — is [hardware-runbook.md](hardware-runbook.md), and §2.1 to
+§2.3 of that document are the discipline this table's figures were produced
+under.
