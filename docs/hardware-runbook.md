@@ -329,10 +329,20 @@ the reason this document exists.
   flag and the driver sets the no-interrupt capability, so `perf record` is
   rejected outright. Every measurement here is a counted total over a bracket.
   Attributing a miss rate to a *function* is not available.
-- **There are no cache counters.** The eight counters cover cycles, dispatches,
-  bus references, bus waits and walks. Item 34's "fault rate on write-heavy
-  workloads" is reachable through the walk counters; a *cache* miss rate is not
-  reachable at all, and any gate phrased in terms of one needs re-stating first.
+- **There is no cache hit/miss counter.** The eight cover cycles, dispatches,
+  walks, and — on the CPU's own bus ports — *references* and *wait cycles*.
+  `PMIFR`/`PMDAR` count every fetch and data access the core issues, not the
+  subset that missed, so a cache miss *rate* is not available; what is available
+  is `PMIFW`/`PMDAW`, the stall cycles a miss costs, which is a proxy for the
+  cost and not for the rate. A gate phrased as a cache miss rate needs re-stating
+  before it can be run.
+- **Item 34 has no counter for the thing it names.** Its subject is the rate of
+  *first-write faults* under a dirty-bit-as-TSB-wipe policy, and there is no
+  exception counter in the block. What the PMU can see is the consequence — the
+  walk and install storm after each wipe, on `PMWLK` and `TLBINST` — so the gate
+  is reachable indirectly, or directly with a counter added in the kernel's fault
+  handler. Which of the two is intended is not written down anywhere, and should
+  be decided before the evening is spent.
 - **Item 35's multiplier needs a model, not a second measurement.**
   [j4-remediation-plan.md §D1](j4-remediation-plan.md) asks for a trace-driven
   model at a stated memory bandwidth against a *measured* single-thread baseline.
@@ -439,7 +449,7 @@ category-A evening gets spent on a category-B item.
 
 ## 9. The non-experiment work that is also waiting
 
-Not everything left in the programme is an experiment. These five are each
+Not everything left in the programme is an experiment. These six are each
 small, each blocking something, and each currently on nobody's list.
 
 ### 9.1 The coprocessor-bridge re-home needs an RTL co-owner
@@ -481,8 +491,14 @@ anywhere:
 2. **The dispatch-state input AIC2 needs.** The interrupt-delivery rule's
    predicate needs a signal or a register that no section provides.
 
-Neither is a measurement, and both must be resolved before items 26–28 mean
-anything, because both are inputs to the gang switch those items test.
+**Neither will surface as a failing experiment, and that is the point.** The
+re-seed is a gang-switch list item, and
+[hypervisor/hardware-spec.md §4.7.1a](hypervisor/hardware-spec.md) deliberately
+excludes the TSB victim selector from the microreset's structure classes — so
+item 28, which walks those classes, will not report it. It will surface as an L1
+list item nobody can discharge, long after the hardware exists. The second is not
+a gang-switch matter at all; it is an interrupt-delivery predicate with no
+input.
 
 ### 9.4 No target that can run a J4 carries the cache-control register
 
@@ -491,8 +507,8 @@ anything, because both are inputs to the gang switch those items test.
 [cache/l2-spec.md §16.2](cache/l2-spec.md) records that the shipping SoC puts a
 cache-control block at `0xabcd00c0` ([cache/l2-spec.md §16.2](cache/l2-spec.md)),
 outside P4, whose per-core words let one core invalidate another's whole L1-I and
-L1-D, and it names the two boards that instantiate it: `targets/boards/turtle_1v0` and `targets/boards/mimas_v2`. That
-is correct. What no document says is what it means for this programme:
+L1-D, and it names the two boards that instantiate it — `targets/boards/turtle_1v0`
+and `targets/boards/mimas_v2`. That is correct. What no document says is what it means for this programme:
 
 - **Neither of those boards builds a J4.** A case-insensitive search for `j4`
   over `jcore-soc@origin/master:targets/boards/` returns hits under `ulx3s/`
