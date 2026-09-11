@@ -13,9 +13,11 @@ decision record ([decisions/README.md](decisions/README.md) reserves that
 directory for decisions with no owning spec; this document decides nothing), and
 it is **not** a spec — every experiment below is owned by the document that
 specifies it, and per [decisions/0001](decisions/0001-one-authority-per-fact.md)
-this file links rather than restates. It carries **two** facts of its own, both
-registered in [fact-ownership.md](fact-ownership.md): the count of unscheduled
-hardware programmes, and the count of items in §1's table.
+this file links rather than restates. It carries three facts of its own, all
+registered in [fact-ownership.md](fact-ownership.md): the number of items in §1's
+table, the number of hardware programmes gating them, and the count of
+performance counters the runnable measurements read — the last bound to both the
+RTL that implements them and the kernel header that exports them.
 
 **Every claim about code in this document was checked on 2026-09-10 against
 `origin/master` (`origin/jcore` for `linux`), never a checked-out submodule
@@ -86,7 +88,7 @@ citable identity of an item is in the `Item` column, which names its owner.
 | 30 | SM synthesis A/B ([simd/gpu/simd-gpu-spec.md §16.5](simd/gpu/simd-gpu-spec.md), experiment 1) | A first SM, **and a registered `Fmax` floor for its target** (§9.5) | a GPU | Decides the window checkers |
 | 31 | Texture throughput ([simd/gpu/simd-gpu-spec.md §16.5](simd/gpu/simd-gpu-spec.md), experiment 2) | An SM at 4 and 8 resident warps | a GPU | Decides the texture-path check |
 | 32 | Shader memory latency ([simd/gpu/simd-gpu-spec.md §16.5](simd/gpu/simd-gpu-spec.md), experiment 3) | An SM address path | a GPU | May fall back to bounds-only |
-| 33 | TLB sizing on real workloads ([j4-remediation-plan.md §D1](j4-remediation-plan.md)) | A booted J4 kernel, a workload, `perf` | — | Grows the TLB or leans on huge pages |
+| 33 | TLB sizing on real workloads ([j4-remediation-plan.md §D1](j4-remediation-plan.md)) | A booted J4 kernel, a workload, `perf` — **and item 1 first** (§5) | — | Grows the TLB or leans on huge pages |
 | 34 | Dirty-bit full-TSB-wipe fault rate ([j4-remediation-plan.md §D1](j4-remediation-plan.md)) | A booted J4 kernel and a write-heavy workload | — | Adds single-entry invalidate, or not |
 | 35 | Aggregate-throughput multiplier ([j4-remediation-plan.md §D1](j4-remediation-plan.md)) | A measured single-thread baseline, then a trace-driven model | — | Re-sets the published expectation |
 | 36 | Energy per op `[ASIC]` ([j4-remediation-plan.md §D1](j4-remediation-plan.md)) | A gf180 gate-level run with real switching activity | — | Informs the ASIC core choice |
@@ -306,8 +308,20 @@ open items.
 
 **What is ready:** the board, the kernel, and the counters — the `perf` backend of
 §3 is in `linux@origin/jcore` and needs no config change. `PMWLK` and `PMWHT`
-(walks armed, walks that hit) plus `TLBINST` give item 33 its miss rate directly.
-`PMCYC` and `PMINS` give item 35 its single-thread baseline.
+(walks started, walks that found a usable entry) plus `TLBINST` are what item 33
+reads; `PMCYC` and `PMINS` give item 35 its single-thread baseline.
+
+**And there is an ordering constraint between the categories that neither spec
+states, because neither could see it.** `PMWLK` is driven by a walk-start pulse
+out of the walker (`core/cpu.vhd` ties `PMU_WLK` to `walk_ev_walk`), so it counts
+**every** walk the hardware arms — including the I-side arms off fetches that
+never reach dispatch, which are exactly what item 1 exists to count. If item 1
+returns non-zero, **item 33's miss rate is inflated by item 1's number**, and a
+TLB-sizing decision taken from `PMWLK` alone would be sizing for misses the
+program never architecturally took. **Run item 1 first.** It is a category-A
+evening and it changes how a category-C result is read — which is the kind of
+constraint that is invisible while each experiment is read in its own spec, and
+the reason this document exists.
 
 **What is not ready, and matters:**
 
@@ -587,7 +601,12 @@ fact is worse than one that does not notice it.
    figure survives in `sim/bench_tlb_hotpath.sh`'s header as a historical anchor
    and is marked there as one. The gate needs re-stating before the measurement
    means anything (§3.3).
-4. **Exactly nine experiments are recorded as prose without identifiers**, and
+4. **`PMWLK` counts speculative arms, so item 1 gates item 33.** The walk
+   counter is driven by a walk-start pulse and cannot tell an architectural TLB
+   miss from an arm off a fetch that never dispatched. Neither the experiment nor
+   the gate could see this from inside its own document; it is the clearest case
+   in the set of an ordering constraint that only a combined list exposes (§5).
+5. **Exactly nine experiments are recorded as prose without identifiers**, and
    they are the three sets in [sq/spec.md §6.5](sq/spec.md),
    [fpu/spec.md §7.7](fpu/spec.md) and
    [simd/gpu/simd-gpu-spec.md §16.5](simd/gpu/simd-gpu-spec.md).
