@@ -206,6 +206,34 @@ them, and the runbook's category-A and category-C instructions are written
 against both. A counter added on one side and not the other is the failure, and
 it is the one a runbook would otherwise discover on the board.
 
+**Thirteen perturbations, of which three pass**, measured against a committed
+tree rather than reasoned about:
+
+| Perturbation | Result |
+|---|---|
+| a row deleted from §1's item table, the count left at 36 | **caught**, `enumeration-row-count` |
+| a row deleted from §4's programme table, the count left at 6 | **caught**, `enumeration-row-count` |
+| the item count changed to 40 without touching the table | **caught twice**, `owner-has-fact` and `no-stale-value` |
+| the PMU counter count changed to 6 in the runbook | **caught twice**, `owner-has-fact` and `doc-matches-code`, the latter naming the RTL constant it disagrees with |
+| the PMU binding pointed at a file that is not on `origin/master` | **caught**, `doc-matches-code` |
+| a second table headed `# \| Item` added to the owner | **caught**, `enumeration-row-count` — "which list the count guards would depend on document order" |
+| `j4-execution-plan.md` given a different item count | **caught**, `no-stale-value` |
+| `platform-baseline.md` restating the PMU count with no link | **caught**, `restatement-is-linked` |
+| the count removed from §1 **and** §4 together | **caught twice**, `owner-has-fact` and `no-stale-value` |
+| the count removed from §4 alone, §0's table left stating it | **passes** — `owner-has-fact` reads the *document*, not the section the row names. A registry row can name a section that has stopped carrying the fact, as long as some other line in the same file still does |
+| the count removed from §0 alone | **passes**, the same way round |
+| §1's row 1 rewritten to invert what the experiment requires, count unchanged | **passes** — the standing limit of every row-counting check here: it counts rows, it does not read them, and this row is no narrower than the ones above it |
+| `runbook.pmu.counters`'s relation downgraded from `eq` to `eq-text` | **passes**, and this one is new. A numeric fact bound with `eq-text` compares "8" to "8" and agrees, so the downgrade is invisible **while the two sides match** — it would surface only later, as a spurious failure on a formatting difference. The `## Code bindings` prose warns against reaching for `eq-text` on a numeric fact; nothing detects having done so |
+
+The first two passes are one defect with two faces and the fix is not a check: it
+is to state a fact **once** in its owning section, which is why §4's wording was
+changed to keep the count off a line wrap when this was measured. The third is the
+limit already recorded above for `enumeration-row-count`. The fourth is new and is
+recorded here rather than fixed, because a `relation` whitelist that refuses
+`eq-text` for a capture that parses as an integer would be a check on the registry
+rather than on the documents, and this file has no such check to extend.
+
+
 C1c also added no `## Code bindings` row and no `## Image layouts` row, for
 C1b's reason: no FPU or SIMD unit exists in `jcore-cpu@origin/master`, no
 `kernel_fpu` API exists in `linux@origin/jcore`, and neither rule set changes a
