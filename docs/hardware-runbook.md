@@ -262,9 +262,9 @@ implement halves failed the same way, and that the plan never generalised what i
 had recorded twice: they are **not blocked on a scrub task, they are blocked on a
 builder task.** Each Wave-3 rule set is an *entry condition* on whichever task
 first builds its structure, and the Wave-3 deliverable was never an
-implementation — it was a set of conditions attached to **6** unscheduled hardware
-programmes. F2 re-checked this over 25 further commits and nothing scheduled any
-of them.
+implementation. It was a set of conditions attached to
+**6** unscheduled hardware programmes, and F2 re-checked that over 25 further
+commits and found nothing had scheduled any of them.
 
 | # | Programme | Items it unblocks | Why nothing smaller works |
 |---|---|---|---|
