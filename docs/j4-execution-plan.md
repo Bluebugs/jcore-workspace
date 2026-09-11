@@ -62,7 +62,13 @@ output is an evidence briefing folded into the plan. Several are already done.
 
 **Measurement/experiment tasks** (D1 gates): a subagent builds the harness, but
 running it on the ULX3S is **human-gated** (hardware in the loop). These produce a
-measurement report + a decision against the gate's kill criterion.
+measurement report + a decision against the gate's kill criterion. **Which
+harness, in what order, and what the result decides is
+[hardware-runbook.md](hardware-runbook.md)** — and its §7 is the part to read
+before dispatching one, because seventeen of the experiments this plan's waves
+specified will report a green that means nothing if the harness cannot build
+their scenario. A subagent that reports "pass" from a vacuous run is worse than
+one that reports `BLOCKED`.
 
 ## 4. Task decomposition, model & reviewer assignment
 
