@@ -127,6 +127,9 @@ are the substitute for a check that cannot be written cleanly — see
 | `soc.cachectrl.base` | Shipping cache-control MMIO block: `0xabcd00c0`, **outside P4** | [cache/l2-spec.md §16.2](cache/l2-spec.md) | `0xabcd00c0` |
 | `cache.userflush.dside` | `sys_cacheflush(2)` data side on J-Core: **not performed** | [security/threat-model.md §8](security/threat-model.md) | `cacheflush_user_dside_acts` |
 | `cache.userflush.iside` | `CACHEFLUSH_I` on J-Core: **accepted residual**, not closed (§10 item 19) | [security/threat-model.md §10](security/threat-model.md) | `unprivileged whole-L1-I invalidate` |
+| `runbook.items` | Measurement items the programme still owes: **36** | [hardware-runbook.md §1](hardware-runbook.md) | `\*\*36\*\* measurement items` |
+| `runbook.programmes` | Hardware programmes gating the blocked items: **6**, none scheduled | [hardware-runbook.md §4](hardware-runbook.md) | `\*\*6\*\* unscheduled hardware programmes` |
+| `runbook.pmu.counters` | J4 PMU: **8** fixed-function free-running counters, no interrupt | [hardware-runbook.md §3](hardware-runbook.md) | `\*\*8\*\* fixed-function` |
 
 This is a seed, not a census. Rows are added as facts are reconciled; Wave-2 task
 **B1** works a contradiction worklist and each item it settles becomes a row here.
@@ -180,6 +183,29 @@ was measured, not assumed** — seven perturbations, of which three pass:
 
 The three that pass are the weakness every name fact in this table has, stated
 here once and not per row.
+
+[hardware-runbook.md](hardware-runbook.md) added `runbook.items`,
+`runbook.programmes` and `runbook.pmu.counters` on 2026-09-10, and the first two
+are the reason that document is allowed to own anything at all. It is an index:
+every experiment in it belongs to the spec that specifies it, and per
+[0001](decisions/0001-one-authority-per-fact.md) it links rather than restates.
+What it *does* own is the two counts nobody else has a reason to state — how many
+measurement items the programme still owes, and how many hardware programmes gate
+them — and both are `## Enumerations` rows rather than bare counts, because the
+failure they guard is not a wrong number in another document. It is **a row
+quietly leaving the table while the count stays**, which is how a scheduled
+programme becomes an unscheduled one and how an experiment stops being owed.
+[j4-final-review.md §6](j4-final-review.md) found the six programmes by reading
+eight Wave-3 tasks against each other; nothing would have noticed a seventh going
+missing.
+
+`runbook.pmu.counters` is the third and it is an ordinary code binding, with two
+rows for one fact in the `mmu.tsb.entry` pattern: the PMU counter count is stated
+by the RTL that implements the counters and by the kernel header that exports
+them, and the runbook's category-A and category-C instructions are written
+against both. A counter added on one side and not the other is the failure, and
+it is the one a runbook would otherwise discover on the board.
+
 C1c also added no `## Code bindings` row and no `## Image layouts` row, for
 C1b's reason: no FPU or SIMD unit exists in `jcore-cpu@origin/master`, no
 `kernel_fpu` API exists in `linux@origin/jcore`, and neither rule set changes a
@@ -778,6 +804,8 @@ formatting.
 | `sh4guest.qacr1.stock` | `SQ_QACR1 at offset 0x([0-9a-f]+)` | `linux:arch/sh/include/cpu-sh4/cpu/sq.h` | `#define SQ_QACR1\s+\(P4SEG_REG_BASE\s+\+ 0x([0-9a-f]+)\)` | `eq-hex` |
 | `sh4guest.fplane` | `the guard word is 0x([0-9A-F]+)` | `jcore-cpu:sim/tests/j4_illegal_trap.S` | `\.word\s+0x(F000)` | `eq-hex` |
 | `sh4guest.clds` | `annotation on flds FRm,FPUL names ([a-z]+)` | `jcore-cpu:docs/insns.json` | `"collides": \["(clds)\\tCPI_Rm,CPI_COM"\]` | `eq-text` |
+| `runbook.pmu.counters` | `\*\*(\d+)\*\* fixed-function` | `jcore-cpu:core/perf_pkg.vhd` | `constant pmu_num_cnt : pmu_cnt_count_t := (\d+);` | `eq` |
+| `runbook.pmu.counters` | `\*\*(\d+)\*\* fixed-function` | `linux:arch/sh/include/cpu-jcore/cpu/perf_event.h` | `#define JCORE_PMU_NR_COUNTERS\s+(\d+)` | `eq` |
 | `sh4guest.csts` | `annotation on fsts FPUL,FRn names ([a-z]+)` | `jcore-cpu:docs/insns.json` | `"collides": \["(csts)\\tCPI_COM,CPI_Rn"\]` | `eq-text` |
 | `sh4guest.ldsfpul` | `annotation on lds Rm,FPUL names ([a-z]+)` | `jcore-cpu:docs/insns.json` | `"collides": \["(lds)\\tRm,FPUL"\]` | `eq-text` |
 | `sh4guest.stsfpul` | `annotation on sts FPUL,Rn names ([a-z]+)` | `jcore-cpu:docs/insns.json` | `"collides": \["(sts)\\tFPUL,Rn"\]` | `eq-text` |
@@ -1070,6 +1098,8 @@ Two escapes, and they are different things:
 | `hyp.microreset.classes` | `\*\*(\d+)\*\* structure classes` | `\*\*(\d+)\*\* structure classes` |
 | `iommu.bypass.paths` | `\*\*(\d+)\*\* bypass paths` | `\*\*(\d+)\*\* bypass paths` |
 | `cache.l2.residuals` | `\*\*(\d+)\*\* residual channels` | `\*\*(\d+)\*\* residual channels` |
+| `runbook.items` | `\*\*(\d+)\*\* measurement items` | `\*\*(\d+)\*\* measurement items` |
+| `runbook.programmes` | `\*\*(\d+)\*\* unscheduled hardware programmes` | `\*\*(\d+)\*\* unscheduled hardware programmes` |
 
 ## Enumerations
 
@@ -1112,6 +1142,8 @@ it.
 | `hyp.microreset.classes` | `#` | `Class` |
 | `iommu.bypass.paths` | `#` | `Path` |
 | `cache.l2.residuals` | `#` | `Channel` |
+| `runbook.items` | `#` | `Item` |
+| `runbook.programmes` | `#` | `Programme` |
 
 ## Absence claims
 
