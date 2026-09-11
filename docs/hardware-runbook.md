@@ -642,11 +642,26 @@ only with links. It is not a plan: sequencing lives in
 [j4-final-review.md](j4-final-review.md) is, and most of §4 and §8 is its work
 re-indexed by what a person can do with it.
 
-**What would make it stale.** Any of §4's six programmes being scheduled; a
-seventh appearing; an owning spec adding an experiment; a bar item moving; or the
-counters in §3 changing. The first, third and fifth of those are guarded — the
-programme count and the item count by `enumeration-row-count` against §4's and
-§1's tables, and the counter count by a code binding against both the RTL that
-implements it and the kernel header that exports it
-([fact-ownership.md](fact-ownership.md)). The other two are not, and no check in
-this workspace can catch them.
+**What would make it stale, and exactly how much of that is guarded** — stated
+narrowly, because this document's own §8 is an argument against claiming more
+cover than a check gives:
+
+- **A seventh programme, or a thirty-seventh item, added to a table here without
+  the count being updated** — caught, `enumeration-row-count`. So is the reverse,
+  a row deleted under an unchanged count, which is the failure the rows exist for.
+- **The counter count changing in the RTL or in the kernel header** — caught,
+  `doc-matches-code`, against both sides independently.
+- **An owning spec adding or retiring an experiment and this list not being
+  told** — **not caught.** Nothing relates the row count here to the specs the
+  rows point at, and no check in this workspace could: the experiments have no
+  machine-readable form, and nine of them have no identifier at all (§9.6).
+- **A programme being scheduled, or a bar item moving** — **not caught.** Both
+  are events in other documents' prose.
+- **A row rewritten to say the opposite of what it says now, count unchanged** —
+  **not caught**, and measured rather than assumed
+  ([fact-ownership.md](fact-ownership.md) records the perturbation). It is the
+  standing limit of every row-counting check in this workspace.
+
+Two of five, and the two that are cheapest to get wrong by accident. The other
+three need a reader, which is what [j4-final-review.md](j4-final-review.md)
+concluded about the whole document set.
